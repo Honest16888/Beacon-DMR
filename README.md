@@ -140,8 +140,8 @@ python -m http.server 8000
 **构建**
 
 ```bash
-git clone https://github.com/<your-name>/beacon-dmr.git
-cd beacon-dmr
+git clone https://github.com/Honest16888/Beacon-DMR.git
+cd Beacon-DMR
 
 # 1. 指向你的 SDK（或者设 ANDROID_HOME 环境变量）
 echo "sdk.dir=/path/to/Android/Sdk" > android/local.properties
