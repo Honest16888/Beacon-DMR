@@ -6,11 +6,16 @@
 [![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-blue.svg)](LICENSE)
 ![Android](https://img.shields.io/badge/Android-8.0%2B%20(API%2026)-green.svg)
 ![Dependencies](https://img.shields.io/badge/dependencies-none-brightgreen.svg)
+[![Latest Release](https://img.shields.io/github/v/release/Honest16888/Beacon-DMR?label=download)](https://github.com/Honest16888/Beacon-DMR/releases/latest)
 
 <p align="center">
   <img src="docs/screenshots/home-mobile-light.png" width="270" alt="手机 · 浅色">
   <img src="docs/screenshots/home-mobile-dark.png" width="270" alt="手机 · 深色">
 </p>
+
+**[⬇ 下载最新 APK](https://github.com/Honest16888/Beacon-DMR/releases/latest)** ·
+[全部版本](https://github.com/Honest16888/Beacon-DMR/releases) ·
+不需要编译，装到 Android 8.0+ 的手机上即可
 
 ---
 
@@ -104,6 +109,17 @@
 4. **收听期间持 Partial WakeLock** —— 熄屏后 WebAudio 的调度不被掐断
 
 ## 快速开始
+
+### 直接安装（推荐）
+
+去 [Releases](https://github.com/Honest16888/Beacon-DMR/releases/latest) 下载最新的
+`beacon-dmr-x.y-release.apk`，装到 Android 8.0+ 的手机上。
+
+**收听开箱即用**，不需要任何配置。发射要先在 BrandMeister SelfCare 里把这个 DMR ID
+登记为热点、设置热点安全密码，并且你得持有有效的业余无线电操作证书。
+
+历史版本（v1.0 起）都保留在 [Releases](https://github.com/Honest16888/Beacon-DMR/releases)，
+每个包附了 SHA-256。
 
 ### 网页版（只能收听）
 
