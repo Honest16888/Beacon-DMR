@@ -1,0 +1,90 @@
+plugins { id 'com.android.application' }
+
+// 签名信息放在工程根目录的 keystore.properties，缺失时自动退回未签名构建
+def ksProps = new Properties()
+def ksFile = rootProject.file('keystore.properties')
+if (ksFile.exists()) {
+    ksFile.withInputStream { ksProps.load(it) }
+}
+def hasKeystore = ksFile.exists() && ksProps['storeFile']
+
+android {
+    namespace 'net.beacon.dmr'
+    compileSdk 34
+    // 显式锁定，避免 AGP 去猜（本机只装了这一个）
+    ndkVersion '26.1.10909125'
+
+    defaultConfig {
+        applicationId "net.beacon.dmr"
+        minSdk 26          // Android 8.0：自适应图标 + 现代 WebView 基线
+        targetSdk 34
+        versionCode 8
+        versionName "1.7"
+
+        // 只编这两个 ABI：jniLibs 下只有对应的两份声码器插件，
+        // 多编一个 ABI 只是白白增大 APK。
+        ndk {
+            abiFilters 'arm64-v8a', 'armeabi-v7a'
+        }
+
+        externalNativeBuild {
+            cmake {
+                cppFlags '-std=c++17'
+                // 必须与插件共享同一份 libc++，见 cpp/CMakeLists.txt 的说明
+                arguments '-DANDROID_STL=c++_shared'
+            }
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path file('src/main/cpp/CMakeLists.txt')
+            version '3.22.1'
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (hasKeystore) {
+                storeFile rootProject.file(ksProps['storeFile'])
+                storePassword ksProps['storePassword']
+                keyAlias ksProps['keyAlias']
+                keyPassword ksProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            // 不混淆：JS 桥靠 @JavascriptInterface 反射，R8 只会平添风险。
+            minifyEnabled false
+            if (hasKeystore) signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    packagingOptions {
+        jniLibs {
+            // .so 解压到 nativeLibraryDir，让 dlopen(绝对路径) 必然成功。
+            // 代价是安装后多占 1~2 MB，换来的是完全不依赖 linker namespace 的加载路径。
+            useLegacyPackaging = true
+
+            // 声码器插件是未 strip 的（带完整 DWARF），
+            // 不能让 AGP 的 strip 任务改写它，否则字节比对与自检都会失真。
+            keepDebugSymbols += ['**/libdsvocoder.so']
+        }
+    }
+
+    // assets/index.html 原样打进包（不压缩），便于和源文件做字节比对
+    androidResources {
+        noCompress.add('html')
+    }
+}
+
+// 本工程刻意不引入任何 androidx / 第三方依赖：
+// 单 Activity + 自定义 shouldInterceptRequest 提供 https 安全源，已覆盖全部需求。
+dependencies { }

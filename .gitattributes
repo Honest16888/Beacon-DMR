@@ -1,0 +1,30 @@
+# 换行符统一为 LF。
+#
+# 这个项目有两处对换行符敏感，一旦被 git 自动转成 CRLF 就会静默出错：
+#   1. tools/build_apk.sh 用 cmp 逐字节比对 web/dmr-listener.html 与
+#      android/app/src/main/assets/index.html —— 两边换行不一致就判定失败
+#   2. gradlew / *.sh 在 Linux、macOS 上带 CRLF 会直接执行不了
+* text=auto eol=lf
+
+# Windows 批处理反过来必须是 CRLF
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# 二进制，禁止任何转换
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.ico  binary
+*.so   binary
+*.jar  binary
+*.jks  binary
+*.keystore binary
+*.apk  binary
+*.wav  binary
+
+# 可执行脚本
+gradlew      text eol=lf
+*.sh         text eol=lf
+
+# 让 GitHub 正确识别语言
+web/dmr-listener.html linguist-language=HTML

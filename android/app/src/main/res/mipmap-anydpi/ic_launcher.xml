@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 兜底（minSdk 26 下正常不会被选中）：把背景与前景叠成一张普通矢量图 -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_launcher_bg" />
+    <item android:drawable="@drawable/ic_launcher_fg" />
+</layer-list>

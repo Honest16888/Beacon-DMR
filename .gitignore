@@ -1,0 +1,47 @@
+# ---------- 构建产物 ----------
+build/
+.gradle/
+.cxx/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+captures/
+
+# ---------- 签名与本地配置（绝对不能提交）----------
+# 密钥库一旦泄漏，任何人都能签出可覆盖安装的更新包
+*.jks
+*.keystore
+keystore.properties
+local.properties
+
+# ---------- IDE ----------
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/
+.settings/
+.classpath
+.project
+
+# ---------- 测试临时产物 ----------
+tests/shot/
+tests/out/
+_cdp_*/
+_shot_*.png
+*.log
+
+# ---------- 系统垃圾 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- Node ----------
+node_modules/
+package-lock.json
+
+# ---------- 注意 ----------
+# 不要加 *.so：android/app/src/main/jniLibs/**/libdsvocoder.so 是运行时必需的
+# 预编译插件（GPL-3.0），必须随仓库分发。见 THIRD-PARTY.md。

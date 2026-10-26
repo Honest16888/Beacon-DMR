@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg_light">#FFEEF1F5</color>
+    <color name="bg_dark">#FF0F1216</color>
+    <color name="panel_light">#FFFFFFFF</color>
+    <color name="panel_dark">#FF171B21</color>
+    <color name="ic_bg_start">#FF2E86E0</color>
+    <color name="ic_bg_end">#FF0A4E96</color>
+</resources>
