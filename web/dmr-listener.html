@@ -1600,7 +1600,7 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
       </div>
       <div class="rxrow">
         <div class="rxlbl"><b>发射电平</b><span>本次发射的峰值电平（dBFS），每按一次 PTT 重新起算。
-          −16 附近是正常，超过 −6 就贴着满量程了</span></div>
+          <b>−18 附近是正常</b>，超过 −6 就贴着满量程了</span></div>
         <div class="rxctl"><span class="mono wide" id="txLevelDb">—</span></div>
       </div>
       <div class="txnote">
@@ -21855,27 +21855,12 @@ function micGainSyncUI(){
    读得太勤只是白白多跨几次 JS↔Java 桥。
    没有连接时显示「—」，避免把上一轮的旧数字留在界面上误导读数。 */
 let rxStatsCache='';
-let micGainSynced=false;
 function rxStatsTick(){
   const el=txEl('txRxStats'); if(!el)return;
   if(typeof Android==='undefined'||!Android.dmrStatus)return;
   let st=null;
   try{ st=JSON.parse(Android.dmrStatus()); }catch(e){ return; }
   if(!st)return;
-  /* 首次拿到原生状态时对一次账。
-     正常情况下本地存储才是准的（原生每次冷启动都从 0 开始），
-     但存储被清过而原生还在跑上一档增益时，滑块会显示 0 dB 而实际在 +6 dB ——
-     这种「显示和实际不一致」比没这个功能更误导人。只对一次，之后以用户操作为准。 */
-  if(!micGainSynced){
-    const mg=Number(st.micGain);
-    if(isFinite(mg)){
-      micGainSynced=true;
-      const v=Math.max(-24,Math.min(12,Math.round(mg)));
-      if(Math.abs(v-(Number(state.micGain)||0))>=0.5){
-        state.micGain=v; store.set('micGain',v); micGainSyncUI();
-      }
-    }
-  }
   if(!st.connected){
     if(rxStatsCache!==''){ rxStatsCache=''; el.textContent='—'; el.classList.remove('warn'); }
     return;
@@ -23051,6 +23036,11 @@ window.onDmrEvent=function(json){
            界面必须同步清空，否则会短暂显示上一通的峰值，让人以为一开口就这么响。 */
         const d=txEl('txLevelDb');
         if(d){ d.textContent='—'; d.classList.remove('on'); d.classList.add('off'); }
+        /* ★ 每次发射前补下发一次增益。
+           原生侧只在内存里存这个值，冷启动就是 0 dB —— 万一页面加载时
+           那次下发因为桥还没就绪被吞了，这里能补上，不会出现
+           「滑块显示 −18 dB 而实际按 0 dB 发」这种最难查的错位。 */
+        micGainApply();
       }
       hdGate();   /* 半双工闸门：发射时掐掉 HOSE，免得听见自己绕网络回来的声音 */
       txSync();
@@ -23304,7 +23294,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.12';
+const PAGE_VER='2026.11.13';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';

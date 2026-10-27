@@ -647,6 +647,23 @@ const mg6 = await ev(`
   return { txt:d.textContent, on:d.classList.contains('on') };`);
 ok('按下 PTT 清空上一通的读数', mg6.txt === '—' && mg6.on === false, mg6);
 
+const mg7 = await ev(`
+  /* 回归：v2.4.2 加的「首次对账」方向反了 —— 原生侧每次冷启动 micGain 都是 0，
+     页面一进来就拿这个 0 把本地存的值覆盖掉，用户每次都要重调一遍。
+     这里模拟原生返回 0 dB，验证本地值不被冲掉。 */
+  const hasEl = !!document.getElementById('txRxStats');
+  state.micGain=-18; store.set('micGain',-18); micGainSyncUI();
+  const orig=window.Android;
+  window.Android={ dmrStatus:()=>JSON.stringify({connected:false,micGain:0}) };
+  try{ rxStatsTick(); }catch(e){}
+  window.Android=orig;
+  const r={ hasEl, v:state.micGain, saved:Number(localStorage.getItem('dmr.micGain')),
+            lbl:document.getElementById('txMicGainVal').textContent };
+  state.micGain=0; store.set('micGain',0); micGainSyncUI();
+  return r;`);
+ok('原生报 0 dB 不会冲掉本地存的 −18', mg7.hasEl && mg7.v === -18 && mg7.saved === -18, mg7);
+ok('保存后读数仍是 −18 dB', mg7.lbl === '-18 dB', mg7);
+
 console.log(`\n================  ${pass} 通过 / ${fail} 失败  ================`);
 ws.close(); chrome.kill();
 await sleep(300);
