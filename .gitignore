@@ -8,6 +8,8 @@ build/
 *.dex
 *.class
 captures/
+# 发布暂存目录：APK 由 tools/build 拷进来，再上传到 Release
+dist/
 
 # ---------- 签名与本地配置（绝对不能提交）----------
 # 密钥库一旦泄漏，任何人都能签出可覆盖安装的更新包
