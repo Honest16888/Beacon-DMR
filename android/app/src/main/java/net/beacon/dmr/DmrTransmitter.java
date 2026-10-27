@@ -39,9 +39,12 @@ public final class DmrTransmitter {
      *  原来是 31 抽头 + Hann 窗，过渡带宽约 3.1·fs/N = 3.1·48000/31 ≈ 4800 Hz ——
      *  而 8 kHz 输出只有 3400→4000 这 600 Hz 的余量。31 抽头根本压不住
      *  4 kHz 以上的成分，全折叠回话带里，听感是「金属味、嘶嘶声」。
-     *  127 抽头把过渡带压到约 1170 Hz，代价是每输出样本 127 次乘加 ——
-     *  8 kHz × 127 ≈ 100 万 MAC/s，对手机可以忽略。 */
-    private static final int FIR_TAPS = 127;
+     *
+     *  127 抽头时过渡带压到 1170 Hz，但配 3400 Hz 截止后阻带边缘落在
+     *  3400 + 1170/2 ≈ 3986 Hz —— 离 4 kHz 只剩 14 Hz，混叠压不干净。
+     *  159 抽头 + 3200 Hz 截止：过渡带 936 Hz，阻带边缘 3668 Hz，留足余量。
+     *  代价 8 kHz × 159 ≈ 127 万 MAC/s，对手机可以忽略。 */
+    private static final int FIR_TAPS = 159;
     private static final int FRAMES_PER_PACKET = 3;        // 一个 DMRD 包承载 3 帧
 
     /** 单次发射的硬上限，防止 PTT 卡住把话组占死 */
@@ -75,6 +78,19 @@ public final class DmrTransmitter {
 
     public DmrTransmitter(Listener listener) {
         this.listener = listener;
+        /* 系数只跟采样率有关，构造时算一次即可 —— 发射循环里不做三角函数 */
+        float[] hp = designHighPass(HP_CUTOFF_HZ, TARGET_RATE);
+        hpB0 = hp[0];
+        hpB1 = hp[1];
+        hpB2 = hp[2];
+        hpA1 = hp[3];
+        hpA2 = hp[4];
+        float[] pk = designPeaking(PK_FREQ_HZ, PK_Q, PK_GAIN_DB, TARGET_RATE);
+        pkB0 = pk[0];
+        pkB1 = pk[1];
+        pkB2 = pk[2];
+        pkA1 = pk[3];
+        pkA2 = pk[4];
     }
 
     public boolean isTransmitting() {
@@ -253,7 +269,7 @@ public final class DmrTransmitter {
 
         byte[] pkt = new byte[DmrTx.PACKET_BYTES];
 
-        float[] fir = resample ? designLowPass(FIR_TAPS, 3400.0 / rate) : null;
+        float[] fir = resample ? designLowPass(FIR_TAPS, 3200.0 / rate) : null;
         float[] hist = resample ? new float[FIR_TAPS] : null;
 
         long startedAt = System.currentTimeMillis();
@@ -290,8 +306,9 @@ public final class DmrTransmitter {
                 System.arraycopy(raw, 0, pcm, 0, FRAME_SAMPLES);
             }
 
-            dcBlock(pcm);   /* 切掉 120 Hz 以下的隆隆和直流 */
-            agc(pcm);       /* 电平归一化，MIC 源各机差异太大 */
+            highPass(pcm);   /* 切掉 280 Hz 以下：低频是 AMBE 最大的比特黑洞 */
+            presence(pcm);   /* 2.6 kHz +2 dB：补回被低频挤掉的辅音能量 */
+            agc(pcm);        /* 电平归一化，MIC 源各机差异太大 */
 
             if (listener != null) listener.onLevel(levelOf(pcm));
 
@@ -343,24 +360,89 @@ public final class DmrTransmitter {
         }
     }
 
-    /* ---------------- 发射侧前端处理 ---------------- */
-
-    /** 一阶直流阻断（截止约 120 Hz）。状态跨帧保留，块边界不会出现阶跃。
+    /* ---------------- 发射侧前端处理 ----------------
      *
-     *  手机在 MIC 源下常有几十赫兹的隆隆和直流偏移。AMBE 的比特预算全在
-     *  300–3400 Hz，低频占掉的每一分都是从语音里偷的 —— 而且编出来是
-     *  「嗡嗡」的底噪。先把它切掉，再谈增益。 */
-    private float hpX1, hpY1;
-    private static final float HP_A =
-            (float) (1.0 / (1.0 + 2 * Math.PI * 120.0 / TARGET_RATE));
+     * 链序固定为「高通 → 高频补偿 → AGC → 声码器」，顺序不能换：
+     * AGC 按能量定增益，低频多的信号会把增益压下去，语音主体
+     * （300–3000 Hz）反而偏轻，编出来更闷。
+     */
 
-    private void dcBlock(short[] pcm) {
-        final float a = HP_A;
-        float x1 = hpX1, y1 = hpY1;
+    /** 高通截止频率（二阶 Butterworth，12 dB/oct）。
+     *
+     *  原来是一阶 120 Hz，实测频响：
+     *      100 Hz −4.0 dB，60 Hz −7.1 dB，40 Hz −10 dB
+     *  —— 对 AMBE 来说等于没切。
+     *
+     *  手机在 {@code AudioSource.MIC} 下近讲效应极强：贴嘴说话时
+     *  100–200 Hz 能比 1 kHz 高 10–20 dB。而 AMBE+2 只有 2.45 kbps，
+     *  低频谐波占掉的每一分比特都是从清晰度里偷的 —— 表现出来就是
+     *  「低音糊、闷、字咬不清」。这是 DMR 发射端最典型的一类音质问题。
+     *
+     *  280 Hz 二阶的实测值：
+     *      100 Hz −18.0 dB（改善 14 dB）
+     *       60 Hz −26.8 dB（改善 20 dB）
+     *      200 Hz −6.9 dB  ← 男声基频还留着，不变薄
+     *     1000 Hz −0.02 dB ← 语音主体完全无损
+     *
+     *  不取 300 Hz 是因为男声基频在 85–180 Hz，切太狠会「变薄」丢厚度；
+     *  280 Hz 是「低频糊」和「声音单薄」之间的折中。 */
+    private static final double HP_CUTOFF_HZ = 280.0;
+
+    /** 高频补偿（RBJ peaking EQ）。AMBE 在低频过载时最先牺牲的是
+     *  2–3 kHz 的辅音能量，而可懂度几乎全靠这一段。+2 dB 是保守值：
+     *  再多 s/sh 会发刺，声码器带宽也只到 3400 Hz。 */
+    private static final double PK_FREQ_HZ = 2600.0;
+    private static final double PK_Q = 0.8;
+    private static final double PK_GAIN_DB = 2.0;
+
+    private final float hpB0, hpB1, hpB2, hpA1, hpA2;
+    private final float pkB0, pkB1, pkB2, pkA1, pkA2;
+
+    /** 滤波器状态跨帧保留，块边界不会出现阶跃 */
+    private double hpX1, hpX2, hpY1, hpY2;
+    private double pkX1, pkX2, pkY1, pkY2;
+
+    /** 二阶 Butterworth 高通，双线性变换 + 预畸变。
+     *  返回 {b0,b1,b2,a1,a2}，a0 已归一化为 1。 */
+    private static float[] designHighPass(double fc, int fs) {
+        double wc = Math.tan(Math.PI * fc / fs);
+        double wc2 = wc * wc;
+        double s2wc = Math.sqrt(2.0) * wc;
+        double k = 1.0 / (1.0 + s2wc + wc2);
+        return new float[]{
+                (float) k,
+                (float) (-2.0 * k),
+                (float) k,
+                (float) (2.0 * (wc2 - 1.0) * k),
+                (float) ((1.0 - s2wc + wc2) * k)
+        };
+    }
+
+    /** RBJ cookbook 的 peaking EQ。返回 {b0,b1,b2,a1,a2}，a0 已归一化。 */
+    private static float[] designPeaking(double f0, double q, double gainDb, int fs) {
+        double A = Math.pow(10.0, gainDb / 40.0);
+        double w0 = 2.0 * Math.PI * f0 / fs;
+        double alpha = Math.sin(w0) / (2.0 * q);
+        double cw = Math.cos(w0);
+        double a0 = 1.0 + alpha / A;
+        return new float[]{
+                (float) ((1.0 + alpha * A) / a0),
+                (float) (-2.0 * cw / a0),
+                (float) ((1.0 - alpha * A) / a0),
+                (float) (-2.0 * cw / a0),
+                (float) ((1.0 - alpha / A) / a0)
+        };
+    }
+
+    private void highPass(short[] pcm) {
+        final float b0 = hpB0, b1 = hpB1, b2 = hpB2, a1 = hpA1, a2 = hpA2;
+        double x1 = hpX1, x2 = hpX2, y1 = hpY1, y2 = hpY2;
         for (int i = 0; i < pcm.length; i++) {
-            float x = pcm[i];
-            float y = a * (y1 + x - x1);
+            double x = pcm[i];
+            double y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1;
             x1 = x;
+            y2 = y1;
             y1 = y;
             int v = (int) y;
             if (v > 32767) v = 32767;
@@ -368,44 +450,108 @@ public final class DmrTransmitter {
             pcm[i] = (short) v;
         }
         hpX1 = x1;
+        hpX2 = x2;
         hpY1 = y1;
+        hpY2 = y2;
+    }
+
+    private void presence(short[] pcm) {
+        final float b0 = pkB0, b1 = pkB1, b2 = pkB2, a1 = pkA1, a2 = pkA2;
+        double x1 = pkX1, x2 = pkX2, y1 = pkY1, y2 = pkY2;
+        for (int i = 0; i < pcm.length; i++) {
+            double x = pcm[i];
+            double y = b0 * x + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+            x2 = x1;
+            x1 = x;
+            y2 = y1;
+            y1 = y;
+            int v = (int) y;
+            if (v > 32767) v = 32767;
+            else if (v < -32768) v = -32768;
+            pcm[i] = (short) v;
+        }
+        pkX1 = x1;
+        pkX2 = x2;
+        pkY1 = y1;
+        pkY2 = y2;
     }
 
     private float agcGain = 1.0f;
-    private static final float AGC_TARGET = 20000f;   // 约 -4 dBFS 峰值
-    private static final float AGC_MAX = 4.0f;        // 最多提 12 dB
-    private static final float AGC_GATE = 700f;       // 低于这个峰值当静音，不抬底噪
+    private float rmsAvg = 0f;
+    private int agcFrames = 0;
+    /** 目标 RMS，约 −18 dBFS。原来按峰值 20000（−4 dBFS）归一，
+     *  峰值被爆破音和残余低频主导，语音主体实际只有 −20 dBFS 左右，
+     *  声码器拿到的信号偏轻，量化噪声占比上升，也是「糊」的一个来源。 */
+    private static final float AGC_TARGET_RMS = 4000f;
+    /** 高通砍掉 14 dB 低频能量后，需要更大的补偿量才追得回来 */
+    private static final float AGC_MAX = 8.0f;        // 最多提 18 dB
+    /** 允许的衰减量。只提不压的话，MIC 电平偏高的机器会一路顶到满量程 ——
+     *  旧代码就是这样，正常说话就能削掉几百个样本。0.3 = 最多压 10 dB，
+     *  普通说话（贴着目标电平）增益仍稳定在 1 倍，动态不受影响。 */
+    private static final float AGC_MIN = 0.3f;
+    private static final float AGC_GATE_RMS = 100f;   // −50 dBFS 以下当静音
+    /** 每次发射开头快速收敛的帧数（8 × 20 ms = 160 ms） */
+    private static final int AGC_FAST_FRAMES = 8;
+    private static final float AGC_FAST = 0.50f;
+    /** 稳态平滑系数：0.02 ≈ 1 s 时间常数，慢到不会跟着音节走 */
+    private static final float AGC_SLOW = 0.02f;
 
-    /** 峰值归一化（不是压缩器）。
+    /** 电平归一化（不是压缩器）。
      *
-     *  手机 MIC 源的电平差异能到 20 dB：同样正常说话，有的设备峰值 3000，
-     *  有的 25000。AMBE 对输入电平很敏感，太轻的输入编出来又闷又糊。
+     *  手机 MIC 源的电平差异能到 20 dB：同样正常说话，有的设备 RMS 800，
+     *  有的 8000。AMBE 对输入电平很敏感，太轻的输入编出来又闷又糊。
      *
-     *  策略刻意做得迟钝：
-     *    · 只往上提，不往下压 —— 压会损失动态，语音变平、辨识度下降；
-     *    · 攻击快、释放慢 —— 句首立刻起来，句尾慢慢回落，不「抽气」；
-     *    · 带噪声门，安静时回落到 1 倍，不把底噪放大。
+     *  三个设计点，每个都对应一种失败形态：
+     *    · **以只提不压为主，超出目标 10 dB 才压** —— 压会损失动态，
+     *      语音变平、辨识度下降；但不压的话电平高的机器会顶穿满量程，
+     *      旧代码在正常说话时就能削掉几百个样本；
+     *    · **RMS 平滑到 1 s** —— 逐帧 RMS 跟着音节包络（3~5 Hz）抖，
+     *      增益跟着抖就是「抽气」，这是 AGC 最典型的失败；
+     *    · **限幅放在输出端，不进增益环** —— 用瞬时峰值去压增益，
+     *      一个爆破音就把整句电平拉下来，下一帧再抬回去，来回摆 10 dB。
+     *      改成增益只管慢电平，峰值交给软限幅（0.92 以上才动手），
+     *      两者互不干扰。
      */
     private void agc(short[] pcm) {
-        int peak = 0;
+        double sum = 0;
         for (int i = 0; i < pcm.length; i++) {
-            int a = pcm[i] < 0 ? -pcm[i] : pcm[i];
-            if (a > peak) peak = a;
+            int s = pcm[i];
+            sum += (double) s * s;
         }
-        float want;
-        if (peak > AGC_GATE) {
-            want = AGC_TARGET / peak;
-            if (want > AGC_MAX) want = AGC_MAX;
-            if (want < 1.0f) want = 1.0f;
+        float rms = (float) Math.sqrt(sum / pcm.length);
+
+        if (agcFrames < 1) {
+            rmsAvg = rms;                                   // 首帧直接对齐
         } else {
-            want = 1.0f;                 // 安静 → 回落，别把底噪放大
+            float a = (agcFrames < AGC_FAST_FRAMES) ? AGC_FAST : AGC_SLOW;
+            rmsAvg += (rms - rmsAvg) * a;
         }
-        /* 20 ms 一帧：0.35 约 60 ms 提升到位，0.03 约 650 ms 回落 */
-        float k = (want > agcGain) ? 0.35f : 0.03f;
+        agcFrames++;
+
+        float want = 1.0f;
+        if (rmsAvg > AGC_GATE_RMS) {
+            want = AGC_TARGET_RMS / rmsAvg;
+            if (want > AGC_MAX) want = AGC_MAX;
+            else if (want < AGC_MIN) want = AGC_MIN;
+        }
+
+        /* 提升稍快（60 ms），回落慢（330 ms）—— 句首立刻起来，句尾不「抽气」 */
+        float k = (want > agcGain) ? 0.30f : 0.06f;
         agcGain += (want - agcGain) * k;
-        if (agcGain < 1.02f) return;     // 基本是 1 倍就别白算一遍
+
+        if (agcGain > 0.99f && agcGain < 1.02f) return;   // 基本是 1 倍就别白算一遍
+
+        final float KNEE = 30146f;       // 0.92 × 32768
+        final float SPAN = 2622f;        // 到满量程的余量
         for (int i = 0; i < pcm.length; i++) {
-            int v = (int) (pcm[i] * agcGain);
+            float x = pcm[i] * agcGain;
+            float a = x < 0 ? -x : x;
+            if (a > KNEE) {
+                float over = (a - KNEE) / SPAN;
+                a = KNEE + SPAN * (1f - (float) Math.exp(-over));
+                x = x < 0 ? -a : a;
+            }
+            int v = (int) x;
             if (v > 32767) v = 32767;
             else if (v < -32768) v = -32768;
             pcm[i] = (short) v;
