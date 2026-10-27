@@ -834,6 +834,14 @@ html[data-theme="dark"] .qbadge span.priv{background:#2b1416;border-color:#4a202
 /* 「链路质量」是长文本（收 N 包 · 丢 N 包（x%）），套不上上面那条 46px 定宽 ——
    会折成好几行。给它一个不限宽、不换行的变体。 */
 .rxctl .mono.wide{width:auto;white-space:nowrap;font-variant-numeric:tabular-nums}
+/* 麦克风增益：非 0 时把读数点亮，让人一眼看出「这一档不是默认值」。
+   纯文字「+6 dB」和「0 dB」在小字号下差别不明显，容易以为自己没调。 */
+.rxctl .mono.on{color:var(--tx)}
+/* 发射电平在按住 PTT 时的读数，比旁边那些标签更该被看见 */
+#txLevelDb.on{color:var(--tx);font-weight:600}
+#txLevelDb.off{color:var(--dim);opacity:.55}
+/* 「+12 dB」比默认的 46px 略宽，不放开会挤成「+12 d…」 */
+#txMicGainVal{width:58px}
 /* ---- 接收过滤：屏蔽名单 ---- */
 #txRxBlockIn,#txRxMuteIn{padding:5px 9px;border:1px solid var(--border);border-radius:7px;
   background:var(--panel);width:148px;min-width:0;font-size:12px}
@@ -1577,6 +1585,28 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
         <b>能听见谁</b>取决于主站往你这台热点推哪些话组：在 SelfCare 里设成
         <b>静态话组</b>的会一直推；按住 PTT 在某话组上说过话，该话组也会被
         <b>动态激活约十分钟</b> —— 和 Pi-Star 的脾气一样。
+      </div>
+    </div>
+<div class="txcard">
+      <h3>🎙 发射（说给对方）</h3>
+      <div class="rxrow">
+        <div class="rxlbl"><b>麦克风增益</b><span>在自动电平的基础上再抬或压。自动电平先把声音拉到固定响度，
+          这一档是你自己的口味 —— 觉得对方听着小声就往右，觉得发炸就往左</span></div>
+        <div class="rxctl">
+          <input type="range" id="txMicGain" min="-12" max="12" step="1" value="0" aria-label="麦克风增益">
+          <span class="mono" id="txMicGainVal">0 dB</span>
+        </div>
+      </div>
+      <div class="rxrow">
+        <div class="rxlbl"><b>发射电平</b><span>按住 PTT 时实时显示当前送出语音的电平（dBFS）。
+          −16 附近是正常，超过 −6 就快削波了</span></div>
+        <div class="rxctl"><span class="mono wide" id="txLevelDb">—</span></div>
+      </div>
+      <div class="txnote">
+        增益作用在<b>自动电平之后</b> —— 放在它前面会被自动电平原样抵消，
+        你会觉得「调了没反应」。<br>
+        往右调太多会触发<b>软限幅</b>：不会硬削出方波，但声音会变「平」，
+        对方听上去就是「一直很响、没有起伏」。<b>−6 ~ +6 dB 是比较安全的区间。</b>
       </div>
     </div>
 <div class="txcard">
@@ -19345,6 +19375,10 @@ const state = {
   awakeOn:true, scanResume:true,
   /* 通联（对讲页）的接收参数 —— 独立于「收听」页那套，因为走的是另一条链路 */
   rxOn:true, rxVol:1, rxJit:240,
+  /* 发射侧的用户麦克风增益（dB，−12 ~ +12）。
+     和上面那套接收参数放一起是因为它们在同一个卡片里，但作用点完全不同：
+     这个作用在**自动电平之后**，抬的是真正送进声码器的音量。 */
+  micGain:0,
   /* 接收过滤：只收当前话组 + 屏蔽名单。
      rxBlock 存 [{id:4614187, call:'BH6RGQ'}] —— **过滤按 id 生效**，
      call 只是给人看的标签，没有呼号也能用（只有 ID 就存 call:''）。 */
@@ -21790,20 +21824,54 @@ function rxSyncUI(){
   const j=txEl('txRxJit'); if(j)j.value=state.rxJit;
   const jv=txEl('txRxJitVal'); if(jv)jv.textContent=state.rxJit+'ms';
   const tg=txEl('txRxOnlyTg'); if(tg)tg.checked=!!state.rxOnlyTg;
+  micGainSyncUI();
   rxBlockRender(); rxHeardRender(); rxMuteRender(); rxTgRender();
   rxStatsTick();
+}
+/* ---- 麦克风增益（发射侧） ----
+   原生侧只存一个 float，改一次调一次，不需要轮询。
+   注意这里下发的是**用户增量**，真正的自动电平在原生侧自己做，
+   所以页面刷新后声音不会变 —— 值从 store 里恢复。 */
+function micGainApply(){
+  if(typeof Android==='undefined')return;
+  try{ if(Android.dmrSetMicGain)Android.dmrSetMicGain(Number(state.micGain)||0); }catch(e){}
+}
+function micGainSyncUI(){
+  const g=txEl('txMicGain'); if(g)g.value=state.micGain;
+  const gv=txEl('txMicGainVal');
+  if(gv){
+    const v=Math.round(Number(state.micGain)||0);
+    gv.textContent=(v>0?'+':'')+v+' dB';
+    /* 非 0 就点亮 —— 用户过几天再看这一屏，得一眼知道「这里被我调过」 */
+    gv.classList.toggle('on',v!==0);
+  }
 }
 /* 链路质量（丢包）刷新。
    值来自原生侧按 DMRD 8 位序号的跳变累计，是个累计量，2 秒读一次足够 ——
    读得太勤只是白白多跨几次 JS↔Java 桥。
    没有连接时显示「—」，避免把上一轮的旧数字留在界面上误导读数。 */
 let rxStatsCache='';
+let micGainSynced=false;
 function rxStatsTick(){
   const el=txEl('txRxStats'); if(!el)return;
   if(typeof Android==='undefined'||!Android.dmrStatus)return;
   let st=null;
   try{ st=JSON.parse(Android.dmrStatus()); }catch(e){ return; }
   if(!st)return;
+  /* 首次拿到原生状态时对一次账。
+     正常情况下本地存储才是准的（原生每次冷启动都从 0 开始），
+     但存储被清过而原生还在跑上一档增益时，滑块会显示 0 dB 而实际在 +6 dB ——
+     这种「显示和实际不一致」比没这个功能更误导人。只对一次，之后以用户操作为准。 */
+  if(!micGainSynced){
+    const mg=Number(st.micGain);
+    if(isFinite(mg)){
+      micGainSynced=true;
+      const v=Math.max(-12,Math.min(12,Math.round(mg)));
+      if(Math.abs(v-(Number(state.micGain)||0))>=0.5){
+        state.micGain=v; store.set('micGain',v); micGainSyncUI();
+      }
+    }
+  }
   if(!st.connected){
     if(rxStatsCache!==''){ rxStatsCache=''; el.textContent='—'; el.classList.remove('warn'); }
     return;
@@ -22172,6 +22240,13 @@ function rxBind(){
     state.rxJit=Math.max(0,Math.min(600,parseInt(e.target.value,10)||0));
     store.set('rxJit',state.rxJit); rxSyncUI(); rxApply();
   });
+  /* 麦克风增益。用 input 而不是 change —— 拖着滑块就要能立刻听到差别，
+     松手才生效会让人以为没反应。原生侧只是改一个 float，代价可忽略。 */
+  on('txMicGain','input',e=>{
+    state.micGain=Math.max(-12,Math.min(12,parseInt(e.target.value,10)||0));
+    store.set('micGain',state.micGain);
+    micGainSyncUI(); micGainApply();
+  });
   /* 只收当前话组 */
   on('txRxOnlyTg','change',e=>{
     state.rxOnlyTg=!!e.target.checked;
@@ -22519,7 +22594,7 @@ function txEnter(){
   if(!ANDROID)txWebMode();
   /* 对讲台：信道表 / 大字区 / 接收参数回填。
    * 连接参数现在整体在「设置」页，这里只把折叠状态同步过去。 */
-  qRenderTg(); rxBlockLoad(); rxSyncUI(); rxApply(); renderTxIdent();
+  qRenderTg(); rxBlockLoad(); rxSyncUI(); rxApply(); micGainApply(); renderTxIdent();
   const fh=txEl('txFold'), fb=txEl('txFoldBody');
   if(fh&&store.get('txFold',false)){ fh.classList.add('open'); if(fb)fb.classList.add('open'); }
   setTimeout(()=>{ if(!TX.voc)txLoadVoc(); },100);
@@ -22961,7 +23036,13 @@ window.onDmrEvent=function(json){
     case 'tx':
       TX.txing=!!ev.on;
       txPill('txPillTx','发射',ev.on?'发射中':(ev.reason||'待机'),ev.on?'bad':'');
-      if(!ev.on){ const m=txEl('txMeter'); if(m)m.style.width='0%'; }
+      if(!ev.on){
+        const m=txEl('txMeter'); if(m)m.style.width='0%';
+        /* 松手后读数变暗但保留 —— 用户往往想回头看一眼「刚才峰值到哪了」，
+           直接清成「—」等于把刚测到的东西扔了 */
+        const d=txEl('txLevelDb');
+        if(d){ d.classList.remove('on'); d.classList.add('off'); }
+      }
       hdGate();   /* 半双工闸门：发射时掐掉 HOSE，免得听见自己绕网络回来的声音 */
       txSync();
       break;
@@ -23024,6 +23105,17 @@ window.onDmrEvent=function(json){
     case 'level':{
       const m=txEl('txMeter');
       if(m)m.style.width=Math.max(0,Math.min(100,ev.v|0))+'%';
+      /* 发射电平读数。原生侧在**麦克风增益之后**量的 ——
+         拖增益滑块时这里会跟着动，正好用来确认「抬了多少还剩多少余量」。
+         超过 −6 dBFS 就已经贴着满量程，再往上只会被软限幅压平。 */
+      const d=txEl('txLevelDb');
+      if(d){
+        const db=Number(ev.db);
+        if(isFinite(db)&&db>-110){
+          d.textContent=db.toFixed(1)+' dB';
+          d.classList.add('on'); d.classList.remove('off');
+        }
+      }
       break;
     }
     case 'pong': break;
@@ -23203,7 +23295,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.10';
+const PAGE_VER='2026.11.11';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
@@ -23723,6 +23815,8 @@ function boot(){
   state.rxOn=store.get('rxOn',true)!==false;
   state.rxVol=Math.max(0,Math.min(2,Number(store.get('rxVol',1))||1));
   state.rxJit=Math.max(0,Math.min(600,Number(store.get('rxJit',240))||0));
+  /* 麦克风增益：0 是默认（不动），范围由原生侧再夹一次 */
+  state.micGain=Math.max(-12,Math.min(12,Number(store.get('micGain',0))||0));
   state.recOn=store.get('recOn',true);
   /* 网络选择要早于订阅载入 —— 两套网络的订阅列表是分开存的 */
   state.net=store.get('net','bm')==='cn'?'cn':'bm';

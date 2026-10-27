@@ -62,13 +62,30 @@ public final class DmrTransmitter {
     private static final float ZERO_CODE_RMS = 800f;
     private static final int ZERO_CODE_FRAMES = 25;   // 25 × 20 ms = 0.5 秒
 
+    /* ---- 用户麦克风增益 ----
+     *
+     * ★ 必须作用在 AGC **之后**。
+     *
+     * AGC 的目标电平是固定的（−16 dBFS），你在它前面放大 6 dB，
+     * 它就在后面把增益降 6 dB —— 输出一点变化都没有。用户拖动滑块
+     * 发现「完全没反应」，比没有这个功能更糟。
+     *
+     * 放在 AGC 之后 = 「在自动电平的基础上再抬/压」，
+     * 滑块动多少、听感就变多少。 */
+    private static final float MIC_GAIN_MIN_DB = -12f;
+    private static final float MIC_GAIN_MAX_DB = 12f;
+    /** 软限幅的膝点：约 0.79 满量程，低于它的样本原样通过 */
+    private static final float SOFT_KNEE = 26000f;
+
     public interface Listener {
         void onTxStart(int dstId);
 
         void onTxStop(String reason);
 
-        /** 输入电平 0..100，用于界面上的电平条 */
-        void onLevel(int level);
+        /** 输入电平 0..100，用于界面上的电平条
+         *  @param dbfs 同一帧的 dBFS，用于「发射电平」读数（−16 附近正常，
+         *              超过 −6 就快削波了）。调麦克风增益时全靠它判断该往哪边调。 */
+        void onLevel(int level, float dbfs);
 
         void onLog(String line);
     }
@@ -76,6 +93,9 @@ public final class DmrTransmitter {
     private final Listener listener;
 
     private volatile boolean transmitting;
+
+    /** 用户麦克风增益（线性）。1.0 = 不增不减，发射中也能实时改。 */
+    private volatile float micGain = 1.0f;
     private Thread txThread;
     private AudioRecord recorder;
     /** 当前发射所依附的会话，用于发终止帧 */
@@ -107,6 +127,22 @@ public final class DmrTransmitter {
 
     public boolean isTransmitting() {
         return transmitting;
+    }
+
+    /**
+     * 设置麦克风增益（dB），−12 ~ +12。发射过程中改也立即生效。
+     *
+     * <p>作用点在 AGC <b>之后</b>：AGC 的目标电平固定，放在它前面会被原样抵消，
+     * 用户会以为滑块坏了。见 {@link #applyMicGain} 的说明。
+     */
+    public void setMicGainDb(float db) {
+        if (db < MIC_GAIN_MIN_DB) db = MIC_GAIN_MIN_DB;
+        if (db > MIC_GAIN_MAX_DB) db = MIC_GAIN_MAX_DB;
+        micGain = (float) Math.pow(10.0, db / 20.0);
+    }
+
+    public float getMicGainDb() {
+        return (float) (20.0 * Math.log10(Math.max(1e-6f, micGain)));
     }
 
     /**
@@ -436,8 +472,15 @@ public final class DmrTransmitter {
             final float frameRms = rmsOf(pcm);
             agc(pcm, frameRms);   /* 电平归一化，MIC 源各机差异太大 */
             noiseGate(pcm, frameRms);  /* ★ 必须放在 AGC 之后 */
+            /* ★ 用户增益在 AGC 之后 —— 放在前面会被 AGC 原样抵消 */
+            applyMicGain(pcm);
 
-            if (listener != null) listener.onLevel(levelOf(pcm));
+            if (listener != null) {
+                /* 电平在 applyMicGain 之后量 —— 用户要看到的是**真正发出去**的
+                 * 那一帧有多响，否则调增益时读数不动，等于闭着眼睛调。 */
+                final float outRms = rmsOf(pcm);
+                listener.onLevel(levelOfRms(outRms), dbOfRms(outRms));
+            }
 
             if (Vocoder.nativeEncode(pcm, ambe) != Vocoder.CODEC_BYTES) {
                 /* ★ 这里不能 continue。
@@ -986,8 +1029,19 @@ public final class DmrTransmitter {
     }
 
     private static int levelOf(short[] pcm) {
-        int lv = (int) (rmsOf(pcm) / 32768.0 * 400);      // 经验缩放，满量程约 100
+        return levelOfRms(rmsOf(pcm));
+    }
+
+    /** RMS → 0..100 的电平条刻度。经验缩放，满量程约 100。 */
+    private static int levelOfRms(float rms) {
+        int lv = (int) (rms / 32768.0 * 400);
         return Math.max(0, Math.min(100, lv));
+    }
+
+    /** RMS → dBFS。−120 表示完全静音（log10(0) 没有意义）。 */
+    private static float dbOfRms(float rms) {
+        if (rms <= 0.5f) return -120f;
+        return (float) (20.0 * Math.log10(rms / 32768.0));
     }
 
     /** 码字是否全为 0。用来发现「有信号却编出空码字」这类静默故障。 */
@@ -995,6 +1049,44 @@ public final class DmrTransmitter {
         if (a == null) return true;
         for (byte b : a) if (b != 0) return false;
         return true;
+    }
+
+    /* ---------------- 用户麦克风增益 ---------------- */
+
+    /**
+     * 把用户设定的增益乘到 PCM 上，并做软限幅。
+     *
+     * <p>增益为 0 dB 时直接返回 —— 默认路径上不多做一次乘法。
+     */
+    private void applyMicGain(short[] pcm) {
+        final float g = micGain;
+        if (g == 1.0f) return;
+        for (int i = 0; i < pcm.length; i++) {
+            pcm[i] = softLimit(pcm[i] * g);
+        }
+    }
+
+    /**
+     * 软限幅：|v| 超过膝点后按双曲线逼近满量程，<b>永远不硬削</b>。
+     *
+     * <pre>
+     *   shaped = knee + room · over / (over + room)
+     * </pre>
+     *
+     * 这个式子在 over = 0 处导数为 1（与直通段平滑衔接），over → ∞ 时
+     * 渐近到 knee + room = 32767，且全程单调。
+     *
+     * <p>为什么不能直接 clamp：硬削波会造出大量高次谐波，
+     * AMBE 会把它们当噪声分走比特，听感是「炸」而不是「响」——
+     * 音量上去了，可懂度反而掉下来。
+     */
+    private static short softLimit(float v) {
+        final float abs = v < 0 ? -v : v;
+        if (abs <= SOFT_KNEE) return (short) v;
+        final float room = 32767f - SOFT_KNEE;
+        final float over = abs - SOFT_KNEE;
+        final float shaped = SOFT_KNEE + room * (over / (over + room));
+        return (short) (v < 0 ? -shaped : shaped);
     }
 
     /**

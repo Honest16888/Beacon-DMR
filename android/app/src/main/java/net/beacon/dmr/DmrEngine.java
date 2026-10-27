@@ -306,6 +306,18 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
         return transmitter.isTransmitting();
     }
 
+    /** 用户麦克风增益，单位 dB，范围 −12 ~ +12，0 为不改动。
+     *
+     *  <p>作用点在自动电平（AGC）**之后** —— 放在它前面会被 AGC
+     *  原样抵消，滑块拖到底也听不出差别。 */
+    public void setMicGainDb(float db) {
+        transmitter.setMicGainDb(db);
+    }
+
+    public float getMicGainDb() {
+        return transmitter.getMicGainDb();
+    }
+
     /* ================================================================ */
     /* 接收                                                             */
     /* ================================================================ */
@@ -577,8 +589,8 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
     }
 
     @Override
-    public void onLevel(int level) {
-        emit("level", "v", level);
+    public void onLevel(int level, float dbfs) {
+        emit("level", "v", level, "db", Math.round(dbfs * 10f) / 10.0);
     }
 
     /* ================================================================ */

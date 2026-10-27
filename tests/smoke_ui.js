@@ -580,6 +580,61 @@ const d3 = await ev(`
 ok('新句子峰值不继承上一句', !/-6\.2/.test(d3.title || ''), d3);
 ok('一句结束后读数变暗', d3.lv === 'idle', d3);
 
+console.log('\n=== 13. 麦克风增益（发射侧） ===');
+/* 增益必须作用在 AGC 之后 —— 这是功能能不能被感知的前提，测不到音频，
+ * 所以这里锁的是「UI 有没有把值真的送出去、有没有夹住、读数跟不跟手」。 */
+const mg1 = await ev(`
+  const s=document.getElementById('txMicGain');
+  return { has:!!s, min:s&&s.min, max:s&&s.max, step:s&&s.step, val:s&&s.value,
+           lbl:document.getElementById('txMicGainVal').textContent,
+           lvl:document.getElementById('txLevelDb').textContent };`);
+ok('增益滑块存在且范围 −12 ~ +12', mg1.has && mg1.min === '-12' && mg1.max === '12', mg1);
+ok('默认 0 dB 且读数显示 0 dB', mg1.val === '0' && mg1.lbl === '0 dB', mg1);
+ok('发射电平初始为 —', mg1.lvl === '—', mg1);
+
+const mg2 = await ev(`
+  const s=document.getElementById('txMicGain');
+  s.value='6'; s.dispatchEvent(new Event('input',{bubbles:true}));
+  return { v:state.micGain, lbl:document.getElementById('txMicGainVal').textContent,
+           on:document.getElementById('txMicGainVal').classList.contains('on'),
+           saved:Number(localStorage.getItem('dmr.micGain')) };`);
+ok('拖动后 state 更新为 +6', mg2.v === 6, mg2);
+ok('读数带正号：+6 dB', mg2.lbl === '+6 dB', mg2);
+ok('非 0 时读数点亮', mg2.on === true, mg2);
+ok('值写进本地存储', mg2.saved === 6, mg2);
+
+const mg3 = await ev(`
+  const s=document.getElementById('txMicGain');
+  s.value='-9'; s.dispatchEvent(new Event('input',{bubbles:true}));
+  const neg={ lbl:document.getElementById('txMicGainVal').textContent, v:state.micGain };
+  s.value='0'; s.dispatchEvent(new Event('input',{bubbles:true}));
+  return { neg, zero:document.getElementById('txMicGainVal').classList.contains('on'),
+           lbl:document.getElementById('txMicGainVal').textContent };`);
+ok('负增益显示 −9 dB（不带正号）', mg3.neg.lbl === '-9 dB' && mg3.neg.v === -9, mg3);
+ok('回到 0 后熄灭且显示 0 dB', mg3.zero === false && mg3.lbl === '0 dB', mg3);
+
+const mg4 = await ev(`
+  /* 越界值必须被夹住，不能把 30 原样送进原生 */
+  state.micGain=99; micGainSyncUI(); const hi=state.micGain;
+  state.micGain=0; micGainSyncUI();
+  const s=document.getElementById('txMicGain');
+  s.value='30'; s.dispatchEvent(new Event('input',{bubbles:true}));
+  return { hi, clamped:state.micGain };`);
+ok('越界值被夹到 +12', mg4.clamped === 12, mg4);
+
+const mg5 = await ev(`
+  /* level 事件带 db 字段 → 发射电平读数跟手 */
+  window.onDmrEvent(JSON.stringify({type:'tx',on:true,dstId:91}));
+  window.onDmrEvent(JSON.stringify({type:'level',v:62,db:-13.27}));
+  const d=document.getElementById('txLevelDb');
+  const on={ txt:d.textContent, hot:d.classList.contains('on') };
+  window.onDmrEvent(JSON.stringify({type:'tx',on:false,reason:'松开 PTT'}));
+  const off={ txt:d.textContent, dim:d.classList.contains('off') };
+  return { on, off };`);
+ok('发射电平保留一位小数：−13.3 dB', mg5.on.txt === '-13.3 dB', mg5);
+ok('发射中读数点亮', mg5.on.hot === true, mg5);
+ok('松手后变暗但保留读数', mg5.off.dim === true && mg5.off.txt === '-13.3 dB', mg5);
+
 console.log(`\n================  ${pass} 通过 / ${fail} 失败  ================`);
 ws.close(); chrome.kill();
 await sleep(300);

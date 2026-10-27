@@ -148,6 +148,23 @@ def main():
                  body) is not None or 'zeroSpins' in body,
        'zeroSpins 若在外层循环内声明，每次迭代都清零，保护永远不成立')
 
+    print('\n=== 7. 用户麦克风增益的位置 ===')
+    # 增益若放在 AGC 之前，会被 AGC 原样抵消 —— 滑块能拖但声音不变，
+    # 这种「看起来在工作」的失效最难被发现，所以用结构检查钉住。
+    gpos = body.find('applyMicGain(pcm)')
+    ok('链里有 applyMicGain(pcm)', gpos >= 0)
+    ok('增益在 AGC 之后', gpos >= 0 and pos[3] >= 0 and gpos > pos[3],
+       '放在 AGC 之前会被它原样抵消，用户拖滑块听不出差别')
+    ok('增益在噪声门之后', gpos >= 0 and pos[4] >= 0 and gpos > pos[4],
+       '放在噪声门之前，抬增益会把已经被门压掉的底噪重新提回来')
+    # 电平读数也要在增益之后量，否则拖滑块时读数不动，同样会让人以为没生效
+    lpos = body.find('listener.onLevel')
+    ok('发射电平在增益之后量', lpos >= 0 and gpos >= 0 and lpos > gpos,
+       '在增益之前量，用户调增益时读数不动，会以为滑块坏了')
+    ok('放大后走软限幅而不是直接截断',
+       'softLimit' in strip_comments(src) and 'SOFT_KNEE' in strip_comments(src),
+       '硬截断会削出方波，AMBE 编出来是破音')
+
     print(f'\n================  {passed} 通过 / {failed} 失败  ================')
     return 0 if failed == 0 else 1
 

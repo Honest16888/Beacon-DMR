@@ -544,9 +544,19 @@ public class MainActivity extends Activity {
             }
         }
 
+        /**
+         * 麦克风增益，单位 dB，−12 ~ +12，0 为不改动。
+         *
+         * <p>作用在自动电平之后。超范围的值由引擎自己夹住，这里不校验 ——
+         * 前端滑块已经限位，多一道判断只会让「值没生效」更难查。
+         */
         @JavascriptInterface
-        public String dmrStatus() {
-            if (dmr == null) return "{}";
+        public void dmrSetMicGain(float db) {
+            if (dmr != null) dmr.setMicGainDb(db);
+        }
+
+        @JavascriptInterface
+        public String dmrStatus() {            if (dmr == null) return "{}";
             try {
                 JSONObject o = new JSONObject();
                 o.put("connected", dmr.isConnected());
@@ -569,6 +579,9 @@ public class MainActivity extends Activity {
                 /* 接收音频电平（dBFS）。DMRD 包不带 RSSI，所以这是这条链路上
                  * 唯一可量化的电平指标 —— 界面上标成「音频电平」而不是「信号强度」 */
                 o.put("rxDb", Math.round(dmr.getRxDb() * 10f) / 10.0);
+                /* 发射侧的用户增益（dB）。页面重进时要回填滑块，
+                 * 否则显示 0 dB 而实际还在 +6 dB，用户会以为设置丢了 */
+                o.put("micGain", Math.round(dmr.getMicGainDb() * 10f) / 10.0);
                 /* 丢包统计：靠 DMRD 包的 8 位序号跳变算出来的。
                  * rxStats 是给界面直接显示的一句话，rxLoss 给进度条/告警用。 */
                 o.put("rxStats", dmr.getRxStats());
