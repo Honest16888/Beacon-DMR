@@ -257,21 +257,23 @@ ok('91 仍记进 active（列表里能看到）', g1.active91 === true, g1);
 ok('46001 仍在 active', g1.active46001 === true, g1);
 ok('rxHold(91) 返回占用的 46001', g1.hold91 === 46001, g1);
 
-const g2 = await ev(`/* 46001 静默超过 hang 窗口后，91 应该能进来 */
+const g2 = await ev(`/* 占用组失联超过 LOST_MS（CALL_END 丢了）才兜底让位 */
   const t0=Date.now();
-  RXG.at=t0-RXG.hangMs-100;
+  RXG.at=t0-RXG.LOST_MS-100;
   handleSpotter([T.CALL_START, 0, 9100001, 91]);
   return {tg:state.current?state.current.tg:null};`);
-ok('挂起窗口过后 91 可以接管', g2.tg === 91, g2);
+ok('占用组失联超时后 91 可以接管', g2.tg === 91, g2);
 
-const g3 = await ev(`/* 让位：46001 说完了，active 里还有 91 → 立刻释放 */
-  state.current={srcId:4601001,tg:46001,alias:'',start:Date.now()};
-  state.active.set(46001,{tg:46001,srcId:4601001,alias:'',start:Date.now()});
-  state.active.set(91,{tg:91,srcId:9100001,alias:'',start:Date.now()});
+const g3 = await ev(`/* CALL_END 按 tg 精确删除，并把坑位交给还在等的组 */
+  rxReset(); state.current={srcId:4601001,tg:46001,alias:'',start:Date.now()};
+  state.active.clear();
+  state.active.set(46001,{tg:46001,srcId:4601001,alias:'',start:Date.now(),at:Date.now()});
+  state.active.set(91,{tg:91,srcId:9100001,alias:'',start:Date.now(),at:Date.now()});
   RXG.tg=46001; RXG.at=Date.now();
-  handleSpotter([T.CALL_END, 0]);
-  return {current:state.current, locked:RXG.tg};`);
-ok('CALL_END 后坑位让给还在等的组', g3.locked === 0, g3);
+  handleSpotter([T.CALL_END, 0, 4601001, 46001]);
+  return {cur:state.current&&state.current.tg, a46001:state.active.has(46001)};`);
+ok('CALL_END 按 tg 精确删除 46001', g3.a46001 === false, g3);
+ok('CALL_END 后坑位交给还在等的 91', g3.cur === 91, g3);
 
 const g4 = await ev(`/* 用户主动点某个组 = 立刻让路 */
   rxReset(); state.current={srcId:4601001,tg:46001,alias:'',start:Date.now()};
@@ -287,6 +289,66 @@ const g5 = await ev(`/* 独听切换也要释放 */
   toggleSolo(91); rxReset(); state.current=null; state.active.clear();
   return o;`);
 ok('切独听后释放占用', g5.locked === 0, g5);
+
+console.log('\n=== 8. 严格配对：46001 说话中 91 抢不走 ===');
+const h1 = await ev(`try{ spotterClose(); }catch(e){}
+  state.subscribed=[46001,91]; state.solo=null; state.audioOn=true;
+  rxReset(); state.current=null; state.active.clear(); Audio_.silence();
+  handleSpotter([T.CALL_START, 0, 4601001, 46001]);
+  for(let i=0;i<5;i++) handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
+  /* 模拟换气停顿 5 秒：靠 hang 超时让位的旧逻辑会在这里把坑位交给 91，
+     而 46001 的音频还在路上 —— 正是「声音是 46001、顶部却显示 91」的来源 */
+  RXG.at=Date.now()-5000;
+  handleSpotter([T.CALL_START, 0, 9100001, 91]);
+  return {tg:state.current&&state.current.tg, hold:rxHold(91), active91:state.active.has(91)};`);
+ok('46001 停顿 5 秒，91 仍抢不走 current', h1.tg === 46001, h1);
+ok('rxHold(91) 仍返回 46001', h1.hold === 46001, h1);
+ok('91 仍记进 active（列表里能看到）', h1.active91 === true, h1);
+
+const h2 = await ev(`/* 46001 真正收尾 → 91 交接 */
+  handleSpotter([T.CALL_END, 0, 4601001, 46001]);
+  return {cur:state.current&&state.current.tg, a46001:state.active.has(46001),
+    muted:RXG.muteUntil>Date.now()};`);
+ok('46001 收尾后 91 被交接为 current', h2.cur === 91, h2);
+ok('交接时进入 250ms 静默（在途旧帧丢弃）', h2.muted === true, h2);
+
+const h3 = await ev(`/* 交接静默期内音频必须被丢弃 */
+  const atBefore=RXG.at;
+  handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
+  return {kept:RXG.at===atBefore};`);
+ok('静默期内音频被丢弃（不刷新占用时间）', h3.kept === true, h3);
+
+const h4 = await ev(`/* 静默过后正常播放 */
+  RXG.muteUntil=0;
+  const atBefore=RXG.at;
+  handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
+  return {refreshed:RXG.at>atBefore};`);
+ok('静默期过后音频恢复', h4.refreshed === true, h4);
+
+const h5 = await ev(`/* 91 收尾 → 干净 */
+  handleSpotter([T.CALL_END, 0, 9100001, 91]);
+  return {cur:state.current, a91:state.active.has(91)};`);
+ok('91 收尾后 current 清空', h5.cur === null, h5);
+ok('91 收尾后 active 无残留', h5.a91 === false, h5);
+
+const h6 = await ev(`/* 僵尸修复：被让路的组收到 CALL_END 也要能删掉 */
+  rxReset(); state.current=null; state.active.clear();
+  handleSpotter([T.CALL_START, 0, 4601001, 46001]);
+  handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
+  handleSpotter([T.CALL_START, 0, 9100001, 91]);
+  const zombie=state.active.has(91);
+  handleSpotter([T.CALL_END, 0, 9100001, 91]);
+  return {before:zombie, after:state.active.has(91), cur:state.current&&state.current.tg};`);
+ok('被让路的组也会进 active', h6.before === true, h6);
+ok('它的 CALL_END 能删掉（原来变僵尸）', h6.after === false, h6);
+ok('删掉它不影响正在听的 46001', h6.cur === 46001, h6);
+
+const h7 = await ev(`/* 换组静默：current 从 46001 换到 91 时设 muteUntil */
+  rxReset(); state.current={srcId:4601001,tg:46001,alias:'',start:Date.now()};
+  state.active.clear(); RXG.tg=0; RXG.at=0;
+  handleSpotter([T.CALL_START, 0, 9100001, 91]);
+  return {tg:state.current&&state.current.tg, muted:RXG.muteUntil>Date.now()};`);
+ok('换组时进入交接静默', h7.tg === 91 && h7.muted === true, h7);
 
 console.log(`\n================  ${pass} 通过 / ${fail} 失败  ================`);
 ws.close(); chrome.kill();

@@ -199,6 +199,23 @@ html[data-theme="dark"] .nowbar{background:var(--panel2)}
 .home-top.collapsed .htfold .hti{transform:rotate(180deg)}
 /* 收起后按钮上方的虚线就多余了（上面已经没东西），换成实线更干净 */
 .home-top.collapsed .htfold{margin-top:0;border-top:none}
+/* 折叠后的一行摘要：只在折叠时出现。
+   整块操作区约 160px，这一行 26px —— 省了屏幕，但「有没有人在说话、
+   上一通是谁、发到哪个组」还在。 */
+.htsum{display:none;align-items:center;gap:6px;height:26px;padding:0 2px;
+  font-size:11.5px;color:var(--muted);min-width:0;cursor:pointer;
+  touch-action:manipulation}
+.home-top.collapsed .htsum{display:flex}
+.htsum .hsm-net{flex:none;font-weight:600;color:var(--text);white-space:nowrap}
+.htsum .hsm-dot{flex:none;width:7px;height:7px;border-radius:50%;
+  background:var(--border2);transition:background .15s}
+.htsum.live .hsm-dot{background:var(--ok)}
+.htsum.txing .hsm-dot{background:var(--tx)}
+.htsum .hsm-txt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;color:var(--text)}
+.htsum .hsm-tg{flex:none;padding:1px 6px;border-radius:6px;font-size:11px;
+  font-variant-numeric:tabular-nums;color:var(--text);
+  background:var(--panel2);border:1px solid var(--border)}
 /* 桌面端：话组库那栏一直排到视口底部，右下角的悬浮 PTT 会压住最后几行，
    给列表补一段底部留白，滚到底也看得全；钮本身也收小一点，少挡点东西。 */
 @media(min-width:761px){
@@ -590,6 +607,13 @@ html[data-theme="dark"] .pill.warn b{color:#fbbf24}
 .txlog .er{color:var(--tx)}
 .txbtns{display:flex;gap:8px;flex-wrap:wrap}
 .txhint{font-size:12px;color:var(--muted);text-align:center;line-height:1.6}
+/* 发射条就绪提示里的「回 XXX」：呼号和话组都可点，点一下就把发射目标
+   切到他所在的话组 —— 回话时不用再翻列表找组号 */
+.txhint .hslast{color:var(--accent);cursor:pointer;font-weight:700;
+  border-bottom:1px dashed currentColor}
+.txhint .hsname{color:var(--muted)}
+.txhint .hstg{color:var(--accent);cursor:pointer;font-variant-numeric:tabular-nums;
+  border-bottom:1px dashed currentColor;white-space:nowrap}
 .txnote{font-size:11px;color:var(--dim);line-height:1.7;margin-top:9px;
   padding-top:9px;border-top:1px solid var(--border2)}
 .txnote b{color:var(--text)}
@@ -1007,6 +1031,15 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
         <!-- 电平条压成贴着底边的一条细线，不占纵向空间 -->
         <div class="meter ptxm"><i id="txMeter"></i></div>
       </div>
+    </div>
+    <!-- 折叠后的一行摘要：网络 / 谁在说 / 发射目标，压成一行。
+         折叠只该省屏幕，不该把收听状态一起藏起来 —— 往下滑看记录时
+         还是要能一眼看到有没有人在说话、上一通是谁。 -->
+    <div class="htsum" id="htSum" aria-live="polite">
+      <span class="hsm-net" id="hsNet">🌍 BM</span>
+      <i class="hsm-dot" id="hsDot"></i>
+      <span class="hsm-txt" id="hsTxt">守听中</span>
+      <span class="hsm-tg" id="hsTg">91</span>
     </div>
     <!-- 列表分栏切换条：放进 sticky 的 .home-top 里一起吸顶。
          之前它是独立 sticky、靠算出来的高度偏移，操作区一换行就露出缝隙。 -->
@@ -18987,6 +19020,11 @@ for(let i=0;i<256;i++){
 /* ============================ 音频引擎 ============================ */
 const Audio_ = {
   ctx:null, gain:null, nextTime:0, level:0, ready:false,
+  /* 发射/接收时的临时静音闸。和 state.audioOn 是两件事：
+     audioOn 是「用户想不想听」，muted 是「此刻必须闭嘴」。 */
+  muted:false,
+  /* 播放队列是否断开过。true 时下一帧要淡入 —— 见 push() */
+  broken:true,
   init(){
     if(this.ctx)return true;
     const AC=window.AudioContext||window.webkitAudioContext;
@@ -18994,11 +19032,31 @@ const Audio_ = {
     try{ this.ctx=new AC(); }catch(e){ return false; }
     this.gain=this.ctx.createGain();
     this.gain.gain.value=state.volume*state.gain;
-    this.gain.connect(this.ctx.destination);
+    /* 接收音色链。DMR 是 8 kHz 窄带，μ-law 解出来直接播有两个毛病：
+         ① 低频隆隆（编解码和线路噪声都堆在 100 Hz 以下），手机外放尤其糊；
+         ② 2.5 kHz 往上掉得快，语音发闷、辅音听不清。
+       所以串一个高通 + 一个窄带提升。参数都取得很保守 ——
+       这是对讲，不是音乐，过度「美化」会让声音失真、辨识度反而下降。 */
+    const hp=this.ctx.createBiquadFilter();
+    hp.type='highpass'; hp.frequency.value=180; hp.Q.value=0.7;
+    const pk=this.ctx.createBiquadFilter();
+    pk.type='peaking'; pk.frequency.value=2600; pk.Q.value=0.9; pk.gain.value=2.5;
+    this.gain.connect(hp); hp.connect(pk); pk.connect(this.ctx.destination);
+    this.hp=hp; this.pk=pk;      /* 留引用：测试和以后调音色都要用到 */
     this.ready=true; return true;
   },
   resume(){ if(!this.init())return; if(this.ctx.state==='suspended')this.ctx.resume(); },
-  setVol(v){ if(this.gain)this.gain.gain.value=v*state.gain; },
+  setVol(v){ if(this.gain)this.gain.gain.value=this.muted?0:v*state.gain; },
+  /* ★ 必须走 gain 斜坡，光在 play() 里 return 挡不住已经 start 出去的 buffer ——
+     发射那一刻还能听到上一句的尾巴，听起来就是「自己的声音和自己的声音对冲」。
+     8ms 淡出，够快又不炸音。 */
+  setMute(on){
+    this.muted=!!on;
+    if(!this.gain)return;
+    const v=on?0:state.volume*state.gain;
+    try{ this.gain.gain.setTargetAtTime(v,this.ctx.currentTime,0.008); }
+    catch(e){ this.gain.gain.value=v; }
+  },
   decode(bytes){
     const n=bytes.length, f=new Float32Array(n);
     let sum=0;
@@ -19016,6 +19074,8 @@ const Audio_ = {
      * 只能重启软件」—— 重启能好，是因为重建了 AudioContext。
      * 这里每次 play 都确认一次，挂起就拉起来，成本可以忽略。 */
     if(!this.ready&&!this.init())return;
+    /* 静音期间连 buffer 都不建：省 CPU，也免得恢复时把积压的旧语音一股脑放出来 */
+    if(this.muted){ this.nextTime=0; return; }
     if(this.ctx.state!=='running'){
       try{ this.ctx.resume(); }catch(e){}
     }
@@ -19024,11 +19084,43 @@ const Audio_ = {
     buf.getChannelData(0).set(f);
     const src=c.createBufferSource();
     src.buffer=buf; src.connect(this.gain);
+    /* 队列断了就把起点拉回现在，别让下一帧排到很远的未来。
+       注意这里**不设 broken** —— 淡入已经由 push() 在排队前判过了，
+       在这里再设一次会让「断流后的第二帧」也淡一遍（第一帧排进来时
+       nextTime 还是 0，必然命中这个分支）。 */
     if(this.nextTime<now+0.02||this.nextTime>now+0.8)this.nextTime=now+0.12;
     try{ src.start(this.nextTime); }catch(e){ this.nextTime=now+0.12; src.start(this.nextTime); }
     this.nextTime+=buf.duration;
   },
-  silence(){ this.nextTime=0; this.level=0; }
+  /* 收一帧 PCM：断流淡入 + 软限幅 + 排进播放队列。
+     以前淡入淡出是在两个调用点各抄一遍、而且**每帧无条件做** ——
+     24 个样本落在 160 样本的帧上占 15%，每 20 ms 压一次幅度，
+     等于给语音套了个 50 Hz 的幅度调制，听感就是「发抖」。
+     现在只在真正接不上时（断流恢复、切话组、静音解除）才淡入。 */
+  push(f){
+    if(!f||!f.length)return;
+    const n=f.length;
+    /* 队列已经断了（网络抖了一下 / 上一帧早放完了）→ 这一帧淡入，别留咔哒 */
+    if(this.ctx){
+      const now=this.ctx.currentTime;
+      if(this.nextTime&&(this.nextTime<now+0.02||this.nextTime>now+0.8))this.broken=true;
+    }
+    if(this.broken){
+      const F=Math.min(24,n>>2);
+      for(let i=0;i<F;i++)f[i]*=i/F;
+      this.broken=false;
+    }
+    /* 软限幅：gain 默认 2 倍，μ-law 满刻度信号很容易被削平，
+       硬削波的高次谐波在 8 kHz 带宽里全叠回语音，听起来「炸」。
+       只在 0.92 以上压，正常电平一个样本都不动。 */
+    for(let i=0;i<n;i++){
+      const x=f[i];
+      if(x>0.92)f[i]=0.92+0.08*(1-Math.exp(-(x-0.92)/0.08));
+      else if(x<-0.92)f[i]=-0.92-0.08*(1-Math.exp(-(-x-0.92)/0.08));
+    }
+    this.play(f);
+  },
+  silence(){ this.nextTime=0; this.level=0; this.broken=true; }
 };
 
 /* 收听侧音频上下文看护。
@@ -19172,7 +19264,9 @@ const state = {
   tg:{}, tgReady:false, masters:{}, masterList:[],
   subscribed:[], solo:null,
   scan:{ on:false, list:[], skip:[], hold:null, cur:null, auto:false, autoN:8, picked:[], sig:'' },
-  audioOn:false, volume:0.8, gain:2, theme:'auto',
+  /* 收听默认打开：进来就守听，想安静自己点右上角静音。
+     上一次手动静音过的，这次保持静音 —— 那是用户的选择，不该被覆盖。 */
+  audioOn:true, volume:0.8, gain:2, theme:'auto',
   awakeOn:true, scanResume:true,
   /* 通联（对讲页）的接收参数 —— 独立于「收听」页那套，因为走的是另一条链路 */
   rxOn:true, rxVol:1, rxJit:240,
@@ -19192,6 +19286,13 @@ const state = {
   rw:{ ws:null, open:false, subscribed:[], retry:0, timer:null, ka:null,
        streams:new Map(), tg:null },
   current:null, calls:[], active:new Map(), idCache:new Map(), ham:{},
+  /* 最近一次「对方说完了」的记录 {srcId,tg,call,name,at}。
+     state.current 在对方松手那一刻就被清空，界面上立刻变成「暂无通话」——
+     于是回话的时候根本想不起来刚才是谁。这个字段就是补这个缺口：
+     一句结束时留一份，发射条和折叠摘要都拿它显示「回 XXX」。 */
+  lastRx:null,
+  /* 上一个「有呼叫但被让路」的组，用于限流提示 {tg,at} */
+  holdNotice:null,
   libTab:'common', libQuery:'', liveQuery:'', onlyMine:false,
   mcol:0,                                   // 手机端当前显示的分栏
   stats:{ sessions:[], startedAt:Date.now() },
@@ -19487,6 +19588,77 @@ function audioAllowed(tg){
   }
   return false;
 }
+
+/* ---------- 多话组收听调度 ----------
+   订阅了几个组之后，服务器会把它们的声音都推下来。原来只有 state.current
+   一个坑位：谁来 CALL_START 就覆盖它，还顺手 Audio_.silence() 把播放队列
+   清空 —— 正在听的那一组被硬切断，界面上的呼号也跟着跳。听感就是「被打断」。
+
+   真实电台的扫描器靠两个东西解决这件事：
+     · hang time —— 一句话说完不立刻切走，留一段静默窗口，避免两个组来回跳；
+     · 优先级   —— 你正在通联的那一组优先，别的组让路。
+   这里按「正在说 > 先到先得」实现，窗口 1.8 秒。
+
+   ⚠ 局限：HOSE 的 CALL_AUDIO 帧里**不带话组号**，音频归属只能靠 state.current
+   推断。所以「让路」只能做到「不切换 current、不清队列」，做不到「把插进来的
+   那句话单独丢掉」。真要彻底隔离，得在订阅层面一次只听一组（独听）。 */
+const RXG={
+  tg:0,            // 当前占着坑位的话组
+  at:0,            // 最后一次收到该组音频的时间
+  muteUntil:0,     // 交接静默截止时间，这段时间内丢弃所有音频
+  LOST_MS:15000    // 占用的组这么久没声音 = CALL_END 丢了，兜底释放
+};
+/* 现在是否被别的组占着。返回占用的 tg，0 表示可以接。
+   ★ 严格配对：只有「占用组的 CALL_END 到了」（rxRelease）或「它 15 秒没声音」
+   才让位。原来靠 1.8 秒 hang 过期让位 —— 46001 说话中间换个气就被 91 抢走，
+   而 46001 的音频还在路上，于是出现「声音是 46001、顶部却显示 91」。
+   对讲是一句一交接（松 PTT 就发 CALL_END），不需要靠超时猜。 */
+function rxHold(tg){
+  tg=Number(tg)||0;
+  if(!RXG.tg||RXG.tg===tg)return 0;
+  if(Date.now()-RXG.at>RXG.LOST_MS){ RXG.tg=0; return 0; }
+  return RXG.tg;
+}
+/* 刷新占用时间戳。每来一帧音频刷一次，所以「还在说」的组会一直占着。
+   顺手把 active 里同一条的 at 也刷掉 —— 交接时要靠它判断谁还在说。 */
+function rxTake(tg){
+  tg=Number(tg)||0;
+  RXG.tg=tg; RXG.at=Date.now();
+  const a=state.active.get(tg);
+  if(a)a.at=RXG.at;
+}
+/* 占用组收尾才释放。传 tg 时只认那一组，别的组收尾跟它没关系。 */
+function rxRelease(tg){
+  tg=Number(tg)||0;
+  if(tg&&RXG.tg&&tg!==RXG.tg)return;
+  RXG.tg=0; RXG.at=0;
+}
+/* 收尾交接：当前组说完了，但另一个组的 CALL_START 刚才是被让路的
+   （所以不会再有第二次 START）。把它接回来当 current，
+   否则它的音频会因为 current 为 null 而变成「没名字的声音」。 */
+function rxHandoff(){
+  const now=Date.now();
+  let best=null;
+  for(const a of state.active.values()){
+    if(!a||a.tg===RXG.tg)continue;
+    if(now-(a.at||a.start||0)>6000)continue;   // 6 秒没动静的不算「还在等」
+    if(!best||(a.at||a.start)>(best.at||best.start))best=a;
+  }
+  if(!best)return false;
+  RXG.tg=best.tg; RXG.at=now;
+  RXG.muteUntil=now+250;    // 交接静默：让在途的旧帧先过去，别串进来
+  state.current={ srcId:best.srcId, tg:best.tg, alias:best.alias||'', start:best.start||now };
+  Audio_.silence();
+  return true;
+}
+/* 清掉 active 里的僵尸条目（CALL_END 丢了的组会一直挂着） */
+function activeSweep(){
+  const now=Date.now();
+  for(const [k,a] of state.active){
+    if(now-(a.at||a.start||0)>60000)state.active.delete(k);
+  }
+}
+function rxReset(){ RXG.tg=0; RXG.at=0; RXG.muteUntil=0; }
 /* 订阅同步 —— 两条链路协议完全不同，这里做分派：
      BM(HOSE)  增量：[GROUP_JOIN,[ids]] / [GROUP_LEAVE,[ids]]
      CN(radiowo) 全量：{action:'subscribe',talkgroups:[全部]}  */
@@ -19526,6 +19698,7 @@ function removeTg(id){
 function toggleSolo(id){
   state.solo=state.solo===id?null:id;
   if(state.solo!=null)state.scan.hold=null;
+  rxReset();      /* 换独听目标 = 换收听范围，旧的占用立刻作废 */
   syncSubs(); renderMine(); renderTab(); renderStatus();
 }
 function addScan(id,silent){
@@ -19979,7 +20152,7 @@ function spotterClose(){
   if(sp.ws){ try{ sp.ws.onclose=null; sp.ws.close(); }catch(e){} }
   sp.ws=null; sp.open=false; sp.subscribed=[];
   if(state.recActive)Rec.finish();
-  state.current=null; state.active.clear();
+  state.current=null; state.active.clear(); rxReset();
   setDot($('#dotAudio'),''); renderNow(); renderMine(); renderTab();
 }
 function spotterSend(arr){
@@ -20063,7 +20236,7 @@ function rwClose(){
   if(rw.ws){ try{ rw.ws.onclose=null; rw.ws.close(); }catch(e){} }
   rw.ws=null; rw.open=false; rw.subscribed=[]; rw.streams.clear(); rw.tg=null;
   if(state.recActive)Rec.finish();
-  state.current=null; state.active.clear();
+  state.current=null; state.active.clear(); rxReset();
   setDot($('#dotAudio'),''); renderNow(); renderMine(); renderTab();
 }
 /* 国内是「全量替换」语义，所以每次直接发完整列表，不做增量 */
@@ -20125,22 +20298,49 @@ function handleRwAudio(b){
   /* 订阅之外的流不播（服务端偶尔会把同一台热点的其它话组也推过来） */
   const tg=st?st.tg:(state.current?state.current.tg:null);
   if(tg==null||!audioAllowed(tg))return;
+  if(Date.now()<RXG.muteUntil)return;   // 交接静默期
+  /* 国内是多流，每帧自带话组号，这里能真正区分归属：
+     别的组正在说就整帧丢掉，不会串进来（HOSE 那边做不到这一点）。 */
+  if(rxHold(tg))return;
+  rxTake(tg);
   const f=Audio_.decode(b.subarray(4));
-  /* 每帧首尾各做 24 个样本的淡入淡出，消除包边界上的「咔哒」声 */
-  const F=Math.min(24,f.length>>2);
-  for(let i=0;i<F;i++){ const k=i/F; f[i]*=k; f[f.length-1-i]*=k; }
-  Audio_.play(f);
+  Audio_.push(f);
   if(state.recActive)Rec.push(f);
 }
 function handleSpotter(m){
   const type=m[0];
   if(type===T.CALL_START){
     const srcId=m[2], tg=m[3];
+    /* 别的组还在说 → 这一句让路。不切 current、不 silence，
+       正在听的声音和界面上的呼号都不动。但 active 照样记下来，
+       「实时活动」里能看到它在呼叫，想切过去点一下就行。 */
+    const held=rxHold(tg);
+    if(held){
+      state.active.set(tg,{ tg, srcId, alias:'', start:Date.now(), at:Date.now() });
+      /* 让路不等于静默：同一组 20 秒内只提示一次，别把界面刷爆。
+         不提示的话用户会以为「91 根本没收到」，其实是听到了但没播。 */
+      const n=state.holdNotice;
+      if(!n||n.tg!==tg||Date.now()-n.at>20000){
+        state.holdNotice={ tg, at:Date.now() };
+        toast('话组 '+tg+' 有呼叫 · 正在听 '+held+'（点它可切过去）');
+      }
+      activeSweep();
+      renderMine(); renderTab(); renderLive(true);
+      return;
+    }
     const prev=state.current;
-    if(prev&&prev.tg!==tg)logCall(prev);
+    if(prev&&prev.tg!==tg){
+      logCall(prev);
+      /* 换组：静默 200ms，让在途的旧帧先过去。
+         不这么做的话，新组的第一帧会和上一组的尾巴叠在一起，
+         听感就是「切过去了但声音还是刚才那个」。 */
+      RXG.muteUntil=Date.now()+200;
+    }
     state.current={ srcId, tg, alias:'', start:Date.now() };
-    state.active.set(tg,{ tg, srcId, alias:'', start:Date.now() });
+    state.active.set(tg,{ tg, srcId, alias:'', start:Date.now(), at:Date.now() });
+    activeSweep();
     state.scan.cur=tg;
+    rxTake(tg);
     Audio_.silence();
     Rec.begin(state.current);
     const cs=resolveAlias(state.current).call;
@@ -20157,17 +20357,37 @@ function handleSpotter(m){
   } else if(type===T.CALL_AUDIO){
     const c=state.current;
     if(!state.audioOn)return;
+    if(Date.now()<RXG.muteUntil)return;   // 交接静默期：丢弃在途的旧帧
     if(c&&!audioAllowed(c.tg))return;
+    /* 别的组正占着坑位 → 这一帧丢掉，别和它在听的那句叠在一起 */
+    if(c&&rxHold(c.tg))return;
+    if(c)rxTake(c.tg);
     const f=Audio_.decode(m[1]);
-    const F=Math.min(24,f.length>>2);
-    for(let i=0;i<F;i++){ const k=i/F; f[i]*=k; f[f.length-1-i]*=k; }
-    Audio_.play(f);
+    Audio_.push(f);
     if(state.recActive)Rec.push(f);
   } else if(type===T.CALL_END){
-    if(state.current)logCall(state.current);
-    if(state.current)state.active.delete(state.current.tg);
-    if(state.recActive)Rec.finish();
-    state.current=null; Audio_.silence(); renderNow(); renderMine(); renderTab(); renderLive(true);
+    /* CALL_END 与 CALL_START 同构：[13, 0, srcId, tg]。
+       以前只按 state.current 收尾 —— 被让路的组永远删不掉，会在 active 里
+       变僵尸；而 rxRelease() 又靠 active 判断「还有谁在等」，于是每次收尾
+       都误判，把坑位白白让出去，下一个组随便就能接管。 */
+    const endTg=Number(m[3])||0;
+    const cur=state.current;
+    const tg=endTg||(cur?cur.tg:0);      // 老格式没带 tg 时退回 current
+    if(cur&&cur.tg===tg){
+      if(state.recActive)Rec.finish();
+      logCall(cur);
+    }
+    if(tg)state.active.delete(tg);
+    if(cur&&(!tg||cur.tg===tg)){
+      state.current=null;
+      Audio_.silence();
+      rxRelease(tg);
+      /* 另一个组刚才被让路，它不会再有第二次 CALL_START ——
+         这里把坑位和界面一起交给它，别让它变成「没名字的声音」。 */
+      rxHandoff();
+    }
+    activeSweep();
+    renderNow(); renderMine(); renderTab(); renderLive(true);
   } else if(type===T.SYSTEM_RESCUE){
     toast('服务器要求重连，正在恢复…'); spotterClose(); setTimeout(ensureSpotter,800);
   }
@@ -20181,7 +20401,11 @@ function logCall(c){
   state.calls.unshift({ tg:c.tg, srcId:c.srcId, call:a.call, name:a.name, t:Date.now(), dur:Math.round((Date.now()-c.start)/1000) });
   if(state.calls.length>120)state.calls.length=120;
   store.set('calls',state.calls);
-  renderLog();
+  /* 留一份「刚才是谁说的」：对方一松手 state.current 就被清空，
+     界面上立刻变成「暂无通话」，回话时根本想不起跟谁通联。
+     不持久化 —— 跨会话的「上一通」没有意义，反而误导。 */
+  state.lastRx={ srcId:c.srcId, tg:c.tg, call:a.call, name:a.name, at:Date.now() };
+  renderLog(); renderHtSum(); txSync();
 }
 function resolveAlias(c){
   if(c.alias){
@@ -20385,7 +20609,22 @@ function renderRecBtn(){
 }
 function renderNow(){
   const c=state.current, bar=$('#nowbar');
-  if(!c){ $('#npIdle').style.display=''; $('#npMain').style.display='none'; bar.classList.remove('live'); renderRecBtn(); return; }
+  if(!c){
+    /* 没有实时通话时，别只留一句「暂无通话」——把上一通写出来，
+       回话的时候才想得起来刚才跟谁通联、在哪个话组。10 分钟内有效。 */
+    const idle=$('#npIdle'), lr=state.lastRx;
+    if(idle){
+      if(lr&&(Date.now()-lr.at<10*60*1000)){
+        idle.innerHTML='<span style="font-size:15px">🎧</span>上一通 <b>'+esc(lr.call)+'</b>'
+          +(lr.name?' · '+esc(lr.name):'')+' · 话组 '+lr.tg+' · '+agoText(lr.at)+'前';
+      }else{
+        idle.innerHTML='<span style="font-size:15px">🎧</span>暂无通话 · 从「实时活动」或「话组库」添加话组开始收听';
+      }
+    }
+    $('#npIdle').style.display='';
+    $('#npMain').style.display='none'; bar.classList.remove('live');
+    renderRecBtn(); renderHtSum(); return;
+  }
   $('#npIdle').style.display='none'; $('#npMain').style.display='';
   bar.classList.add('live');
   const a=resolveAlias(c);
@@ -20397,7 +20636,7 @@ function renderNow(){
   $('#npTg').textContent=c.tg;
   const tn=tgName(c.tg);
   $('#npTgName').innerHTML=tn?((tgCountry(c.tg)?flagHtml(c.tg)+' ':'')+esc(tn)):'';
-  renderRecBtn();
+  renderRecBtn(); renderHtSum();
 }
 let vuBars=null;
 function initVu(){
@@ -20416,6 +20655,36 @@ function renderVu(){
 function renderNowTimer(){
   if(!state.current)return;
   $('#npTime').textContent=((Date.now()-state.current.start)/1000).toFixed(1)+'s';
+}
+/* 「3 分钟前」这种相对时间。只用来标「上一通」有多旧，不值得引日期库 */
+function agoText(t){
+  const s=Math.max(0,Math.round((Date.now()-t)/1000));
+  if(s<60)return s+' 秒';
+  if(s<3600)return Math.round(s/60)+' 分钟';
+  return Math.round(s/3600)+' 小时';
+}
+/* 折叠后的一行摘要。
+   折叠的本意是「省屏幕」，不是「把收听状态藏起来」—— 往下滑看记录时
+   仍然要一眼看到：现在哪张网、有没有人在说话、上一通是谁、发到哪个组。
+   所以收掉 .home-op 之后用这一行顶上，而不是留一片空白让人往上滚。 */
+function renderHtSum(){
+  const box=document.getElementById('htSum');
+  if(!box)return;
+  const net=document.getElementById('hsNet');
+  const txt=document.getElementById('hsTxt');
+  const tg =document.getElementById('hsTg');
+  if(net)net.textContent=state.net==='cn'?'🇨🇳 国内':'🌍 BM';
+  const cur=state.current, lr=state.lastRx;
+  let live=false, txing=false, s='守听中';
+  if(TX.txing){ txing=true; s='发射中'; }
+  else if(Q.rxing&&cur){ live=true; s=resolveAlias(cur).call+' 正在说'; }
+  else if(!state.audioOn){ s='已静音'; }
+  else if(lr&&(Date.now()-lr.at<10*60*1000)){ s='上一通 '+lr.call; }
+  if(txt)txt.textContent=s;
+  const t=qCurTg();
+  if(tg)tg.textContent=t>0?String(t):'—';
+  box.classList.toggle('live',live);
+  box.classList.toggle('txing',txing);
 }
 
 /* ============================ 渲染：我的收听 ============================ */
@@ -20469,7 +20738,7 @@ function setNet(n, silent){
   state.subscribed=subs.slice();
 
   /* 4) 当前通话 / 独听 / 扫描游标都要清 —— 它们指向的是旧网络的话组 */
-  state.current=null; state.active.clear(); state.solo=null;
+  state.current=null; state.active.clear(); rxReset(); state.solo=null;
   state.scan.cur=null; state.scan.hold=null;
   Audio_.silence();
 
@@ -20512,6 +20781,7 @@ function renderNetInfo(){
       +'发射走 <主站ID>.master.brandmeister.network:62031。';
   const seg=$('#segNet');
   if(seg)[...seg.children].forEach(b=>b.classList.toggle('on',b.dataset.net===state.net));
+  renderHtSum();      /* 折叠摘要里的网络名跟着换 */
 }
 function renderAll(){
   renderNetInfo(); renderMine(); renderTab(); renderLib(); renderLive(true); renderStatus();
@@ -20977,11 +21247,14 @@ function renderPlayBtn(){
 }
 function setPlay(on){
   state.audioOn=on;
+  /* 记住用户的选择：默认是开的，但用户手动点了静音，下次进来就该是静音。
+     不加这一句的话，每次冷启动都会把静音的用户重新打开，等于没记住。 */
+  store.set('audioOn',!!on);
   if(on){ Audio_.resume(); ensureSpotter(); }
   else { Audio_.silence(); }
   renderPlayBtn();
   syncAwake();
-  renderMine(); renderStatus();
+  renderMine(); renderStatus(); renderHtSum();
 }
 /* 三个视图：收听 / 看板 / 设置。
  * 「对讲」那整页已经拆掉 —— 发射条现在直接长在收听页顶部，
@@ -21080,6 +21353,9 @@ function txSetTarget(id){
   if(!(n>0))return;
   qSetTg(n);
   txMarkTarget();
+  /* 用户主动点了某个话组 = 想听/想回它。把收听占用让出去，
+     否则那个组的声音还要被别的组压 1.8 秒，点了没反应。 */
+  rxReset();
   const nm=tgName(n);
   toast('发射目标 → '+n+(nm?' '+nm:''));
 }
@@ -21132,18 +21408,31 @@ function qRender(){
     const tg=qCurTg();
     pn.textContent=tg>0?String(tg):'—';
   }
+  renderHtSum();      /* 折叠状态下那一行摘要跟着收发状态走 */
 }
 /* 半双工闸门：发射或接收（走 MMDVM）时都要掐掉 HOSE。
    不掐的话同一句话会从 MMDVM 与 Hoseline 各听一遍（差一两秒，像回声），
-   发射时更会听到自己绕网络回来的声音。 */
-function hdGate(){
-  const busy=TX.txing||Q.rxing;
-  if(busy){
-    if(state.audioOn){ Q.hd=true; setPlay(false); }
-  }else if(Q.hd){
-    Q.hd=false;
-    if(!state.audioOn)setPlay(true);
+   发射时更会听到自己绕网络回来的声音。
+
+   ★ 这里原来写的是 setPlay(false) / setPlay(true)，也就是「临时静音」直接
+   去改 state.audioOn —— 那是**用户意图**。后果有两个，都真实发生过：
+     1) 收到一句话的瞬间按钮自己变成「🔊 听」，用户以为点错了；
+     2) 恢复时靠 if(!state.audioOn) 反推，用户一旦自己点了静音，
+        下一次收发结束就会把它强行打开。
+   现在静音只动 Audio_.muted（临时状态），audioOn 只由用户点击改变。 */
+function txMuteAll(on){
+  on=!!on;
+  if(Audio_.muted===on)return;      /* 幂等：rx/tx 事件很密，别每次都动 gain */
+  Audio_.setMute(on);
+  if(on){
+    Audio_.silence();
+    /* 录音回放一起停：一边放录音一边发射，等于自己和自己对冲 */
+    if(state.recAudio)stopRecPlay();
   }
+  renderHtSum();
+}
+function hdGate(){
+  txMuteAll(TX.txing||Q.rxing);
 }
 /* 接收参数下发到原生侧。原生那边很轻，改一次调一次即可 */
 function rxApply(){
@@ -21823,7 +22112,20 @@ function txSync(){
     if(!TX.voc)h.textContent='声码器未就绪 —— 去「设置 → 📡 通联（MMDVM）」点「重新加载」';
     else if(busy)h.textContent=TX.stateDetail||'正在登录主站 —— 若被暂时拒绝会自动等待重试，请勿重复点击';
     else if(!TX.conn)h.textContent='未连接主站 —— 点「连接」，或在「设置 → 主站与身份」里填参数';
-    else h.textContent='就绪。按住右下角 PTT 说话，松开结束';
+    else{
+      /* 就绪状态下把这行让给「刚才谁在说」—— 这是回话时最需要的信息。
+         对方说完，state.current 立刻清空，这里再不留一份就真的记不住了。
+         呼号可点：点一下把发射目标切到他所在的话组，省得手打。 */
+      const lr=state.lastRx, fresh=lr&&(Date.now()-lr.at<10*60*1000);
+      if(fresh){
+        h.innerHTML='就绪 · 回 <b class="hslast" data-tg="'+lr.tg+'" title="点一下把发射目标切到话组 '
+          +lr.tg+'">'+esc(lr.call)+'</b>'
+          +(lr.name?' <span class="hsname">'+esc(lr.name)+'</span>':'')
+          +' <span class="hstg" data-tg="'+lr.tg+'">话组 '+lr.tg+'</span> · 按住 PTT 说话';
+      }else{
+        h.textContent='就绪。按住右下角 PTT 说话，松开结束';
+      }
+    }
   }
   const c=txEl('txBtnConn');
   if(c){
@@ -22523,7 +22825,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.10.29';
+const PAGE_VER='2026.11.01';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
@@ -22822,6 +23124,7 @@ function htFoldSet(on,persist){
   const t=document.getElementById('htFoldTxt');
   if(t)t.textContent=on?'展开操作区':'收起操作区';
   if(persist){ state.htCollapsed=on; store.set('htCollapsed',on); }
+  renderHtSum();     /* 收起后那一行摘要要立刻顶上，不能等下一次收发才出现 */
   syncHomeTopH();
 }
 function htFoldToggle(){
@@ -22829,6 +23132,26 @@ function htFoldToggle(){
   htFoldSet(!state.htCollapsed,true);
 }
 $('#htFold').addEventListener('click',htFoldToggle);
+/* 折叠状态下那一行摘要也能点开 —— 看到「有人在说」想调参数时，
+   手指自然落在最近的东西上，不必再去够下面那颗按钮。 */
+(function(){
+  const s=document.getElementById('htSum');
+  if(s)s.addEventListener('click',()=>{ if(state.htCollapsed)htFoldToggle(); });
+})();
+/* 发射条那行「就绪 · 回 BG6XXX · 话组 91」：点呼号或组号就把发射目标切过去。
+   用事件委托 —— txSync 会不停重写这行的 innerHTML，直接绑在子元素上会丢。 */
+(function(){
+  const h=document.getElementById('txHint');
+  if(!h)return;
+  h.addEventListener('click',e=>{
+    const t=e.target.closest('[data-tg]');
+    if(!t)return;
+    const n=Number(t.dataset.tg)||0;
+    if(n<=0)return;
+    txSetTarget(n);
+    toast('发射目标已切到话组 '+n);
+  });
+})();
 window.addEventListener('scroll',()=>{
   const y=window.scrollY||window.pageYOffset||0;
   if(y>48)htLeftTop=true;
@@ -23038,9 +23361,14 @@ function boot(){
   applyTheme(); setView(state.view); mobCol(state.mcol);
   /* 折叠状态要在量 --htop-h 之前落地，否则拿到的还是展开时的高度 */
   htFoldSet(state.htCollapsed,false);
-  syncTopbarH(); renderPlayBtn();
+  syncTopbarH();
   renderNetInfo();
   renderMine(); renderTab(); renderNow(); renderStatus();
+  /* 收听默认打开：进来就开始守听，想安静自己点右上角静音。
+     放在这里而不是最前面 —— setPlay 会顺手去连 HOSE，必须等网络选择
+     和订阅列表都恢复完，否则连的是另一套服务器、订阅了个空表。
+     上一次手动静音过的保持静音：那是用户的选择。 */
+  setPlay(store.get('audioOn',true)!==false);
   /* 发射条现在长在收听页里，进页面就要把它初始化好 ——
    * 身份回填 / 主站面板绑定 / 声码器加载全在 txEnter 里，它自己是幂等的。 */
   txEnter();

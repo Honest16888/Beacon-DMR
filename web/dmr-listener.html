@@ -19602,22 +19602,63 @@ function audioAllowed(tg){
    ⚠ 局限：HOSE 的 CALL_AUDIO 帧里**不带话组号**，音频归属只能靠 state.current
    推断。所以「让路」只能做到「不切换 current、不清队列」，做不到「把插进来的
    那句话单独丢掉」。真要彻底隔离，得在订阅层面一次只听一组（独听）。 */
-const RXG={ tg:0, at:0, hangMs:1800 };
-/* 现在是否被别的组占着。返回占用的 tg，0 表示可以接。 */
+const RXG={
+  tg:0,            // 当前占着坑位的话组
+  at:0,            // 最后一次收到该组音频的时间
+  muteUntil:0,     // 交接静默截止时间，这段时间内丢弃所有音频
+  LOST_MS:15000    // 占用的组这么久没声音 = CALL_END 丢了，兜底释放
+};
+/* 现在是否被别的组占着。返回占用的 tg，0 表示可以接。
+   ★ 严格配对：只有「占用组的 CALL_END 到了」（rxRelease）或「它 15 秒没声音」
+   才让位。原来靠 1.8 秒 hang 过期让位 —— 46001 说话中间换个气就被 91 抢走，
+   而 46001 的音频还在路上，于是出现「声音是 46001、顶部却显示 91」。
+   对讲是一句一交接（松 PTT 就发 CALL_END），不需要靠超时猜。 */
 function rxHold(tg){
   tg=Number(tg)||0;
   if(!RXG.tg||RXG.tg===tg)return 0;
-  return (Date.now()-RXG.at)<RXG.hangMs?RXG.tg:0;
+  if(Date.now()-RXG.at>RXG.LOST_MS){ RXG.tg=0; return 0; }
+  return RXG.tg;
 }
-/* 刷新占用时间戳。每来一帧音频刷一次，所以「还在说」的组会一直占着。 */
-function rxTake(tg){ RXG.tg=Number(tg)||0; RXG.at=Date.now(); }
-/* 当前组说完了：如果还有别的组在活动，把坑位让出去，
-   否则留着锁让 hang 窗口自然过期（避免两个组来回抢）。 */
-function rxRelease(){
-  const others=[...state.active.keys()].filter(t=>t!==RXG.tg);
-  if(others.length){ RXG.tg=0; RXG.at=0; }
+/* 刷新占用时间戳。每来一帧音频刷一次，所以「还在说」的组会一直占着。
+   顺手把 active 里同一条的 at 也刷掉 —— 交接时要靠它判断谁还在说。 */
+function rxTake(tg){
+  tg=Number(tg)||0;
+  RXG.tg=tg; RXG.at=Date.now();
+  const a=state.active.get(tg);
+  if(a)a.at=RXG.at;
 }
-function rxReset(){ RXG.tg=0; RXG.at=0; }
+/* 占用组收尾才释放。传 tg 时只认那一组，别的组收尾跟它没关系。 */
+function rxRelease(tg){
+  tg=Number(tg)||0;
+  if(tg&&RXG.tg&&tg!==RXG.tg)return;
+  RXG.tg=0; RXG.at=0;
+}
+/* 收尾交接：当前组说完了，但另一个组的 CALL_START 刚才是被让路的
+   （所以不会再有第二次 START）。把它接回来当 current，
+   否则它的音频会因为 current 为 null 而变成「没名字的声音」。 */
+function rxHandoff(){
+  const now=Date.now();
+  let best=null;
+  for(const a of state.active.values()){
+    if(!a||a.tg===RXG.tg)continue;
+    if(now-(a.at||a.start||0)>6000)continue;   // 6 秒没动静的不算「还在等」
+    if(!best||(a.at||a.start)>(best.at||best.start))best=a;
+  }
+  if(!best)return false;
+  RXG.tg=best.tg; RXG.at=now;
+  RXG.muteUntil=now+250;    // 交接静默：让在途的旧帧先过去，别串进来
+  state.current={ srcId:best.srcId, tg:best.tg, alias:best.alias||'', start:best.start||now };
+  Audio_.silence();
+  return true;
+}
+/* 清掉 active 里的僵尸条目（CALL_END 丢了的组会一直挂着） */
+function activeSweep(){
+  const now=Date.now();
+  for(const [k,a] of state.active){
+    if(now-(a.at||a.start||0)>60000)state.active.delete(k);
+  }
+}
+function rxReset(){ RXG.tg=0; RXG.at=0; RXG.muteUntil=0; }
 /* 订阅同步 —— 两条链路协议完全不同，这里做分派：
      BM(HOSE)  增量：[GROUP_JOIN,[ids]] / [GROUP_LEAVE,[ids]]
      CN(radiowo) 全量：{action:'subscribe',talkgroups:[全部]}  */
@@ -20257,6 +20298,7 @@ function handleRwAudio(b){
   /* 订阅之外的流不播（服务端偶尔会把同一台热点的其它话组也推过来） */
   const tg=st?st.tg:(state.current?state.current.tg:null);
   if(tg==null||!audioAllowed(tg))return;
+  if(Date.now()<RXG.muteUntil)return;   // 交接静默期
   /* 国内是多流，每帧自带话组号，这里能真正区分归属：
      别的组正在说就整帧丢掉，不会串进来（HOSE 那边做不到这一点）。 */
   if(rxHold(tg))return;
@@ -20274,7 +20316,7 @@ function handleSpotter(m){
        「实时活动」里能看到它在呼叫，想切过去点一下就行。 */
     const held=rxHold(tg);
     if(held){
-      state.active.set(tg,{ tg, srcId, alias:'', start:Date.now() });
+      state.active.set(tg,{ tg, srcId, alias:'', start:Date.now(), at:Date.now() });
       /* 让路不等于静默：同一组 20 秒内只提示一次，别把界面刷爆。
          不提示的话用户会以为「91 根本没收到」，其实是听到了但没播。 */
       const n=state.holdNotice;
@@ -20282,13 +20324,21 @@ function handleSpotter(m){
         state.holdNotice={ tg, at:Date.now() };
         toast('话组 '+tg+' 有呼叫 · 正在听 '+held+'（点它可切过去）');
       }
+      activeSweep();
       renderMine(); renderTab(); renderLive(true);
       return;
     }
     const prev=state.current;
-    if(prev&&prev.tg!==tg)logCall(prev);
+    if(prev&&prev.tg!==tg){
+      logCall(prev);
+      /* 换组：静默 200ms，让在途的旧帧先过去。
+         不这么做的话，新组的第一帧会和上一组的尾巴叠在一起，
+         听感就是「切过去了但声音还是刚才那个」。 */
+      RXG.muteUntil=Date.now()+200;
+    }
     state.current={ srcId, tg, alias:'', start:Date.now() };
-    state.active.set(tg,{ tg, srcId, alias:'', start:Date.now() });
+    state.active.set(tg,{ tg, srcId, alias:'', start:Date.now(), at:Date.now() });
+    activeSweep();
     state.scan.cur=tg;
     rxTake(tg);
     Audio_.silence();
@@ -20307,6 +20357,7 @@ function handleSpotter(m){
   } else if(type===T.CALL_AUDIO){
     const c=state.current;
     if(!state.audioOn)return;
+    if(Date.now()<RXG.muteUntil)return;   // 交接静默期：丢弃在途的旧帧
     if(c&&!audioAllowed(c.tg))return;
     /* 别的组正占着坑位 → 这一帧丢掉，别和它在听的那句叠在一起 */
     if(c&&rxHold(c.tg))return;
@@ -20315,11 +20366,27 @@ function handleSpotter(m){
     Audio_.push(f);
     if(state.recActive)Rec.push(f);
   } else if(type===T.CALL_END){
-    if(state.current)logCall(state.current);
-    if(state.current)state.active.delete(state.current.tg);
-    if(state.recActive)Rec.finish();
-    state.current=null; Audio_.silence();
-    rxRelease();      /* 还有别的组在等就立刻让位，不然它得白等 1.8 秒 */
+    /* CALL_END 与 CALL_START 同构：[13, 0, srcId, tg]。
+       以前只按 state.current 收尾 —— 被让路的组永远删不掉，会在 active 里
+       变僵尸；而 rxRelease() 又靠 active 判断「还有谁在等」，于是每次收尾
+       都误判，把坑位白白让出去，下一个组随便就能接管。 */
+    const endTg=Number(m[3])||0;
+    const cur=state.current;
+    const tg=endTg||(cur?cur.tg:0);      // 老格式没带 tg 时退回 current
+    if(cur&&cur.tg===tg){
+      if(state.recActive)Rec.finish();
+      logCall(cur);
+    }
+    if(tg)state.active.delete(tg);
+    if(cur&&(!tg||cur.tg===tg)){
+      state.current=null;
+      Audio_.silence();
+      rxRelease(tg);
+      /* 另一个组刚才被让路，它不会再有第二次 CALL_START ——
+         这里把坑位和界面一起交给它，别让它变成「没名字的声音」。 */
+      rxHandoff();
+    }
+    activeSweep();
     renderNow(); renderMine(); renderTab(); renderLive(true);
   } else if(type===T.SYSTEM_RESCUE){
     toast('服务器要求重连，正在恢复…'); spotterClose(); setTimeout(ensureSpotter,800);
@@ -22758,7 +22825,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.10.31';
+const PAGE_VER='2026.11.01';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
