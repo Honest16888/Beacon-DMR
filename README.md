@@ -199,6 +199,9 @@ beacon-dmr/
 │   └── verify_apk.py            核对 APK 里的 dex 和 assets
 ├── tests/
 │   ├── smoke_cn.js              CDP 冒烟测试（166 项断言）
+│   ├── smoke_ui.js              CDP 交互测试（63 项断言：收听 / 折叠 / 多话组）
+│   ├── tx_chain_sim.py          发射前端链路仿真（新旧链对比 + 电平扫描）
+│   ├── tx_filter_resp.py        发射滤波器频响计算
 │   └── check_html.py            单文件 HTML 的静态检查
 └── docs/
     ├── 实现说明.md              完整开发日志，3400 行，按问题逐条记录
@@ -247,14 +250,28 @@ node tests/smoke_cn.js
 # 找不到 Chrome 就指定路径
 CHROME_PATH="/usr/bin/google-chrome" node tests/smoke_cn.js
 
+# 交互测试：63 项断言（收听默认打开 / 静音闸 / 折叠摘要条 / 多话组严格配对）
+CHROME_PATH="/usr/bin/google-chrome" node tests/smoke_ui.js
+
 # 单文件 HTML 的静态检查：script 块数量 + node --check 语法
 python tests/check_html.py
+
+# 发射前端链路仿真：新旧链对比 + 不同 MIC 电平扫描（纯 Python，无需依赖）
+python tests/tx_chain_sim.py
+
+# 发射滤波器频响（高通 / presence / 抗混叠过渡带）
+python tests/tx_filter_resp.py
 ```
 
 冒烟测试会覆盖 320 / 360 / 390 / 414 / 480 / 768 / 1024 / 1280 八个宽度检查横向溢出，
 并验证 PTT 拖动、操作区折叠、网络切换等交互。截图落在 `tests/shot/`（已 gitignore）。
 
-真实收发需要真机 + 有效的 DMR ID，测试里测不到。
+`tx_chain_sim.py` 是改发射 DSP 时的第一道检查 —— 它能量化「低频是不是被压下去了」
+「会不会削波」「AGC 会不会抽气」，比上机通联快得多。数值是固定随机种子的，
+可以直接对比改动前后。
+
+真实收发需要真机 + 有效的 DMR ID，测试里测不到。**音质的最终判断只能靠耳朵**，
+仿真只能保证不出现削波、抽气这类硬伤。
 
 ## 已知限制
 
