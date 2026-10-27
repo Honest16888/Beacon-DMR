@@ -287,6 +287,20 @@ public final class DmrTransmitter {
 
     /* ================================================================ */
 
+    /** 一次发射的健康度统计。
+     *
+     *  单独成类是因为要在循环里每 2 秒报一次、循环退出后再报一次总结 ——
+     *  局部变量没法被抽成方法复用，复制粘贴两份迟早会漂移。 */
+    private static final class TxStat {
+        long startedNano;
+        long readSumMs; int readMaxMs; int readCalls; int shortReads;
+        long procSumMs; int procMaxMs; int procFrames;
+        long audioFrames;              // 已消费的 20 ms 帧
+        long pktCount, pktEarly, pktLate;
+        int gapMaxMs; long lastPktNano;
+        int encodeFail;
+    }
+
     private void txLoop(MmdvmSession session, int rate, boolean resample) {
         /* 发射是硬实时的：每 20 ms 必须交出一帧。默认优先级会被 UI 线程、
          * 接收解码、GC 抢走 CPU，一旦某几帧迟到，音频时钟就对不上 ——
@@ -308,25 +322,42 @@ public final class DmrTransmitter {
 
         byte[] pkt = new byte[DmrTx.PACKET_BYTES];
 
-        /* 连续编码失败计数，用来只在第一次失败时写一条日志，不刷屏 */
-        int encodeFail = 0;
-
         float[] fir = resample ? designLowPass(FIR_TAPS, 3200.0 / rate) : null;
         float[] hist = resample ? new float[FIR_TAPS] : null;
 
-        long startedAt = System.currentTimeMillis();
-
-        /* ---- 发射健康度 ----
-         * 「话音断续」最常见的原因不是 DSP 算法，而是**线程跟不上音频时钟**：
-         * 每 20 ms 必须交出一帧，一旦某一帧的处理超过 20 ms，积压就开始了，
-         * AudioRecord 的缓冲被填满后直接覆盖未读采样 —— 丢的是麦克风侧音频，
-         * 网络上却一个包都不丢，极难从外部判断。
+        /* ---- 发包节拍：一个 DMRD 包 = 3 个 AMBE 帧 = 60 ms 音频 ----
          *
-         * 这里量的是**读完之后**的纯处理耗时（DSP + 声码器编码），不含阻塞读，
-         * 每 5 秒报一次。峰值一旦逼近 20 ms 就是 CPU 瓶颈，跟算法无关。 */
-        long procMaxMs = 0, procSumMs = 0;
-        int procFrames = 0;
+         * ★ 这一版最重要的改动。
+         *
+         * 原来的节奏完全由 `recorder.read()` 驱动：攒满 3 帧就发。这等于假设
+         * 「read 一定每 20 ms 返回一帧」。但 AudioRecord 的 HAL 常常**成块交付**：
+         * 缓冲里攒够几帧就一次性给出来，于是 read 连续三次立即返回，
+         * 三个包在 1~2 ms 内全发出去，然后静默 59 ms。
+         *
+         * 空口上这就是「突发 + 静默」—— 对方听到的就是**断续**，
+         * 而网络统计里一个包都没丢，从外部根本看不出来。
+         *
+         * 用绝对时间轴强制每 60 ms 一个包：早到就等，晚到立刻发并重新对齐。
+         * 这是 MMDVMHost 的做法（它用定时器驱动），不是新发明。 */
+        final long PKT_PERIOD_NS = 60_000_000L;
+        long nextPktAt = 0;
+
+        final TxStat st = new TxStat();
+        st.startedNano = System.nanoTime();
+        long startedAt = System.currentTimeMillis();
         long lastReport = startedAt;
+
+        /* 半帧累加器。★ 原来每次循环 got 从 0 重来，read 返回 0 或部分数据时
+         * 已经读到的那几个采样被直接扔掉 —— 时间轴就少了那几毫秒。 */
+        int rawFill = 0;
+        /* 连续「read 返回 0」的计数。★ 必须放在外层循环之外 ——
+         * 放在里面每次外层迭代都会清零，那个「连续 200 次就报错」的保护
+         * 等于永远不成立。 */
+        int zeroSpins = 0;
+
+        /* stop() 会把字段 recorder 置空，而本线程可能正卡在 read() 里。
+         * 抓一份局部引用，避免下一次 read 撞上 null。 */
+        final AudioRecord rec = recorder;
 
         while (transmitting) {
             // 主站掉线就立刻停，避免对着空气喊
@@ -339,20 +370,39 @@ public final class DmrTransmitter {
                 break;
             }
 
-            int got = 0;
-            while (got < readPerFrame && transmitting) {
-                int n = recorder.read(raw, got, readPerFrame - got);
-                if (n <= 0) {
-                    if (n == AudioRecord.ERROR_INVALID_OPERATION || n == AudioRecord.ERROR_BAD_VALUE) {
-                        if (listener != null) listener.onTxStop("录音读取错误 " + n);
-                        transmitting = false;
-                    }
+            while (rawFill < readPerFrame && transmitting) {
+                long rT0 = System.nanoTime();
+                int n = rec.read(raw, rawFill, readPerFrame - rawFill);
+                int rMs = (int) ((System.nanoTime() - rT0) / 1_000_000L);
+                st.readSumMs += rMs;
+                st.readCalls++;
+                if (rMs > st.readMaxMs) st.readMaxMs = rMs;
+
+                if (n < 0) {
+                    /* 任何负值都是致命错误（ERROR_INVALID_OPERATION / BAD_VALUE /
+                     * DEAD_OBJECT）。原来只对前两个停，DEAD_OBJECT 会掉进
+                     * `if (rawFill < readPerFrame) continue;` 变成死循环 ——
+                     * 发射线程空转，一个包都不发。 */
+                    if (listener != null) listener.onTxStop("录音读取错误 " + n);
+                    transmitting = false;
                     break;
                 }
-                got += n;
+                if (n == 0) {
+                    /* read 返回 0 = 这一轮没拿到数据。别当致命错误（不少设备
+                     * 在 8 kHz 下会先返回几次 0），但连续 200 次就说明录音真的停了。 */
+                    st.shortReads++;
+                    if (++zeroSpins > 200) {
+                        if (listener != null) listener.onTxStop("麦克风无数据");
+                        transmitting = false;
+                    }
+                    continue;
+                }
+                zeroSpins = 0;
+                rawFill += n;
             }
             if (!transmitting) break;
-            if (got < readPerFrame) continue;
+            if (rawFill < readPerFrame) continue;
+            rawFill = 0;            /* 只在完整消费一帧之后才清零 */
 
             final long procT0 = System.nanoTime();
 
@@ -387,38 +437,80 @@ public final class DmrTransmitter {
                  * 还是上一帧的内容 —— 直接沿用它，时间轴保持对齐，
                  * 最多是重复了 20 ms 的音频，听不出来。
                  */
-                encodeFail++;
-                if (encodeFail == 1) log("声码器编码失败，沿用上一帧");
+                st.encodeFail++;
+                if (st.encodeFail == 1) log("声码器编码失败，沿用上一帧");
             } else {
-                encodeFail = 0;
+                st.encodeFail = 0;
             }
 
-            /* ---- 健康度统计：纯处理耗时（不含阻塞读） ---- */
+            /* ---- 健康度：纯处理耗时（不含阻塞读） ---- */
             long procMs = (System.nanoTime() - procT0) / 1_000_000L;
-            procSumMs += procMs;
-            procFrames++;
-            if (procMs > procMaxMs) procMaxMs = procMs;
+            st.procSumMs += procMs;
+            st.procFrames++;
+            if (procMs > st.procMaxMs) st.procMaxMs = (int) procMs;
+
+            st.audioFrames++;
+
             long nowMs = System.currentTimeMillis();
-            if (nowMs - lastReport >= 5000) {
-                float avg = procFrames > 0 ? (float) procSumMs / procFrames : 0f;
-                /* 20 ms 是每帧的预算。峰值超过预算 = 线程跟不上音频时钟，
-                 * 积压 → AudioRecord 覆盖未读采样 → 对方听到「断续」。 */
-                String verdict = (procMaxMs >= 20) ? "  ⚠ 超过 20ms 预算，会积压"
-                        : (procMaxMs >= 14 ? "  （接近预算）" : "");
+            if (nowMs - lastReport >= 2000) {
+                /* 2 秒一报 —— 用户的实际发射常常只有 1~5 秒，
+                 * 5 秒的间隔等于永远看不到。 */
+                long wallMs = (System.nanoTime() - st.startedNano) / 1_000_000L;
+                long audioMs = st.audioFrames * 20L;
+                float avgProc = st.procFrames > 0 ? (float) st.procSumMs / st.procFrames : 0f;
+                String verdict = (st.procMaxMs >= 20) ? "  ⚠ 超预算，会积压"
+                        : (st.procMaxMs >= 14 ? "  （接近预算）" : "");
                 log(String.format(java.util.Locale.US,
-                        "发射健康：%d 帧，处理 平均 %.1f ms / 峰值 %d ms（预算 20 ms）%s",
-                        procFrames, avg, procMaxMs, verdict));
-                procMaxMs = 0;
-                procSumMs = 0;
-                procFrames = 0;
+                        "发射健康：处理 平均 %.1f / 峰值 %d ms（预算 20）｜读 平均 %d / 峰值 %d ms｜音频 %d vs 实时 %d ms（差 %+d）%s",
+                        avgProc, st.procMaxMs,
+                        st.readCalls > 0 ? st.readSumMs / st.readCalls : 0, st.readMaxMs,
+                        audioMs, wallMs, audioMs - wallMs, verdict));
+                st.procMaxMs = 0;
+                st.procSumMs = 0;
+                st.procFrames = 0;
                 lastReport = nowMs;
             }
 
-            System.arraycopy(ambe, 0, bundle, bundleFill, Vocoder.CODEC_BYTES);
+            /* ---- 发包：强制 60 ms 节拍 ---- */
             bundleFill += Vocoder.CODEC_BYTES;
-
             if (bundleFill >= DmrTx.AMBE_BUNDLE) {
                 bundleFill = 0;
+
+                long now = System.nanoTime();
+                if (nextPktAt == 0) nextPktAt = now;
+                long early = nextPktAt - now;      /* >0 = 比节拍早 */
+                if (early > 0) {
+                    st.pktEarly++;
+                    if (early < PKT_PERIOD_NS) {
+                        try {
+                            Thread.sleep(early / 1_000_000L, (int) (early % 1_000_000L));
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                        now = System.nanoTime();
+                        nextPktAt += PKT_PERIOD_NS;
+                    } else {
+                        /* 比节拍早了整整一个周期以上 —— 网格跑飞了（不该发生）。
+                         * 重新对齐，否则欠账会无限累积，最后变成一整串突发。 */
+                        nextPktAt = now + PKT_PERIOD_NS;
+                    }
+                } else if (early < -2 * PKT_PERIOD_NS) {
+                    /* 落后超过两个周期：重新对齐，不累积欠账 */
+                    st.pktLate++;
+                    nextPktAt = now + PKT_PERIOD_NS;
+                } else {
+                    if (early < -5_000_000L) st.pktLate++;
+                    nextPktAt += PKT_PERIOD_NS;
+                }
+
+                if (st.lastPktNano != 0) {
+                    int gap = (int) ((now - st.lastPktNano) / 1_000_000L);
+                    if (gap > st.gapMaxMs) st.gapMaxMs = gap;
+                }
+                st.lastPktNano = now;
+                st.pktCount++;
+
                 if (DmrTx.nativeVoice(bundle, pkt) == DmrTx.PACKET_BYTES) {
                     if (!session.sendDmrd(pkt, DmrTx.PACKET_BYTES)) {
                         if (listener != null) listener.onTxStop("发送失败");
@@ -432,11 +524,48 @@ public final class DmrTransmitter {
 
         releaseRecorder();
 
+        /* ---- 收尾小结 ----
+         * 用户的实际发射常常只有一两秒，等不到周期性报告。
+         * 这一段是「断续到底在哪」的完整证据链，每次松开 PTT 都会打出来。 */
+        reportTxSummary(st);
+
         if (transmitting) {
             // 由循环内部条件跳出，补一次收尾
             transmitting = false;
             if (listener != null) listener.onTxStop("异常中断");
         }
+    }
+
+    /** 发射结束时的完整小结。 */
+    private void reportTxSummary(TxStat st) {
+        if (st.audioFrames <= 0) return;
+        long wallMs = (System.nanoTime() - st.startedNano) / 1_000_000L;
+        long audioMs = st.audioFrames * 20L;
+        long diff = audioMs - wallMs;
+        /* 采集时钟和墙上时钟的偏差。超过 3% 就说明麦克风侧在丢样本 ——
+         * AudioRecord 的缓冲被覆盖时不会报错，只能这样反推。 */
+        float driftPct = wallMs > 0 ? (float) (diff * 100.0 / wallMs) : 0f;
+
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format(java.util.Locale.US,
+                "发射小结：%.1f 秒 · %d 帧 · %d 包", wallMs / 1000.0, st.audioFrames, st.pktCount));
+        sb.append(String.format(java.util.Locale.US,
+                "\n  音频时钟：采集 %d ms vs 实时 %d ms（差 %+d ms，%.1f%%）%s",
+                audioMs, wallMs, diff, driftPct,
+                Math.abs(driftPct) >= 3f ? "  ⚠ 丢样本" : ""));
+        sb.append(String.format(java.util.Locale.US,
+                "\n  读      ：平均 %d / 峰值 %d ms（正常 20）· 短读 %d 次",
+                st.readCalls > 0 ? st.readSumMs / st.readCalls : 0, st.readMaxMs, st.shortReads));
+        sb.append(String.format(java.util.Locale.US,
+                "\n  处理    ：平均 %.1f / 峰值 %d ms（预算 20）%s",
+                st.procFrames > 0 ? (float) st.procSumMs / st.procFrames : 0f, st.procMaxMs,
+                st.procMaxMs >= 20 ? "  ⚠ CPU 跟不上" : ""));
+        sb.append(String.format(java.util.Locale.US,
+                "\n  发包    ：间隔峰值 %d ms（应为 60）· 提前 %d / 迟到 %d",
+                st.gapMaxMs, st.pktEarly, st.pktLate));
+        sb.append(String.format(java.util.Locale.US,
+                "\n  编码    ：失败 %d 帧", st.encodeFail));
+        log(sb.toString());
     }
 
     /* ================================================================ */
