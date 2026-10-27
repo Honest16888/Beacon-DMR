@@ -6,6 +6,15 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 收听时持 Partial WakeLock，熄屏后 WebAudio 调度不被掐断 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 保活服务：切后台后进程被钉在前台优先级，主站会话才不会被系统冻结掐断。
+         Android 14 起每种前台服务类型还要单独申请权限（mediaPlayback 没有时长上限，
+         dataSync 每天只能跑 6 小时，长时间守听会撞上限）。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Android 13+ 通知需要用户授权；没授权时服务照常运行，只是看不到那条通知 -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- WifiLock（HIGH_PERF）：熄屏后 WiFi 射频不进省电模式 -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- 发射：采集麦克风。运行时动态申请，未授予时只影响发射，收听照常 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 仅 Android 9 及以下保存 WAV 到公共音乐目录时需要；10+ 走 MediaStore 免权限 -->
@@ -40,5 +49,13 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- 保活服务。stopWithTask=true：从最近任务里划掉 App 时一起停，
+             否则引擎随 Activity 一起销毁，服务会变成挂着一个通知的空壳。 -->
+        <service
+            android:name=".DmrKeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback"
+            android:stopWithTask="true" />
     </application>
 </manifest>

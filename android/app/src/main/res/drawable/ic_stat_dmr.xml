@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 状态栏小图标：一对无线电波 + 底部横线（电台轮廓）。
+     通知栏图标必须是单色 alpha 图，所以这里只用 fillColor，不带渐变。 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,13m-2.2,0a2.2,2.2 0,1 1,4.4 0a2.2,2.2 0,1 1,-4.4 0" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M7.05,8.05l1.41,1.41a5,5 0,0 0,0 7.08l-1.41,1.41a7,7 0,0 1,0 -9.9zM16.95,8.05a7,7 0,0 1,0 9.9l-1.41,-1.41a5,5 0,0 0,0 -7.08z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M4.22,5.22l1.41,1.41a9,9 0,0 0,0 12.74l-1.41,1.41a11,11 0,0 1,0 -15.56zM19.78,5.22a11,11 0,0 1,0 15.56l-1.41,-1.41a9,9 0,0 0,0 -12.74z" />
+</vector>

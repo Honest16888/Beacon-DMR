@@ -55,6 +55,9 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private PowerManager.WakeLock wake;
+
+    /** 保活服务当前是否已启动。只在目标状态变化时才去动服务。 */
+    private boolean keepAliveOn = false;
     private DmrEngine dmr;
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
@@ -98,6 +101,10 @@ public class MainActivity extends Activity {
     @Override
     protected void onDestroy() {
         releaseWake();
+        /* 引擎跟着这个 Activity 一起死，保活服务再挂着也只是一条空通知，
+         * 而且它会一直持着 WakeLock 耗电 —— 必须一起停掉。 */
+        keepAliveOn = false;
+        DmrKeepAliveService.stop(this);
         if (dmr != null) {
             try {
                 dmr.disconnect();
@@ -121,6 +128,9 @@ public class MainActivity extends Activity {
      * 避免字符串里的引号把 JS 语法打断。
      */
     private void onDmrEvent(String json) {
+        /* 连接状态可能在没有任何页面操作的情况下变化（心跳超时、被主站踢掉），
+         * 所以每个事件都顺手对一次保活状态 —— 只在目标状态真的变了才动服务。 */
+        syncKeepAlive();
         if (web == null || json == null) return;
         try {
             web.evaluateJavascript(
@@ -273,6 +283,31 @@ public class MainActivity extends Activity {
             }
         }
         wake = null;
+    }
+
+    /* ==================== 保活服务 ==================== */
+
+    /**
+     * 根据当前状态决定要不要把进程钉在前台。
+     *
+     * <p>「已连接主站」和「正在守听」两者任一成立就需要保活 ——
+     * 前者靠每 5 秒一次的心跳维持 UDP 会话，后者靠一条长连 WebSocket，
+     * 两种链路在 cached process 里都会被系统冻结。
+     *
+     * <p>只在<b>目标状态发生变化</b>时才动服务，避免每个事件都去
+     * startForegroundService 刷一遍通知。
+     */
+    private void syncKeepAlive() {
+        boolean connected = dmr != null && dmr.isConnected();
+        boolean rxOn = dmr != null && dmr.isRxOn();
+        boolean want = connected || rxOn;
+        if (want == keepAliveOn) return;
+        keepAliveOn = want;
+        if (want) {
+            DmrKeepAliveService.start(this, connected ? "已连接主站 · 切后台不断" : "守听中 · 切后台不断");
+        } else {
+            DmrKeepAliveService.stop(this);
+        }
     }
 
     /** 暴露给页面的 window.Android */
@@ -478,6 +513,9 @@ public class MainActivity extends Activity {
             if (dmr == null) return "引擎未初始化";
             try {
                 dmr.connect(host, port, dmrId, essid, password, callsign, location, desc);
+                /* 一旦开始连就把保活拉起来 —— 握手本身也要好几秒，
+                 * 这期间用户很可能已经切走了。 */
+                syncKeepAlive();
                 return "";
             } catch (Throwable t) {
                 return String.valueOf(t.getMessage());
@@ -487,6 +525,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void dmrDisconnect() {
             if (dmr != null) dmr.disconnect();
+            syncKeepAlive();
         }
 
         /**
@@ -550,6 +589,7 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void dmrSetRxOn(boolean on) {
             if (dmr != null) dmr.setRxOn(on);
+            syncKeepAlive();
         }
 
         /** 接收增益，线性 0~2 */

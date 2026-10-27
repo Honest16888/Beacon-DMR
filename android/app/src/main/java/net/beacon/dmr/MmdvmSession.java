@@ -233,6 +233,16 @@ public final class MmdvmSession {
     private volatile int loginId = 0;
     private volatile String password = "";
 
+    /** 上一次「密码校验通过」（走到 CONNECTED）的时刻。
+     *
+     *  <p>MSTNAK 落在 AUTH 阶段时，代码原来只会说「密码不对」—— 但如果这份
+     *  凭据十几分钟前刚在同一台机器上通过过，那句话会把用户引到完全错误的方向：
+     *  他会去重设密码，而真正的问题在主站侧（旧会话没释放 / 临时限流）。
+     *  记下这个时刻，就能在报错里直接给出「先别怀疑密码」的证据。 */
+    private static volatile long lastAuthOkAtMs = 0;
+    /** 上一次通过校验时的密码指纹（前 8 位十六进制，不可逆）。 */
+    private static volatile String lastAuthOkFp = "";
+
     /* RPTC 配置串里上报的静态信息 */
     private volatile String callsign = "";
     private volatile String location = "";
@@ -523,6 +533,21 @@ public final class MmdvmSession {
                     + "请确认密码本身没有空格");
         }
         this.password = trimmed;
+    }
+
+    /**
+     * 当前热点安全密码的指纹：SHA-256 的前 8 位十六进制。
+     *
+     * <p>日志里不能写明文密码，但排障时又必须回答「密码有没有变」。
+     * 指纹能回答：两次登录指纹相同 → 密码一模一样，问题不在密码。
+     * 空密码返回 {@code "(空)"}，一眼就能看出来。
+     */
+    private String pwdFingerprint() {
+        if (password == null || password.isEmpty()) return "(空)";
+        byte[] d = sha256(password.getBytes(StandardCharsets.UTF_8));
+        StringBuilder sb = new StringBuilder(8);
+        for (int i = 0; i < 4; i++) sb.append(String.format(Locale.US, "%02x", d[i] & 0xFF));
+        return sb.toString();
     }
 
     /**
@@ -1180,6 +1205,20 @@ public final class MmdvmSession {
                 return;
             }
 
+            /* 空密码在 AUTH 被拒：重试 5 次毫无意义，只会让主站把这条热点临时锁掉
+             * （BrandMeister 对连续失败的凭据校验会限流，而且它不会告诉你被限流了）。
+             * 直接停机，把「去哪儿填什么」说清楚。 */
+            if (was == State.AUTH && (password == null || password.isEmpty())) {
+                shutdownAfterError();
+                log("热点安全密码是空的 —— 设置页里没填，主站不可能放行。\n"
+                        + "去 BrandMeister SelfCare → SelfCare → Hotspot Security，"
+                        + "按你的 Radio ID " + dmrId + " 设一个密码"
+                        + "（20 字符以内、不含特殊字符），\n"
+                        + "填进设置页的「热点安全密码」再连接。\n"
+                        + "已停止重试 —— 空密码重试只会让主站把这条热点临时锁掉。");
+                return;
+            }
+
             nakCount++;
             if (nakCount >= MAX_NAK) {
                 shutdownAfterError();
@@ -1202,6 +1241,32 @@ public final class MmdvmSession {
                       .append("或这个 ID 还没在 SelfCare 里设过热点密码。\n")
                       .append("注意：热点安全密码 ≠ SelfCare 登录密码；官方要求 20 字符以内、")
                       .append("不含特殊字符，且要按 Radio ID 逐个设置。\n");
+
+                    /* ★ 如果这份凭据刚刚在本机通过过校验，那「密码不对」这个结论
+                     * 就是错的 —— 必须当场说出来，否则用户会去改一个本来正确的密码，
+                     * 白白浪费半小时，而且改完之后旧密码就真的对不上了。 */
+                    long okAt = lastAuthOkAtMs;
+                    String fp = pwdFingerprint();
+                    boolean sameFp = fp.equals(lastAuthOkFp);
+                    if (okAt > 0 && sameFp) {
+                        long mins = (System.currentTimeMillis() - okAt) / 60000L;
+                        if (mins <= 120) {
+                            sb.append("\n★ 但这份密码在本机 ").append(mins)
+                              .append(" 分钟前刚刚通过过校验（指纹 ").append(fp)
+                              .append(" 完全相同）—— 所以问题多半不在密码本身。\n")
+                              .append("  常见原因按可能性排序：\n")
+                              .append("    1. 主站还挂着上一次的会话。进程被强杀（装更新、清后台）时")
+                              .append("没有发出登出包，主站要等自己超时。等 2~3 分钟再连一次。\n")
+                              .append("    2. 短时间内失败次数太多，主站临时限流。停 10 分钟。\n")
+                              .append("    3. 同一个 DMR ID 在别的设备/热点上在线，主站只允许一台。")
+                              .append("去 SelfCare 的 Hotspots 页看有没有多余的在线记录。\n")
+                              .append("    4. 公网 IP 变了（换网络/切运营商）。一般不影响，但 BM 偶尔会认旧 IP。\n")
+                              .append("  在这几种情况下重设密码只会让情况更糟 —— 先别动密码。\n");
+                        }
+                    } else if (!sameFp && lastAuthOkAtMs > 0) {
+                        sb.append("\n★ 密码指纹变了（上次通过时是 ").append(lastAuthOkFp)
+                          .append("，这次是 ").append(fp).append("）—— 密码确实被改过或没填对。\n");
+                    }
                 } else if (was == State.CONF) {
                     sb.append("被拒在「下发配置」（RPTC）这一步 —— 密码已经通过了")
                       .append("（RPTK 换回了正常 RPTACK），所以不是密码问题，")
@@ -1365,6 +1430,19 @@ public final class MmdvmSession {
                     }
                     byte[] salt = new byte[]{buf[6], buf[7], buf[8], buf[9]};
 
+                    /* 把密码指纹打进日志。
+                     *
+                     * 每次 MSTNAK 落在 AUTH 时，第一个要回答的问题是
+                     * 「密码到底有没有变」—— 但日志里不能写明文。
+                     * 指纹（SHA-256 前 8 位十六进制）能回答这个问题：
+                     * 两次登录的指纹一样 = 密码没变，别再让用户去改密码。 */
+                    log("密码指纹 " + pwdFingerprint() + "（" + password.length() + " 字符）"
+                            + (password.isEmpty()
+                               ? "  ⚠ 空密码 —— 设置里的「热点安全密码」没填"
+                               : (password.length() > 20
+                                  ? "  ⚠ 超过 20 字符，BrandMeister 会拒绝"
+                                  : "")));
+
                     byte[] pwd = password.getBytes(StandardCharsets.UTF_8);
                     byte[] in = new byte[4 + pwd.length];
                     System.arraycopy(salt, 0, in, 0, 4);
@@ -1394,6 +1472,10 @@ public final class MmdvmSession {
                     hadSession = true;
                     lastOkHost = host;
                     lastOkLoginId = loginId;
+                    /* 记下「这份凭据在这个时刻通过了校验」——
+                     * 之后再被拒时就能区分「密码变了」和「主站侧不认」 */
+                    lastAuthOkAtMs = System.currentTimeMillis();
+                    lastAuthOkFp = pwdFingerprint();
                     setState(State.CONNECTED, "已连接，可以发射");
                     /* 从这一刻开始计时，pingLoop 用它判断链路是不是还活着。
                      * 注意 lastPongMs 只在「真收到过 MSTPONG」之后才有意义 ——
