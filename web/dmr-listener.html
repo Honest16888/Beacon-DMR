@@ -90,6 +90,16 @@ html[data-theme="dark"] .nowbar{background:var(--panel2)}
 .np-name{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:250px}
 .np-tg{display:flex;align-items:center;gap:7px;padding:5px 11px;background:var(--accent2);border-radius:7px;font-size:12.5px}
 .np-tg b{font-family:var(--mono);color:var(--accent);font-weight:700}
+/* 个呼：整块换成红色调，和组呼一眼分开 —— 有人点名找你，不该和普通组呼长得一样 */
+.np-tg.priv{background:var(--tx2)}
+.np-tg.priv b{color:var(--tx)}
+.np-reply{flex:none;padding:5px 12px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;
+  font-family:inherit;white-space:nowrap;
+  background:var(--tx2);border:1px solid #f6c9cb;color:#b3282d;transition:filter .12s}
+.np-reply:hover{filter:brightness(.96)}
+.np-reply:active{transform:translateY(1px)}
+html[data-theme="dark"] .np-reply{background:#2b1416;border-color:#4a2024;color:#f87171}
+html[data-theme="dark"] .np-tg.priv{background:#2b1416}
 .np-sep{width:1px;height:34px;background:var(--border)}
 .vu{display:flex;align-items:flex-end;gap:2px;height:30px;width:104px;flex:none}
 .vu i{flex:1;background:var(--border);border-radius:1.5px;transition:height .07s linear,background .07s linear}
@@ -136,6 +146,14 @@ html[data-theme="dark"] .nowbar{background:var(--panel2)}
 .ptxtg:focus{border-color:var(--accent);background:var(--panel)}
 .ptxnm{font-size:12px;color:var(--muted);flex:1;min-width:0;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 操作区那个话组名是可以改的 —— 不给提示的话没人会想到去点它，
+   所以用虚下划线 + 指针光标，跟普通说明文字区分开。 */
+.ptxnm[data-click]{cursor:pointer;text-decoration:underline dotted;
+  text-underline-offset:3px;text-decoration-color:var(--border2)}
+.ptxnm[data-click]:hover{color:var(--text);text-decoration-color:var(--accent)}
+.ptxnm-edit{font-size:12px;padding:3px 6px;border:1px solid var(--accent);
+  border-radius:6px;background:var(--panel);color:var(--text);outline:none;
+  font-family:inherit;flex:1;min-width:0}
 .ptxin{flex:1;min-width:0;padding:6px 9px;border:1px solid var(--border);border-radius:8px;
   background:var(--bg);color:var(--text);font-size:12.5px;outline:none;transition:.15s}
 .ptxin:focus{border-color:var(--accent);background:var(--panel)}
@@ -211,6 +229,11 @@ html[data-theme="dark"] .nowbar{background:var(--panel2)}
   background:var(--border2);transition:background .15s}
 .htsum.live .hsm-dot{background:var(--ok)}
 .htsum.txing .hsm-dot{background:var(--tx)}
+/* 折叠态收到个呼：小圆点转红、话组号也转红。
+   折叠条只有 26px 高，是用户唯一能看到的提示，不能和普通组呼长得一样。 */
+.htsum.priv .hsm-dot{background:var(--tx)}
+.htsum.priv .hsm-tg{color:var(--tx);border-color:#f6c9cb;background:var(--tx2)}
+html[data-theme="dark"] .htsum.priv .hsm-tg{border-color:#4a2024;background:#2b1416}
 .htsum .hsm-txt{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;color:var(--text)}
 .htsum .hsm-tg{flex:none;padding:1px 6px;border-radius:6px;font-size:11px;
@@ -310,6 +333,11 @@ html[data-theme="dark"] .tabs button.on{background:var(--accent2)}
 .live-row.mine{background:color-mix(in srgb,var(--accent) 7%,transparent)}
 .live-row .acts{opacity:1}
 .tgpill{font-family:var(--mono);font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:5px;background:var(--accent2);color:var(--accent);flex:none}
+/* 个呼行：整行左边留一道红边，一眼能和人话组区分开。
+   点它是「回这个人」，不是「加进收听」—— 这个视觉提示必须给。 */
+.live-row.priv{box-shadow:inset 3px 0 0 var(--tx)}
+.tgpill.priv{background:var(--tx2);color:var(--tx)}
+html[data-theme="dark"] .tgpill.priv{background:#2b1416;color:#f87171}
 .bar{height:2.5px;border-radius:2px;background:var(--border);overflow:hidden;margin-top:5px}
 .bar i{display:block;height:100%;background:var(--accent);opacity:.5;border-radius:2px;transition:width .5s linear}
 .meta{display:flex;gap:9px;font-size:10.5px;color:var(--dim);font-family:var(--mono);flex:none;align-items:center}
@@ -566,6 +594,24 @@ html[data-theme="dark"] .pickpanel{box-shadow:0 12px 30px rgba(0,0,0,.55)}
 .pickrow.on .h{color:var(--accent)}
 .pickrow .m{font-size:10.5px;color:var(--dim);line-height:1.3}
 .pickempty{padding:14px 10px;text-align:center;font-size:11.5px;color:var(--dim)}
+/* 「我的主站」那一组：每行右边挂一个 ✕ 删除钮。
+   行本身是按钮，✕ 也是按钮，所以行要留出右侧空间，不能让它压在文字上。 */
+.pickwrap .pickrow{padding-right:38px}
+/* 自定义行要包一层 relative 容器，✕ 才能稳定地垂直居中 —— 
+   用负 margin 去凑在行高变化时会歪。 */
+.pickwrap{position:relative}
+.pickdel{position:absolute;right:6px;top:50%;transform:translateY(-50%);
+  width:26px;height:26px;border:0;border-radius:6px;background:transparent;
+  color:var(--dim);cursor:pointer;font-size:12px;line-height:1;font-family:inherit}
+.pickdel:hover{background:var(--tx2);color:var(--tx)}
+/* 底部「存为我的主站」—— 用户刚手打完地址，顺手收进列表 */
+.pickfoot{padding:8px 10px;border-top:1px solid var(--border2)}
+.pickadd{width:100%;padding:8px 10px;border-radius:8px;cursor:pointer;
+  font-family:inherit;font-size:12px;font-weight:600;text-align:center;
+  background:var(--accent2);border:1px solid var(--border);color:var(--accent)}
+.pickadd:hover{filter:brightness(.97)}
+.pickadd b{font-family:var(--mono);word-break:break-all}
+.pickhint{display:block;font-size:11px;color:var(--dim);line-height:1.5}
 .txstat{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:99px;
   font-size:11.5px;font-weight:600;background:var(--panel2);border:1px solid var(--border);color:var(--muted)}
@@ -981,7 +1027,9 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
       <span class="np-name" id="npName">—</span>
     </div>
     <div class="np-sep"></div>
-    <div class="np-tg"><span>话组</span><b id="npTg">—</b><span id="npTgName" style="color:var(--muted)"></span></div>
+    <div class="np-tg"><span id="npTgLbl">话组</span><b id="npTg">—</b><span id="npTgName" style="color:var(--muted)"></span></div>
+    <button class="np-reply" id="npReply" style="display:none"
+            title="把发射目标一键切到对方，按住 PTT 就能回">回复</button>
     <div class="np-sep"></div>
     <div class="vu" id="vu"></div>
     <div class="np-time" id="npTime">0.0s</div>
@@ -1014,7 +1062,8 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
           <span class="ptxlab">发射到</span>
           <input id="txTg" class="ptxtg" inputmode="numeric" value="91"
                  autocomplete="off" spellcheck="false" aria-label="发射目标话组">
-          <span class="ptxnm" id="txTgName">世界组</span>
+          <span class="ptxnm" id="txTgName" data-click="1"
+                title="点一下改这个话组的叫法">世界组</span>
           <button class="btn sm pri" id="txBtnConn">连接</button>
           <button class="btn sm" id="txBtnDisc">断开</button>
         </div>
@@ -19262,6 +19311,16 @@ function syncAwake(){
 const state = {
   view:'listen', tab:'scan',
   tg:{}, tgReady:false, masters:{}, masterList:[],
+  /* 用户自定义的话组名：{ '46001': '我的叫法' }。
+     话组表是别人维护的（46001 官方叫 Worldwide，国内表里叫「世界组」），
+     但每个台友的圈子对同一个号有各自的叫法。这一层覆盖表里的名字，
+     优先于任何远端数据，且只存在本机。 */
+  tgAlias:{},
+  /* 用户自己加的主站：[{host, port, note}]。
+     存在的理由：内置那几条是写死在代码里的，而国内不止 radiowo 一家
+     （还有各种私有热点、自建主站），每次手打 host + 端口太麻烦，
+     而且手打容易错一个字符就 MSTNAK。存下来就能一键切换。 */
+  customHosts:[],
   subscribed:[], solo:null,
   scan:{ on:false, list:[], skip:[], hold:null, cur:null, auto:false, autoN:8, picked:[], sig:'' },
   /* 收听默认打开：进来就守听，想安静自己点右上角静音。
@@ -19308,6 +19367,11 @@ const store={
 /* ============================ 话组 / 国家 ============================ */
 function tgName(id){
   const k=String(id);
+  /* ★ 用户自定义名优先级最高，压过所有远端表。
+   * 表里的名字是别人定的（46001 在国际表里叫 Worldwide、国内表里叫「世界组」），
+   * 而用户想按自己圈子的习惯叫 —— 这是本机设置，不该被远端数据覆盖。 */
+  const al=state.tgAlias&&state.tgAlias[k];
+  if(al)return al;
   /* 当前网络的话组名优先 —— 460 在国际网是「中国」区域组、在国内网是「460全国公共」，
      同一个号在两套网络里含义不同，必须以当前连接的那套为准 */
   if(state.net==='cn'){ const c=CN.tg[k]; if(c&&c.name)return c.name; }
@@ -19827,11 +19891,13 @@ const DEF_CN_PORT='62031';
    每次重绘都重新算一遍（masterList 是异步拉回来的，可能中途变长）。 */
 function txHostData(){
   const out=[], seen=new Set();
-  const push=(host,note,group)=>{
+  const push=(host,note,group,port)=>{
     if(!host||seen.has(host))return;
     seen.add(host);
-    out.push({ host, note:note||'', group });
+    out.push({ host, note:note||'', group, port:String(port||DEF_CN_PORT) });
   };
+  /* 自定义主站排在最前 —— 用户自己加的，显然是他最常用的那几个 */
+  for(const c of (state.customHosts||[]))push(c.host,c.note||'自定义','my',c.port);
   for(const m of CN_MASTERS)push(m.host,m.note,'cn');
   for(const m of BM_FALLBACK)push(m.host,m.note,'bm');
   const list=(state.masterList||[]).slice().sort((a,b)=>{
@@ -19847,6 +19913,37 @@ function txHostData(){
   return out;
 }
 
+/* 自定义主站：加 / 删 / 持久化 --------------------------------------------
+   地址归一化做得很克制：只去掉协议前缀和首尾空格、把冒号后面拆成端口。
+   不做 DNS 校验，也不要求域名格式 —— 内网热点、IP、带端口的写法都得能存。 */
+function customHostAdd(raw){
+  let s=String(raw||'').trim();
+  if(!s)return '地址为空';
+  s=s.replace(/^[a-z]+:\/\//i,'');          // 去掉 http:// / tcp:// 之类
+  s=s.replace(/\/+$/,'');                   // 去掉尾部的 /
+  let host=s, port=DEF_CN_PORT;
+  const m=s.match(/^([^:\s]+):(\d{1,5})$/);  // host:port
+  if(m){ host=m[1]; port=m[2]; }
+  if(!host||/\s/.test(host))return '地址不合法';
+  const p=parseInt(port,10);
+  if(!(p>0&&p<65536))return '端口不合法';
+  const list=state.customHosts||(state.customHosts=[]);
+  const hit=list.find(x=>x.host===host);
+  if(hit){ hit.port=String(p); store.set('customHosts',list); return ''; }
+  list.unshift({ host, port:String(p), note:'自定义' });
+  if(list.length>20)list.length=20;
+  store.set('customHosts',list);
+  return '';
+}
+function customHostDel(host){
+  const list=state.customHosts||[];
+  const i=list.findIndex(x=>x.host===host);
+  if(i<0)return;
+  list.splice(i,1);
+  store.set('customHosts',list);
+  txFillHostList(); txFillQuickHost();
+}
+
 /* 重绘面板内容。q 是搜索词，匹配 host 或备注（所以搜「韩国」「radiowo」都能中）。 */
 function txFillHostList(){
   const body=txEl('txHostBody'); if(!body)return;
@@ -19858,6 +19955,7 @@ function txFillHostList(){
   const hit=q?all.filter(x=>x.host.toLowerCase().indexOf(q)>=0
     ||String(x.note||'').toLowerCase().indexOf(q)>=0):all;
   const groups=[
+    { title:'⭐ 我的主站', items:hit.filter(x=>x.group==='my'), del:true },
     { title:'🇨🇳 国内 China DMR', items:hit.filter(x=>x.group==='cn') },
     { title:'🌍 国际 BrandMeister', items:hit.filter(x=>x.group==='bm') }
   ];
@@ -19866,14 +19964,27 @@ function txFillHostList(){
     if(!g.items.length)continue;
     html+='<div class="pickgroup">'+g.title+' · '+g.items.length+'</div>';
     for(const x of g.items){
-      html+='<button type="button" class="pickrow'+(x.host===cur?' on':'')+'"'
-        +' data-host="'+esc(x.host)+'">'
+      const row='<button type="button" class="pickrow'+(x.host===cur?' on':'')+'"'
+        +' data-host="'+esc(x.host)+'" data-port="'+esc(x.port)+'">'
         +'<span class="h">'+esc(x.host)+'</span>'
-        +'<span class="m">:'+esc(DEF_CN_PORT)+(x.note?' · '+esc(x.note):'')+'</span>'
+        +'<span class="m">:'+esc(x.port)+(x.note?' · '+esc(x.note):'')+'</span>'
         +'</button>';
+      html+=g.del
+        ?'<div class="pickwrap">'+row
+          +'<button type="button" class="pickdel" data-del="'+esc(x.host)
+          +'" title="删除这条自定义主站">✕</button></div>'
+        :row;
     }
   }
-  body.innerHTML=html||'<div class="pickempty">没有匹配的主站</div>';
+  /* 底部固定一条「把当前填的地址存起来」—— 用户刚手打完地址，
+     顺手就能收进「我的主站」，下次不用再打。 */
+  const typed=cur&&!all.some(x=>x.host===cur);
+  html+='<div class="pickfoot">'
+    +(typed?'<button type="button" class="pickadd" data-add="1">'
+      +'＋ 把 <b>'+esc(cur)+'</b> 存为我的主站</button>'
+      :'<span class="pickhint">在上面的「主站地址」里填好地址，这里会出现「存为我的主站」</span>')
+    +'</div>';
+  body.innerHTML=html;
   /* 对讲页顶部那个快捷 <select> 用同一份数据，主站表拉回来之后一起刷新 */
   txFillQuickHost();
 }
@@ -19895,11 +20006,12 @@ function txHostPanel(open){
   const b=txEl('txHostBtn');
   if(b)b.classList.toggle('on',txHostOpen);
 }
-function txHostPick(host){
+function txHostPick(host, port){
   if(!host)return;
   const h=txEl('txHost'); if(h)h.value=host;
-  /* 两个网络的端口都是 62031，选完顺手把端口也纠正过来 */
-  const p=txEl('txPort'); if(p)p.value=DEF_CN_PORT;
+  /* 端口跟着条目走。内置两个网络都是 62031，但自定义主站可能是任意端口，
+     一律写死 62031 会让自建主站永远连不上（而且报错是 MSTNAK，很难查）。 */
+  const p=txEl('txPort'); if(p)p.value=String(port||DEF_CN_PORT);
   txSave();
   txHostPanel(false);
   txFillQuickHost();   /* 对讲页顶部那个快捷 <select> 跟着同步 */
@@ -19914,8 +20026,28 @@ function txHostWire(){
   });
   const body=txEl('txHostBody');
   if(body)body.addEventListener('click',e=>{
-    const row=e.target&&e.target.closest?e.target.closest('.pickrow'):null;
-    if(row)txHostPick(row.dataset.host);
+    const t=e.target;
+    if(!t||!t.closest)return;
+    const del=t.closest('[data-del]');
+    if(del){ e.stopPropagation(); customHostDel(del.dataset.del); return; }
+    const add=t.closest('[data-add]');
+    if(add){
+      e.stopPropagation();
+      const inp=txEl('txHost');
+      const raw=String((inp&&inp.value)||'').trim();
+      const err=customHostAdd(raw);
+      if(err){ toast(err); return; }
+      const h=txEl('txHost'); if(h)h.value=raw.replace(/^[a-z]+:\/\//i,'').replace(/:\d+$/,'');
+      const pEl=txEl('txPort');
+      const portM=raw.match(/:(\d{1,5})$/);
+      if(pEl&&portM)pEl.value=portM[1];
+      txSave();
+      txFillHostList();
+      toast('已存为我的主站');
+      return;
+    }
+    const row=t.closest('.pickrow');
+    if(row)txHostPick(row.dataset.host, row.dataset.port);
   });
   const q=txEl('txHostQ');
   if(q)q.addEventListener('input',()=>txFillHostList());
@@ -19965,7 +20097,8 @@ function txFillQuickHost(){
         '<option value="'+esc(x.host)+'"'+(x.host===cur?' selected':'')+'>'
         +esc(label(x))+'</option>').join('')+'</optgroup>'
     : '';
-  sel.innerHTML = grp('🇨🇳 国内 China DMR', all.filter(x=>x.group==='cn'))
+  sel.innerHTML = grp('⭐ 我的主站', all.filter(x=>x.group==='my'))
+                + grp('🇨🇳 国内 China DMR', all.filter(x=>x.group==='cn'))
                 + grp('🌍 国际 BrandMeister', all.filter(x=>x.group==='bm'));
 }
 
@@ -20009,11 +20142,13 @@ function txIdentWire(){
     if(st&&!TX.conn)st.textContent=v?('未连接 · '+v):'未连接';
   });
 
-  /* 快捷主站：同样是写回正式输入框，端口跟着回到 62031 */
+  /* 快捷主站：同样是写回正式输入框。
+     端口跟着条目走 —— 自定义主站可能不是 62031，一律写死会连不上。 */
   const sel=txEl('txHostQuick');
   if(sel)sel.addEventListener('change',()=>{
     const h=txEl('txHost'); if(h)h.value=sel.value;
-    const p=txEl('txPort'); if(p)p.value=DEF_CN_PORT;
+    const hit=txHostData().find(x=>x.host===sel.value);
+    const p=txEl('txPort'); if(p)p.value=String((hit&&hit.port)||DEF_CN_PORT);
     txSave();
     txNetHint();
     toast('主站已设为 '+sel.value);
@@ -20398,13 +20533,15 @@ function logCall(c){
   if(state.lastLogKey===key)return;
   state.lastLogKey=key;
   const a=resolveAlias(c);
-  state.calls.unshift({ tg:c.tg, srcId:c.srcId, call:a.call, name:a.name, t:Date.now(), dur:Math.round((Date.now()-c.start)/1000) });
+  const priv=!!c.priv;
+  state.calls.unshift({ tg:c.tg, srcId:c.srcId, call:a.call, name:a.name, t:Date.now(),
+                        dur:Math.round((Date.now()-c.start)/1000), priv });
   if(state.calls.length>120)state.calls.length=120;
   store.set('calls',state.calls);
   /* 留一份「刚才是谁说的」：对方一松手 state.current 就被清空，
      界面上立刻变成「暂无通话」，回话时根本想不起跟谁通联。
      不持久化 —— 跨会话的「上一通」没有意义，反而误导。 */
-  state.lastRx={ srcId:c.srcId, tg:c.tg, call:a.call, name:a.name, at:Date.now() };
+  state.lastRx={ srcId:c.srcId, tg:c.tg, call:a.call, name:a.name, at:Date.now(), priv };
   renderLog(); renderHtSum(); txSync();
 }
 function resolveAlias(c){
@@ -20607,16 +20744,45 @@ function renderRecBtn(){
     b.innerHTML='<span class="recdot"></span>录制中 '+fmtDur(Math.round(Rec.len/8000));
   }
 }
+/* 原生（MMDVM）链路此刻在收什么，没有就返回 null。
+ *
+ * ★ 这是「个呼能通联但不显示」的根因所在：`state.current` 只跟 Hoseline 走，
+ * 个呼永远进不去 —— 音频在原生侧播得好好的，渲染层却只盯着 Hoseline，
+ * 于是界面上什么都没有。所有渲染都必须先问一次这里。 */
+function qNative(){
+  if(!Q.rxing||!Q.last)return null;
+  const a=resolveAlias({ srcId:Q.last.srcId, alias:'' });
+  /* ★ 个呼时 tg 装的是**对方**的 DMR ID，不是 dstId。
+   *
+   * 这是「个呼能收到但回不过去」的根因：个呼的 dstId 就是我自己，
+   * 照直填进 tg 的话，界面把「话组」显示成自己的 ID，用户点那一行
+   * 就等于把发射目标设成了自己 —— 当然回不过去。
+   * 个呼在语义上没有「话组」，有意义的目标只有对方，所以统一成 srcId。
+   * 下游（顶部显示、logCall、回复按钮、实时活动行）全部受益。 */
+  const priv=!!Q.last.priv;
+  return { srcId:Q.last.srcId, tg:priv?(Q.last.srcId||0):(Q.last.dstId||0), priv,
+           slot:Q.last.slot|0,
+           call:a.call, name:a.name, start:Q.last.at||Date.now() };
+}
+/* 当前主显示区正在展示的那一通，供计时器用 */
+let nowView=null;
+
 function renderNow(){
-  const c=state.current, bar=$('#nowbar');
+  const bar=$('#nowbar');
+  /* 优先级：原生接收 > Hoseline 当前 > 上一通。
+     原生在播时 Hoseline 已被 hdGate 静音，界面必须显示「真正在响的那个」，
+     否则又会出现「听的是 A、看的是 B」。 */
+  const c=qNative()||state.current;
   if(!c){
     /* 没有实时通话时，别只留一句「暂无通话」——把上一通写出来，
        回话的时候才想得起来刚才跟谁通联、在哪个话组。10 分钟内有效。 */
     const idle=$('#npIdle'), lr=state.lastRx;
+    nowView=null;
     if(idle){
       if(lr&&(Date.now()-lr.at<10*60*1000)){
         idle.innerHTML='<span style="font-size:15px">🎧</span>上一通 <b>'+esc(lr.call)+'</b>'
-          +(lr.name?' · '+esc(lr.name):'')+' · 话组 '+lr.tg+' · '+agoText(lr.at)+'前';
+          +(lr.name?' · '+esc(lr.name):'')
+          +' · '+(lr.priv?'个呼':'话组 '+lr.tg)+' · '+agoText(lr.at)+'前';
       }else{
         idle.innerHTML='<span style="font-size:15px">🎧</span>暂无通话 · 从「实时活动」或「话组库」添加话组开始收听';
       }
@@ -20625,18 +20791,67 @@ function renderNow(){
     $('#npMain').style.display='none'; bar.classList.remove('live');
     renderRecBtn(); renderHtSum(); return;
   }
+  nowView=c;
   $('#npIdle').style.display='none'; $('#npMain').style.display='';
   bar.classList.add('live');
   const a=resolveAlias(c);
+  const priv=!!c.priv;
   $('#npCall').textContent=a.call;
   $('#npCall').classList.add('hot');
   $('#npCall').dataset.click='1';
   const hi=state.ham[a.call];
   $('#npName').textContent=(hi&&hi.name)?hi.name:(a.name||('DMR ID '+c.srcId));
-  $('#npTg').textContent=c.tg;
-  const tn=tgName(c.tg);
+  /* 个呼时这一块写「个呼 + 对方 DMR ID」，组呼时写「话组 + 组号 + 组名」 */
+  $('#npTg').textContent=c.tg||'—';
+  const lbl=$('#npTgLbl');
+  if(lbl)lbl.textContent=priv?'个呼':'话组';
+  const tgBox=$('.np-tg');
+  if(tgBox)tgBox.classList.toggle('priv',priv);
+  const tn=priv?'':tgName(c.tg);
   $('#npTgName').innerHTML=tn?((tgCountry(c.tg)?flagHtml(c.tg)+' ':'')+esc(tn)):'';
+  /* 个呼才给「回复」按钮 —— 组呼点列表里的行就能切，不需要额外的钮 */
+  const rb=$('#npReply');
+  if(rb){
+    const show=priv&&c.srcId>0;
+    rb.style.display=show?'':'none';
+    if(show)rb.dataset.src=String(c.srcId);
+  }
   renderRecBtn(); renderHtSum();
+}
+/* 「回复」按钮：把发射目标一键切到刚才呼叫我的那个人，并置成个呼。
+ *
+ * 不复用 txSetTarget() —— 那个函数会 rxReset() 把收听占用让出去，
+ * 但个呼的对方很可能还在说，让出去等于自己把话掐了。
+ * 这里只改发射目标，一个字都不碰接收状态。 */
+function txReplyTo(srcId){
+  const n=Number(srcId)||0;
+  if(!(n>0))return;
+  /* 时隙跟着收到的那个走。主站按 TS 路由，发错时隙对方收不到 ——
+   * 这是「个呼能收到、回不过去」最常见的第二类原因，
+   * 尤其是热点配了 TS1 而界面默认 TS2 的时候。 */
+  if(Q.last&&Q.last.slot){ const se=txEl('txSlot'); if(se)se.value=String(Q.last.slot); }
+  const pv=txEl('txPriv');
+  if(pv)pv.value='1';
+  qSetTg(n);            /* 内部会 txSave + qRenderTg，把两处显示一起回填 */
+  txMarkTarget();
+  const r=resolveId(n);
+  toast('回复 '+(r&&r.call?r.call:('ID '+n))+'（个呼）');
+}
+/* 顶部主显示区只绑一次。列表是重绘的，但这几个节点是静态的，
+   所以在这里一次性绑住即可，不需要走事件委托。 */
+function wireNowbar(){
+  const rb=$('#npReply');
+  if(rb)rb.addEventListener('click',()=>txReplyTo(rb.dataset.src|0));
+  /* 点呼号 = 看这个人是谁（和列表里点一行同义），个呼组呼都适用 */
+  const cl=$('#npCall');
+  if(cl)cl.addEventListener('click',()=>{
+    const c=nowView; if(!c)return;
+    if(c.tg>0&&!c.priv){ txSetTarget(c.tg); return; }
+    if(c.srcId>0){
+      const r=resolveId(c.srcId);
+      toast((r&&r.call?r.call:('ID '+c.srcId))+(r&&r.name?' · '+r.name:''));
+    }
+  });
 }
 let vuBars=null;
 function initVu(){
@@ -20674,17 +20889,21 @@ function renderHtSum(){
   const txt=document.getElementById('hsTxt');
   const tg =document.getElementById('hsTg');
   if(net)net.textContent=state.net==='cn'?'🇨🇳 国内':'🌍 BM';
-  const cur=state.current, lr=state.lastRx;
-  let live=false, txing=false, s='守听中';
+  /* 原生链路优先：它在播时 Hoseline 已被 hdGate 静音，
+     摘要条必须跟着「真正在响的那个」走，否则又变成「听的是个呼、看的是话组」。 */
+  const nx=qNative(), cur=state.current, lr=state.lastRx;
+  let live=false, txing=false, priv=false, s='守听中';
   if(TX.txing){ txing=true; s='发射中'; }
-  else if(Q.rxing&&cur){ live=true; s=resolveAlias(cur).call+' 正在说'; }
+  else if(nx){ live=true; priv=nx.priv; s=(nx.priv?'个呼 ':'')+nx.call+' 正在说'; }
+  else if(cur){ live=true; s=resolveAlias(cur).call+' 正在说'; }
   else if(!state.audioOn){ s='已静音'; }
-  else if(lr&&(Date.now()-lr.at<10*60*1000)){ s='上一通 '+lr.call; }
+  else if(lr&&(Date.now()-lr.at<10*60*1000)){ s='上一通 '+(lr.priv?'个呼 ':'')+lr.call; }
   if(txt)txt.textContent=s;
   const t=qCurTg();
   if(tg)tg.textContent=t>0?String(t):'—';
   box.classList.toggle('live',live);
   box.classList.toggle('txing',txing);
+  box.classList.toggle('priv',priv);
 }
 
 /* ============================ 渲染：我的收听 ============================ */
@@ -20863,9 +21082,14 @@ function renderLive(force){
     const hi=state.ham[call];
     if(hi&&hi.name)name=hi.name;
     const iso=masterIso(s.master), cty=tgCountry(tg);
-    return '<div class="live-row'+(mine?' mine':'')+'" data-tg="'+s.tg+'" data-k="'+esc(s.key)+'" data-start="'+(s.start||0)+'"'+
+    /* 个呼：dst_id 是我自己，对用户有意义的「目标」是对方 srcId。
+       整行 data-tg 必须换成 srcId，否则点一行就是把发射目标设成自己。 */
+    const rowTg=s.priv?(s.srcId||0):s.tg;
+    return '<div class="live-row'+(mine?' mine':'')+(s.priv?' priv':'')+'" data-tg="'+rowTg
+      +'" data-priv="'+(s.priv?1:0)+'" data-slot="'+(s.slot!=null?s.slot+1:0)
+      +'" data-k="'+esc(s.key)+'" data-start="'+(s.start||0)+'"'+
       (s.fixedDur!=null?' data-fixed="'+s.fixedDur+'"':'')+'>'+
-      '<span class="tgpill">'+s.tg+'</span>'+
+      '<span class="tgpill'+(s.priv?' priv':'')+'">'+(s.priv?'个呼':s.tg)+'</span>'+
       '<div class="tginfo">'+
         '<div class="tgname"><span class="calllink" data-call="'+esc(call)+'" data-callid="'+(s.srcId||'')+'" title="查看台站资料">'+esc(call)+'</span>'+
           (name?' <span style="color:var(--muted)">'+esc(name)+'</span>':'')+
@@ -21348,16 +21572,20 @@ function qSetTg(tg){
    在「我的收听」「实时活动」「话组库」「扫描」里点任意一行话组，
    右下角那颗 PTT 就发到这个话组上。
    高亮同时打到所有列表里同一个话组的行上，一眼能看出现在发的是哪个。 */
-function txSetTarget(id){
+function txSetTarget(id, priv){
   const n=Number(id)||0;
   if(!(n>0))return;
+  /* 呼叫类型必须跟着目标一起切。
+   * 个呼行点进去如果不置 priv，PTT 会按「组呼发到 <对方的 ID>」——
+   * 主站把它当成一个不存在的话组，对方什么也收不到。
+   * 反过来，点普通话组行必须把 priv 清回 0，否则沿用上一次的个呼设置。 */
+  const pv=txEl('txPriv');
+  if(pv)pv.value=priv?'1':'0';
   qSetTg(n);
   txMarkTarget();
-  /* 用户主动点了某个话组 = 想听/想回它。把收听占用让出去，
-     否则那个组的声音还要被别的组压 1.8 秒，点了没反应。 */
   rxReset();
-  const nm=tgName(n);
-  toast('发射目标 → '+n+(nm?' '+nm:''));
+  const nm=priv?'个呼 '+n:(tgName(n)?n+' '+tgName(n):String(n));
+  toast('发射目标 → '+nm);
 }
 /* 把所有列表里「当前发射目标」那一行高亮出来。
    列表是 innerHTML 整体重写的，重写后 class 就没了 ——
@@ -21376,21 +21604,92 @@ function qStep(dir){
   i=(i+dir+list.length)%list.length;
   qSetTg(list[i]);
 }
+/* 操作区「发射到 46001 世界组」里的「世界组」是话组表带出来的名字，
+ * 点一下就地改名。
+ *
+ * 为什么用就地替换成 <input> 而不是 prompt()：
+ *   · prompt() 在 WebView 里依赖 WebChromeClient 的默认实现，部分机型直接返回
+ *     null，功能会「时好时坏」，这种 bug 最难查；
+ *   · 就地编辑不用弹窗、不用抢焦点，手机上体验也更顺。
+ * 提交时把 <span> 换回来（保持同一个 id），qRenderTg 才能继续往上写名字。
+ */
+function tgRenameInline(){
+  const el=$('#txTgName');
+  if(!el||el.dataset.editing)return;
+  /* 个呼时 txTg 装的是对方的 DMR ID，那不是话组，不给改名 */
+  const pv=txEl('txPriv');
+  if(pv&&pv.value==='1'){ toast('个呼没有话组名可改'); return; }
+  const tg=qCurTg();
+  if(!(tg>0)){ toast('先设一个发射话组'); return; }
+
+  const inp=document.createElement('input');
+  inp.className='ptxnm ptxnm-edit';
+  inp.id='txTgName';
+  inp.type='text';
+  inp.maxLength=24;
+  inp.value=(state.tgAlias&&state.tgAlias[String(tg)])||'';
+  inp.placeholder=tgName(tg)||'话组名';
+  inp.autocomplete='off';
+  inp.spellcheck=false;
+  inp.setAttribute('aria-label','话组名');
+  inp.dataset.editing='1';
+  el.replaceWith(inp);
+  try{ inp.focus(); inp.select(); }catch(e){}
+
+  let done=false;
+  const commit=(save)=>{
+    if(done)return;
+    done=true;
+    const span=document.createElement('span');
+    span.className='ptxnm';
+    span.id='txTgName';
+    span.dataset.click='1';
+    span.title='点一下改这个话组的叫法';
+    if(save){
+      const v=inp.value.trim();
+      const m=state.tgAlias||(state.tgAlias={});
+      if(v)m[String(tg)]=v;
+      else delete m[String(tg)];     /* 清空 = 恢复表里的名字 */
+      store.set('tgAlias',m);
+    }
+    inp.replaceWith(span);
+    qRenderTg();
+    renderMine(); renderLib(); renderTab(); renderHtsumSafe();
+    if(save)toast('已改名 · 只在本机生效');
+  };
+  inp.addEventListener('keydown',e=>{
+    if(e.key==='Enter'){ e.preventDefault(); commit(true); }
+    else if(e.key==='Escape'){ e.preventDefault(); commit(false); }
+  });
+  inp.addEventListener('blur',()=>commit(true));
+}
+/* renderHtSum 在某些初始化阶段可能还没定义，包一层免得改名时抛错 */
+function renderHtsumSafe(){ try{ renderHtSum(); }catch(e){} }
+
 function qRenderTg(){
   const tg=qCurTg();
   const pv=txEl('txPriv');
   const priv=!!(pv&&pv.value==='1');
   /* 发射条上的「发射到 91 世界组」和悬浮 PTT 上的数字都从这里回填 ——
    * 只要目标变了（手输、± 翻信道、或点列表里的行），两处立刻同步。 */
-  const nmEl=txEl('ptxTgName');
+  /* ★ 这里是 txTgName，不是 ptxTgName。
+   * 原来写成 ptxTgName（多一个 p），getElementById 永远返回 null，
+   * 于是操作区那行「发射到 46001 世界组」里的名字**从来没有被更新过** ——
+   * 一直是 HTML 里写死的「世界组」，换任何话组都不变。 */
+  const nmEl=txEl('txTgName');
   if(nmEl)nmEl.textContent=tg>0?((priv?'个呼 · ':'')+(tgName(tg)||'未知话组')):'未设目标';
   const pn=txEl('pttTg');
   if(pn)pn.textContent=tg>0?String(tg):'—';
   /* 顺手把目标同步给原生侧：「只收当前话组」拿它当门限。
      放在这里而不是 PTT 里，是为了「选好话组就开始过滤」，
-     不用先发一次话才生效。 */
+     不用先发一次话才生效。
+
+     ⚠ 个呼时传 0（= 不过滤）。txTg 在个呼下装的是**对方的 DMR ID**，
+     若照直传过去，原生侧会把门限设成这个 ID，于是除了这个人以外的
+     所有组呼全被滤掉 —— 「个呼和组呼同时开启」当场失效。
+     个呼本来就没有「当前话组」这个概念，不设门限才是对的。 */
   if(typeof Android!=='undefined'&&Android.dmrSetWatchTg){
-    try{ Android.dmrSetWatchTg(Number(tg)||0); }catch(e){}
+    try{ Android.dmrSetWatchTg(priv?0:(Number(tg)||0)); }catch(e){}
   }
   qRender();
 }
@@ -22118,10 +22417,15 @@ function txSync(){
          呼号可点：点一下把发射目标切到他所在的话组，省得手打。 */
       const lr=state.lastRx, fresh=lr&&(Date.now()-lr.at<10*60*1000);
       if(fresh){
-        h.innerHTML='就绪 · 回 <b class="hslast" data-tg="'+lr.tg+'" title="点一下把发射目标切到话组 '
-          +lr.tg+'">'+esc(lr.call)+'</b>'
+        /* 上一通是个呼时，这里必须写成「回 <呼号> 个呼 <对方 ID>」并把
+           data-priv 带上 —— 否则点一下会按组呼发到对方的 ID 上，
+           主站当成不存在的话组，对方什么也收不到。 */
+        const lp=!!lr.priv;
+        h.innerHTML='就绪 · 回 <b class="hslast" data-tg="'+lr.tg+'" data-priv="'+(lp?1:0)
+          +'" title="点一下把发射目标切到'+(lp?'这个人':'话组 '+lr.tg)+'">'+esc(lr.call)+'</b>'
           +(lr.name?' <span class="hsname">'+esc(lr.name)+'</span>':'')
-          +' <span class="hstg" data-tg="'+lr.tg+'">话组 '+lr.tg+'</span> · 按住 PTT 说话';
+          +' <span class="hstg" data-tg="'+lr.tg+'" data-priv="'+(lp?1:0)+'">'
+          +(lp?'个呼 '+lr.tg:'话组 '+lr.tg)+'</span> · 按住 PTT 说话';
       }else{
         h.textContent='就绪。按住右下角 PTT 说话，松开结束';
       }
@@ -22637,6 +22941,10 @@ window.onDmrEvent=function(json){
       }
       hdGate();
       qRender();
+      /* ★ 原生接收的变化必须立刻反映到顶部主显示区。
+         以前这里只刷对讲页，于是「个呼能通联但不显示」——
+         声音在响，顶部还挂着上一通组呼。 */
+      renderNow();
       break;
     }
     case 'blocked':{
@@ -22723,6 +23031,13 @@ function txBind(){
     store.set('txFold',open);
   });
   rxBind();
+  wireNowbar();
+  /* 操作区话组名点击改名。用事件委托而不是直接绑在节点上 ——
+     改名时那个 span 会被换成 input 再换回来，直接绑的监听器会跟着节点一起消失。 */
+  document.addEventListener('click',e=>{
+    const t=e.target;
+    if(t&&t.id==='txTgName'&&!t.dataset.editing){ e.preventDefault(); tgRenameInline(); }
+  });
 }
 /* 显式设置折叠状态（对讲页的「更多设置」要能把它展开） */
 function txFoldSet(open){
@@ -22825,7 +23140,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.02';
+const PAGE_VER='2026.11.03';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
@@ -23148,8 +23463,9 @@ $('#htFold').addEventListener('click',htFoldToggle);
     if(!t)return;
     const n=Number(t.dataset.tg)||0;
     if(n<=0)return;
-    txSetTarget(n);
-    toast('发射目标已切到话组 '+n);
+    const isPriv=t.dataset.priv==='1';
+    txSetTarget(n, isPriv);
+    toast('发射目标已切到'+(isPriv?'个呼 ':'话组 ')+n);
   });
 })();
 window.addEventListener('scroll',()=>{
@@ -23295,10 +23611,20 @@ document.addEventListener('click',e=>{
   /* 点「实时活动」整行 = 一键收听 + 同时设成发射目标 */
   if(row&&row.dataset.tg&&!row.dataset.scope){
     const id=Number(row.dataset.tg);
-    if(state.subscribed.includes(id))toast('话组 '+id+' 已在收听列表');
-    else if(state.scan.on&&state.scan.list.includes(id))toast('话组 '+id+' 在扫描列表中');
-    else addTg(id);
-    txSetTarget(id);
+    const isPriv=row.dataset.priv==='1';
+    /* 个呼行不能加进收听列表 —— 那是一个人的 ID，不是一个话组，
+     * 加进去以后会一直在扫描里空转，也永远不会有「话组活动」。
+     * 点它只做一件事：把发射目标切成这个人。 */
+    if(!isPriv){
+      if(state.subscribed.includes(id))toast('话组 '+id+' 已在收听列表');
+      else if(state.scan.on&&state.scan.list.includes(id))toast('话组 '+id+' 在扫描列表中');
+      else addTg(id);
+    }
+    /* 回复用收到的那个时隙：主站按 TS 路由，发错时隙对方收不到。
+     * 这是「能收到、回不过去」的第二类原因。 */
+    const sl=Number(row.dataset.slot)||0;
+    if(sl>0){ const se=txEl('txSlot'); if(se)se.value=String(sl); }
+    txSetTarget(id, isPriv);
     return;
   }
   /* 点任意话组行（我的收听 / 话组库 / 扫描列表）= 设成发射目标。
@@ -23349,6 +23675,22 @@ function boot(){
   state.scan.auto=state.scanResume&&!!store.get('scanAuto',false);
   state.scan.autoN=Math.max(1,Math.min(20,Number(store.get('scanAutoN',8))||8));
   state.calls=store.get('calls',[])||[];
+  /* 自定义主站：老版本没有这一项，取出来先过一遍形状，
+     免得手工改过 localStorage 或者旧数据缺字段导致渲染时抛错。 */
+  state.customHosts=(store.get('customHosts',[])||[]).filter(
+    x=>x&&typeof x.host==='string'&&x.host.trim()
+  ).map(x=>({ host:x.host.trim(),
+              port:String(parseInt(x.port,10)||DEF_CN_PORT),
+              note:String(x.note||'自定义') }));
+  /* 自定义话组名：只接受「数字 id → 非空字符串」，其它一律丢掉 */
+  const alias=store.get('tgAlias',{});
+  state.tgAlias={};
+  if(alias&&typeof alias==='object'){
+    for(const k of Object.keys(alias)){
+      const v=alias[k];
+      if(/^\d+$/.test(k)&&typeof v==='string'&&v.trim())state.tgAlias[k]=v.trim();
+    }
+  }
   state.view=store.get('view','listen');
   state.mcol=Number(store.get('mcol',0))||0;
   state.pttDrag=!!store.get('pttDrag',false);

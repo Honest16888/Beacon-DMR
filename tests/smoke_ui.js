@@ -350,6 +350,154 @@ const h7 = await ev(`/* 换组静默：current 从 46001 换到 91 时设 muteUn
   return {tg:state.current&&state.current.tg, muted:RXG.muteUntil>Date.now()};`);
 ok('换组时进入交接静默', h7.tg === 91 && h7.muted === true, h7);
 
+console.log('\n=== 9. 个呼：收到、显示、能回 ===');
+/* 这一节盯的是「个呼能收到但回不过去」。
+ * 根因是个呼的 dstId 就是我自己，界面照直用它当「目标」，
+ * 于是点一行 = 把发射目标设成自己。所有断言都围绕这一点。 */
+const p1 = await ev(`
+  rxReset(); state.current=null; state.active.clear();
+  /* 模拟原生侧上报一个打给我的个呼：srcId=对方，dstId=我 */
+  Q.rxing=true;
+  Q.last={ srcId:4601001, dstId:4614187, slot:1, priv:true, at:Date.now() };
+  renderNow();
+  const c=qNative();
+  return { tg:c&&c.tg, priv:c&&c.priv,
+           lbl:document.getElementById('npTgLbl').textContent,
+           tgTxt:document.getElementById('npTg').textContent,
+           replyShown:document.getElementById('npReply').style.display !== 'none',
+           replySrc:document.getElementById('npReply').dataset.src };`);
+ok('个呼的目标 = 对方 ID（不是自己的 dstId）', p1.tg === 4601001, p1);
+ok('个呼被标记为 priv', p1.priv === true, p1);
+ok('顶部标签写「个呼」', p1.lbl === '个呼', p1);
+ok('顶部显示对方 ID', p1.tgTxt === '4601001', p1);
+ok('出现「回复」按钮', p1.replyShown === true, p1);
+ok('回复按钮记住对方 ID', p1.replySrc === '4601001', p1);
+
+const p2 = await ev(`
+  /* 点「回复」→ 发射目标应切成对方 + 个呼 + 收到的时隙 */
+  document.getElementById('txPriv').value='0';
+  document.getElementById('txSlot').value='2';
+  txReplyTo(4601001);
+  return { tg:qCurTg(), priv:document.getElementById('txPriv').value,
+           slot:document.getElementById('txSlot').value };`);
+ok('回复把发射目标切成对方', p2.tg === 4601001, p2);
+ok('回复把呼叫类型切成个呼', p2.priv === '1', p2);
+ok('回复沿用收到的时隙 TS1', p2.slot === '1', p2);
+
+const p3 = await ev(`
+  /* 个呼时不能把「只收当前话组」的门限设成对方 ID，
+     否则除了这个人以外的组呼全被滤掉 —— 同时开启就废了。 */
+  txSetTarget(4601001, true);
+  return { tg:qCurTg(), priv:document.getElementById('txPriv').value };`);
+ok('个呼目标写进 txTg', p3.tg === 4601001, p3);
+ok('txPriv 置 1', p3.priv === '1', p3);
+
+const p4 = await ev(`
+  /* 从个呼切回组呼，priv 必须清回 0 */
+  txSetTarget(91, false);
+  return { tg:qCurTg(), priv:document.getElementById('txPriv').value };`);
+ok('切回组呼时 priv 清 0', p4.priv === '0' && p4.tg === 91, p4);
+
+const p5 = await ev(`
+  /* 实时活动里个呼行的 data-tg 必须是对方 ID，不是 dstId */
+  state.active.clear();
+  state.active.set('p1',{ key:'p1', tg:4614187, srcId:4601001, call:'BG7ABC', name:'',
+    alias:'', start:Math.floor(Date.now()/1000), rssi:null, slot:1, master:'', types:[],
+    priv:true, last:Date.now(), seen:Date.now() });
+  renderLive(true);
+  const row=document.querySelector('.live-row[data-k="p1"]');
+  return { tg:row&&row.dataset.tg, priv:row&&row.dataset.priv,
+           slot:row&&row.dataset.slot, pill:row&&row.querySelector('.tgpill').textContent };`);
+ok('个呼行的 data-tg = 对方 ID', p5.tg === '4601001', p5);
+ok('个呼行带 data-priv=1', p5.priv === '1', p5);
+ok('个呼行带时隙', p5.slot === '2', p5);
+ok('个呼行的角标写「个呼」', p5.pill === '个呼', p5);
+
+console.log('\n=== 10. 自定义主站 ===');
+const c1 = await ev(`
+  state.customHosts=[];
+  const e1=customHostAdd('my.hotspot.example');
+  const e2=customHostAdd('http://10.0.0.5:62031/');
+  const e3=customHostAdd('   ');
+  const e4=customHostAdd('a b c');
+  return { e1,e2,e3,e4, list:state.customHosts.map(x=>x.host+':'+x.port),
+           saved:JSON.parse(localStorage.getItem('dmr.customHosts')||'null') };`);
+ok('普通域名能存', c1.e1 === '', c1);
+ok('带协议和端口的地址被归一化', c1.e2 === '', c1);
+ok('空地址被拒', c1.e3 !== '', c1);
+ok('含空格被拒', c1.e4 !== '', c1);
+ok('自定义主站带自己的端口', c1.list.includes('10.0.0.5:62031'), c1);
+ok('已写入 localStorage', Array.isArray(c1.saved) && c1.saved.length === 2, c1);
+
+const c2 = await ev(`
+  const all=txHostData();
+  const mine=all.filter(x=>x.group==='my');
+  const hit=all.find(x=>x.host==='10.0.0.5');
+  return { n:mine.length, port:hit&&hit.port, first:all[0]&&all[0].group };`);
+ok('自定义主站进列表', c2.n === 2, c2);
+ok('列表里保留自定义端口', c2.port === '62031', c2);
+ok('自定义主站排在最前', c2.first === 'my', c2);
+
+const c3 = await ev(`
+  customHostDel('10.0.0.5');
+  return { n:state.customHosts.length, still:state.customHosts.some(x=>x.host==='10.0.0.5') };`);
+ok('能删除自定义主站', c3.n === 1 && c3.still === false, c3);
+
+const c4 = await ev(`
+  /* 选主站时端口要跟着条目走，不能一律写死 62031 */
+  customHostAdd('alt.example:62099');
+  const hit=txHostData().find(x=>x.host==='alt.example');
+  txHostPick(hit.host, hit.port);
+  return { host:document.getElementById('txHost').value,
+           port:document.getElementById('txPort').value };`);
+ok('选自定义主站时端口跟着走', c4.host === 'alt.example' && c4.port === '62099', c4);
+
+console.log('\n=== 11. 操作区话组改名 ===');
+/* 「发射到 46001 世界组」里的名字来自话组表，用户要能按自己的叫法改。
+ * 这一节确认：自定义名压过表里的名字、能清空恢复、只影响本机。 */
+const n1 = await ev(`
+  state.tgAlias={}; state.net='cn';
+  state.tg['46001']='世界组';
+  txSetTarget(46001, false);
+  const before=document.getElementById('txTgName').textContent;
+  tgRenameInline();
+  const inp=document.getElementById('txTgName');
+  const isInput=inp.tagName==='INPUT';
+  inp.value='全国直呼';
+  inp.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+  const after=document.getElementById('txTgName').textContent;
+  return { before, isInput, after, tag:document.getElementById('txTgName').tagName,
+           saved:JSON.parse(localStorage.getItem('dmr.tgAlias')||'null'),
+           tgName:tgName(46001), label:tgLabel(46001) };`);
+ok('改名前显示表里的名字', n1.before === '世界组', n1);
+ok('点一下变成输入框', n1.isInput === true, n1);
+ok('回车后显示新名字', n1.after === '全国直呼', n1);
+ok('提交后换回 span（id 不变）', n1.tag === 'SPAN', n1);
+ok('已写入 localStorage', n1.saved && n1.saved['46001'] === '全国直呼', n1);
+ok('tgName 走自定义名', n1.tgName === '全国直呼', n1);
+ok('tgLabel 也跟着变', n1.label === '全国直呼', n1);
+
+const n2 = await ev(`
+  /* 清空 → 恢复表里的名字 */
+  tgRenameInline();
+  const inp=document.getElementById('txTgName');
+  inp.value='';
+  inp.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+  return { txt:document.getElementById('txTgName').textContent,
+           saved:JSON.parse(localStorage.getItem('dmr.tgAlias')||'{}'),
+           name:tgName(46001) };`);
+ok('清空后恢复表里的名字', n2.txt === '世界组' && n2.name === '世界组', n2);
+ok('清空后别名被删掉', !('46001' in (n2.saved || {})), n2);
+
+const n3 = await ev(`
+  /* 个呼没有话组名可改，不能误触 */
+  state.tgAlias={};
+  txSetTarget(4601001, true);
+  const before=document.getElementById('txTgName').textContent;
+  tgRenameInline();
+  return { editing:document.getElementById('txTgName').tagName, before };`);
+ok('个呼时拒绝改名', n3.editing === 'SPAN', n3);
+
 console.log(`\n================  ${pass} 通过 / ${fail} 失败  ================`);
 ws.close(); chrome.kill();
 await sleep(300);

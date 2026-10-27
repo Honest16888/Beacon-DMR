@@ -123,6 +123,28 @@ public final class DmrTransmitter {
         this.flco = flco;
         this.session = session;
 
+        /* ★ 每次发射都要把 AGC 状态清零。
+         *
+         * 这些字段挂在对象上，而对象是随引擎活着的 —— 不重置的话：
+         *   · agcFrames 只增不减，`agcFrames < AGC_FAST_FRAMES` 这段快速收敛
+         *     **只有开机后第一次 PTT 才会走到**，之后每次发射都从上一通残留的
+         *     agcGain 起步，按 1 秒的慢速收敛；
+         *   · 上一通大声说完、这一通轻声开口 → 头一秒被压得太轻；
+         *     上一通轻声、这一通大声 → 头一秒直接顶到软限幅。
+         * 而「呼号」恰恰就在这一秒里，听感是「一开口听不清、发炸」。
+         *
+         * 滤波器状态（hpX1 等）不重置：那是连续信号的状态，清零反而会在
+         * 块边界造出一个阶跃。 */
+        agcGain = 1.0f;
+        rmsAvg = 0f;
+        agcFrames = 0;
+        /* 噪声门也要重估：上一通可能在嘈杂环境、这一通在安静房间，
+         * 沿用旧的噪声底会一开口就把人声当噪声压掉。 */
+        ngFloor = 0f;
+        ngGain = 1.0f;
+        ngPrev = 1.0f;
+        ngHold = 0;
+
         // ---- 打开音频输入 ----
         int rate = TARGET_RATE;
         int minBuf = AudioRecord.getMinBufferSize(rate,
@@ -306,9 +328,16 @@ public final class DmrTransmitter {
                 System.arraycopy(raw, 0, pcm, 0, FRAME_SAMPLES);
             }
 
+            /* 链序：高通 → 高频补偿 → 量电平 → AGC。
+             *
+             * 「量电平」单独抽出来，是因为 AGC 必须知道**处理前**这一帧有多响：
+             * 拿处理后的结果去反推增益，高通和 EQ 的衰减会被算进「信号很轻」里，
+             * 增益就会一路偏高。 */
             highPass(pcm);   /* 切掉 280 Hz 以下：低频是 AMBE 最大的比特黑洞 */
-            presence(pcm);   /* 2.6 kHz +2 dB：补回被低频挤掉的辅音能量 */
-            agc(pcm);        /* 电平归一化，MIC 源各机差异太大 */
+            presence(pcm);   /* 2 kHz +3 dB：可懂度核心区，补回被低频挤掉的辅音能量 */
+            final float frameRms = rmsOf(pcm);
+            agc(pcm, frameRms);   /* 电平归一化，MIC 源各机差异太大 */
+            noiseGate(pcm, frameRms);  /* ★ 必须放在 AGC 之后 */
 
             if (listener != null) listener.onLevel(levelOf(pcm));
 
@@ -388,12 +417,19 @@ public final class DmrTransmitter {
      *  280 Hz 是「低频糊」和「声音单薄」之间的折中。 */
     private static final double HP_CUTOFF_HZ = 280.0;
 
-    /** 高频补偿（RBJ peaking EQ）。AMBE 在低频过载时最先牺牲的是
-     *  2–3 kHz 的辅音能量，而可懂度几乎全靠这一段。+2 dB 是保守值：
-     *  再多 s/sh 会发刺，声码器带宽也只到 3400 Hz。 */
-    private static final double PK_FREQ_HZ = 2600.0;
-    private static final double PK_Q = 0.8;
-    private static final double PK_GAIN_DB = 2.0;
+    /** 高频补偿（RBJ peaking EQ）。
+     *
+     *  v2.0 打在 2600 Hz / +2 dB / Q 0.8。Q=0.8 时带宽 = f0/Q = 3250 Hz，
+     *  实际是从 1 kHz 到 4.2 kHz 一个很宽的缓抬 —— 重心偏高。
+     *  2.6 kHz 以上主要是 s/sh 的齿音，AMBE+2 在这一段最容易把它编成刺耳的
+     *  噪声；而真正决定「字咬得清不清」的是 **1–2.5 kHz**（第二共振峰 F2
+     *  的过渡段），那里才是元音之间互相区分的依据。
+     *
+     *  v2.1 下移到 2000 Hz / +3 dB / Q 0.9：带宽 2222 Hz，覆盖 900–3100 Hz，
+     *  正好压在可懂度核心上，又不往齿音区堆能量。 */
+    private static final double PK_FREQ_HZ = 2000.0;
+    private static final double PK_Q = 0.9;
+    private static final double PK_GAIN_DB = 3.0;
 
     private final float hpB0, hpB1, hpB2, hpA1, hpA2;
     private final float pkB0, pkB1, pkB2, pkA1, pkA2;
@@ -479,10 +515,16 @@ public final class DmrTransmitter {
     private float agcGain = 1.0f;
     private float rmsAvg = 0f;
     private int agcFrames = 0;
-    /** 目标 RMS，约 −18 dBFS。原来按峰值 20000（−4 dBFS）归一，
-     *  峰值被爆破音和残余低频主导，语音主体实际只有 −20 dBFS 左右，
-     *  声码器拿到的信号偏轻，量化噪声占比上升，也是「糊」的一个来源。 */
-    private static final float AGC_TARGET_RMS = 4000f;
+    /** 目标 RMS，约 −16 dBFS。
+     *
+     *  v2.0 用的是 4000（−18.3 dBFS）。调高到 5200 的依据来自声码器自检：
+     *  vocoder_jni.cpp 的 makeSpeechLike() 把测试信号归一化到**峰值 24000**，
+     *  注释写的是「留 3 dB 余量，避免定点分析前端溢出」—— 那是这个 IMBE
+     *  定点前端验证过的工作点。按语音 12 dB 峰值因数反推，RMS 4000 对应
+     *  峰值约 15900，比工作点低 4 dB：定点前端的有效位没用满，量化噪声占比
+     *  偏高，听感就是「闷、糊」。5200 对应峰值约 20800（−3.9 dBFS），
+     *  仍在软限幅拐点（−0.7 dBFS）之下，既吃满分辨率又不削波。 */
+    private static final float AGC_TARGET_RMS = 5200f;
     /** 高通砍掉 14 dB 低频能量后，需要更大的补偿量才追得回来 */
     private static final float AGC_MAX = 8.0f;        // 最多提 18 dB
     /** 允许的衰减量。只提不压的话，MIC 电平偏高的机器会一路顶到满量程 ——
@@ -495,35 +537,44 @@ public final class DmrTransmitter {
     private static final float AGC_FAST = 0.50f;
     /** 稳态平滑系数：0.02 ≈ 1 s 时间常数，慢到不会跟着音节走 */
     private static final float AGC_SLOW = 0.02f;
+    /** 电平上升的平滑系数（≈ 80 ms）。
+     *
+     *  ★ 这里必须和 AGC_SLOW 不对称，这是 v2.1 修掉的第二个毛病。
+     *  原来上升和下降共用 AGC_SLOW：说一句话，中间的停顿让检测器按 1 秒
+     *  的速率往下掉，下一个词回来时又要 1 秒才追上 —— 听感是「每个词之间
+     *  音量塌一下」，而这恰好就是「不清晰」的主因之一。
+     *  改成「上升快、下降慢」之后，检测器记住的是**这段说话的峰值电平**，
+     *  短停顿不会把它带下去；真遇到持续更大的电平（换人、换机器）也能
+     *  在 80 ms 内跟上。这是所有电台电平器的标准做法。 */
+    private static final float AGC_RISE = 0.25f;
 
     /** 电平归一化（不是压缩器）。
      *
      *  手机 MIC 源的电平差异能到 20 dB：同样正常说话，有的设备 RMS 800，
      *  有的 8000。AMBE 对输入电平很敏感，太轻的输入编出来又闷又糊。
      *
-     *  三个设计点，每个都对应一种失败形态：
+     *  四个设计点，每个都对应一种失败形态：
      *    · **以只提不压为主，超出目标 10 dB 才压** —— 压会损失动态，
      *      语音变平、辨识度下降；但不压的话电平高的机器会顶穿满量程，
      *      旧代码在正常说话时就能削掉几百个样本；
-     *    · **RMS 平滑到 1 s** —— 逐帧 RMS 跟着音节包络（3~5 Hz）抖，
-     *      增益跟着抖就是「抽气」，这是 AGC 最典型的失败；
+     *    · **电平检测上升快、下降慢** —— 见 AGC_RISE 的注释。对称的慢速
+     *      平滑会让每个词之间音量塌陷；
      *    · **限幅放在输出端，不进增益环** —— 用瞬时峰值去压增益，
      *      一个爆破音就把整句电平拉下来，下一帧再抬回去，来回摆 10 dB。
      *      改成增益只管慢电平，峰值交给软限幅（0.92 以上才动手），
      *      两者互不干扰。
+     *
+     *  @param frameRms 本帧在**滤波之后、增益之前**的 RMS，由 txLoop 量好传进来
      */
-    private void agc(short[] pcm) {
-        double sum = 0;
-        for (int i = 0; i < pcm.length; i++) {
-            int s = pcm[i];
-            sum += (double) s * s;
-        }
-        float rms = (float) Math.sqrt(sum / pcm.length);
+    private void agc(short[] pcm, float frameRms) {
+        float rms = frameRms;
 
         if (agcFrames < 1) {
             rmsAvg = rms;                                   // 首帧直接对齐
         } else {
-            float a = (agcFrames < AGC_FAST_FRAMES) ? AGC_FAST : AGC_SLOW;
+            float a;
+            if (agcFrames < AGC_FAST_FRAMES) a = AGC_FAST;  // 开头 160 ms 抢到位
+            else a = (rms > rmsAvg) ? AGC_RISE : AGC_SLOW;  // 之后上升快、下降慢
             rmsAvg += (rms - rmsAvg) * a;
         }
         agcFrames++;
@@ -535,9 +586,31 @@ public final class DmrTransmitter {
             else if (want < AGC_MIN) want = AGC_MIN;
         }
 
-        /* 提升稍快（60 ms），回落慢（330 ms）—— 句首立刻起来，句尾不「抽气」 */
-        float k = (want > agcGain) ? 0.30f : 0.06f;
-        agcGain += (want - agcGain) * k;
+        /* ★ 首帧直接到位，不爬。
+         *
+         * 重置之后 agcGain=1.0，如果靠 slew 爬上去，第一帧只到 2.99×
+         * 而理想是 7.64×（差 8 dB）—— 要 160 ms 才追上。呼号就在这几帧里。
+         * 发射刚开始、还没有输出，直接赋值不会有任何爆音风险。
+         * 只有这一帧确实有声音（过了静音门限）才快照，否则一按 PTT
+         * 就先把增益顶到 8× 等着，开口第一下必炸。 */
+        if (agcFrames == 1 && rmsAvg > AGC_GATE_RMS) {
+            agcGain = want;
+        } else {
+            /* ★ 压增益要快、提增益要慢 —— v2.0 这里是反的。
+             *
+             * 原来写 `(want > agcGain) ? 0.30f : 0.06f`：需要**提**增益
+             * （信号变轻）时快，需要**压**增益（信号变响）时慢。
+             * 后果是声音突然变大时增益压不下来 —— 仿真里超出稳态
+             * 10~14 dB 并持续 300 ms，听感就是「一开口发炸」，
+             * 而且这段会被软限幅狠狠压平，AMBE 编出来更糊。
+             *
+             * 反过来才对：信号变响 → 快速压下去（≈50 ms），
+             * 信号变轻 → 慢慢提上来（≈250 ms，免得把底噪抽上来）。
+             * 提得慢这件事本来也不吃亏：电平检测器已经做成「上升快、
+             * 下降慢」，它自己就记住了说话的峰值电平。 */
+            float k = (want < agcGain) ? 0.35f : 0.08f;
+            agcGain += (want - agcGain) * k;
+        }
 
         if (agcGain > 0.99f && agcGain < 1.02f) return;   // 基本是 1 倍就别白算一遍
 
@@ -558,11 +631,97 @@ public final class DmrTransmitter {
         }
     }
 
-    private static int levelOf(short[] pcm) {
+    /* ---------------- 噪声门（下行扩展器） ----------------
+     *
+     * 这是 v2.0 缺的那一级，也是「听感不干净」的直接来源。
+     *
+     * 链条是这样坏的：用户轻声说话 → AGC 判出 want = 7.4× → 增益 7.4 倍
+     * 应用到整段信号上，**包括词与词之间的麦克风本底噪声**。噪声底 −65 dBFS
+     * 抬到 −48 dBFS 送进声码器。AMBE+2 只有 2.45 kbps，它不区分「这是噪声」，
+     * 照样分配比特去编码，结果：
+     *   · 静音段被还原成一片嘶嘶声（声码器对无音帧本来就输出带通噪声）；
+     *   · 说话时有效比特被噪声分走，字咬不清。
+     * 商用 DMR 机在声码器前都有一级降噪 / 扩展器，这一版补上。
+     *
+     * 三个设计点，每个都对着一种失败形态：
+     *   · **放在 AGC 之后**。放前面的话 AGC 会把它压掉的噪声原样再提回来，
+     *     等于白做 —— 这是这类实现最常见的错。
+     *   · **保持窗 320 ms**。没有保持窗，词间低谷会让门反复开合，
+     *     听感是「吃字」；声母被削掉比有底噪难懂得多。
+     *   · **只压 18 dB，不静音**。全静音像断线，而且门一开一关会有喘息。
+     *     18 dB 足够把底噪压到声码器的噪声门限以下。
+     *
+     * 门限用**处理前**的 frameRms 判断：那是增益无关的量，AGC 怎么变
+     * 都不影响「这一帧到底是人声还是噪声」的判断；而压多少是个比值，
+     * 直接作用在 AGC 之后的信号上，两者互不干扰。
+     */
+    private float ngFloor = 0f;      // 噪声底估计（处理前电平）
+    private float ngGain = 1.0f;     // 当前门增益
+    private float ngPrev = 1.0f;     // 上一块的门增益，块内线性过渡用
+    private int   ngHold = 0;        // 保持窗剩余帧数
+
+    /** 门限 = 噪声底 + 9 dB。再高会开始吃轻声的声母 */
+    private static final float NG_THR_MULT = 2.8f;
+    /** 保持窗 16 帧 × 20 ms = 320 ms，覆盖词间停顿和塞音的闭合段 */
+    private static final int NG_HOLD_FRAMES = 16;
+    /** 开（≈30 ms）/ 关（≈230 ms）—— 开得快抢在声母前，关得慢不切气音 */
+    private static final float NG_OPEN = 0.55f;
+    private static final float NG_CLOSE = 0.08f;
+    /** 最大衰减。再多就不像「安静」而像「断线」了 */
+    private static final float NG_MAX_CUT_DB = 18f;
+
+    private void noiseGate(short[] pcm, float frameRms) {
+        /* 噪声底：下降快跟（0.35 ≈ 60 ms），上升极慢（0.0004 ≈ 50 s）。
+         * 上限锁在 AGC 语音电平估计的 30% —— 真实底噪总比语音低 10 dB 以上。
+         * 没有这个上限的话，一段一直不停顿的长讲话会让估计值一路爬到
+         * 语音电平上，门就永远不关了（这是降噪实现里最常见的退化）。 */
+        float cap = rmsAvg * 0.30f;
+        if (cap < 1f) cap = 1f;
+        if (ngFloor < 1f) ngFloor = Math.max(frameRms, 1f);
+        else if (frameRms < ngFloor) ngFloor += (frameRms - ngFloor) * 0.35f;
+        else ngFloor += (frameRms - ngFloor) * 0.0004f;
+        if (ngFloor > cap) ngFloor = cap;
+
+        float thr = ngFloor * NG_THR_MULT;
+
+        if (frameRms >= thr) ngHold = NG_HOLD_FRAMES;
+        else if (ngHold > 0) ngHold--;
+
+        float want = 1.0f;
+        if (ngHold <= 0 && frameRms > 1f && frameRms < thr) {
+            float cutDb = 20f * (float) Math.log10(thr / frameRms);
+            if (cutDb > NG_MAX_CUT_DB) cutDb = NG_MAX_CUT_DB;
+            want = (float) Math.pow(10.0, -cutDb / 20.0);
+        }
+
+        float k = (want > ngGain) ? NG_OPEN : NG_CLOSE;
+        ngGain += (want - ngGain) * k;
+
+        /* 两块的增益都基本是 1 就别白算一遍 */
+        if (ngGain > 0.999f && ngPrev > 0.999f) { ngPrev = ngGain; return; }
+
+        /* 块内线性过渡：直接从上一块的增益跳到这一块，会留下阶跃 —— 那是「咔」 */
+        final float step = (ngGain - ngPrev) / pcm.length;
+        float g = ngPrev;
+        for (int i = 0; i < pcm.length; i++) {
+            int v = (int) (pcm[i] * g);
+            if (v > 32767) v = 32767;
+            else if (v < -32768) v = -32768;
+            pcm[i] = (short) v;
+            g += step;
+        }
+        ngPrev = ngGain;
+    }
+
+    /** 一帧的 RMS。噪声门 / AGC / 电平条三处都用它，避免各算各的。 */
+    private static float rmsOf(short[] pcm) {
         long sum = 0;
         for (short s : pcm) sum += (long) s * s;
-        double rms = Math.sqrt(sum / (double) pcm.length);
-        int lv = (int) (rms / 32768.0 * 400);      // 经验缩放，满量程约 100
+        return (float) Math.sqrt(sum / (double) pcm.length);
+    }
+
+    private static int levelOf(short[] pcm) {
+        int lv = (int) (rmsOf(pcm) / 32768.0 * 400);      // 经验缩放，满量程约 100
         return Math.max(0, Math.min(100, lv));
     }
 
@@ -583,7 +742,15 @@ public final class DmrTransmitter {
             } else {
                 sinc = Math.sin(2 * Math.PI * cutoffNorm * x) / (Math.PI * x);
             }
-            double w = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / m);   // Hann 窗
+            /* Hamming 窗，不是 Hann。
+             *
+             * 两者主瓣宽度差不多（过渡带都约 3.2·fs/N），但阻带差 12 dB：
+             * Hann 只有 −31 dB，Hamming 有 −43 dB。这条通道的任务是压住
+             * 4 kHz 以上、别让它折叠回话带 —— 手机 MIC 在 4–8 kHz 的能量
+             * 一点不少，−31 dB 意味着折叠回来的混叠只比原信号低 31 dB，
+             * 落在 1–4 kHz 里就是一层持续的「沙沙」，而这一段正是可懂度
+             * 核心区。多花 0 dB 算力换 12 dB 混叠抑制，很划算。 */
+            double w = 0.54 - 0.46 * Math.cos(2 * Math.PI * i / m);   // Hamming 窗
             h[i] = (float) (sinc * w);
             sum += h[i];
         }
