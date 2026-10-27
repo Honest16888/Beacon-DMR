@@ -452,6 +452,55 @@ const c4 = await ev(`
            port:document.getElementById('txPort').value };`);
 ok('选自定义主站时端口跟着走', c4.host === 'alt.example' && c4.port === '62099', c4);
 
+/* v2.1 最初把「添加」按钮做成「把上面 #txHost 里填的地址存下来」，
+ * 但列表只在面板打开 / 搜索框输入时重绘 —— 在地址框里打字不重绘，
+ * 于是那个按钮永远不出现，用户看到的是「请先填地址」，功能等于没做。
+ * v2.2 改成底部自带输入框，这两组用例锁死它。 */
+const c5 = await ev(`
+  state.customHosts=[];
+  txHostPanel(true);
+  const inp=document.getElementById('txHostNew');
+  if(!inp) return { missing:true };
+  inp.value='self.example:62100';
+  const add=document.querySelector('#txHostBody [data-add]');
+  if(!add) return { missing:'btn' };
+  add.click();
+  return { missing:false,
+           host:document.getElementById('txHost').value,
+           port:document.getElementById('txPort').value,
+           n:state.customHosts.length,
+           list:state.customHosts.map(x=>x.host+':'+x.port),
+           hidden:document.getElementById('txHostList').hidden };`);
+ok('面板底部有自带输入框', c5.missing === false, c5);
+ok('点「添加」把地址填进主站框', c5.host === 'self.example', c5);
+ok('端口用地址里写的那个', c5.port === '62100', c5);
+ok('已存进「我的主站」', c5.n === 1 && c5.list[0] === 'self.example:62100', c5);
+ok('添加后自动收起面板', c5.hidden === true, c5);
+
+const c6 = await ev(`
+  /* 手打地址的人打完就想回车，不该逼他去找按钮 */
+  txHostPanel(true);
+  const inp=document.getElementById('txHostNew');
+  inp.value='enter.example';
+  inp.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+  return { host:document.getElementById('txHost').value,
+           port:document.getElementById('txPort').value,
+           n:state.customHosts.length };`);
+ok('回车也能添加', c6.host === 'enter.example', c6);
+ok('没写端口时用默认 62031', c6.port === '62031', c6);
+ok('回车添加也落库', c6.n === 2, c6);
+
+const c7 = await ev(`
+  /* 空输入不能把当前主站冲掉 */
+  txHostPanel(true);
+  const before=document.getElementById('txHost').value;
+  const inp=document.getElementById('txHostNew');
+  inp.value='   ';
+  document.querySelector('#txHostBody [data-add]').click();
+  return { before, after:document.getElementById('txHost').value,
+           n:state.customHosts.length };`);
+ok('空输入不动当前主站', c7.after === c7.before && c7.n === 2, c7);
+
 console.log('\n=== 11. 操作区话组改名 ===');
 /* 「发射到 46001 世界组」里的名字来自话组表，用户要能按自己的叫法改。
  * 这一节确认：自定义名压过表里的名字、能清空恢复、只影响本机。 */

@@ -61,6 +61,23 @@ namespace {
 
 pthread_mutex_t g_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* ★ 编码、解码各一把锁，不共用。
+ *
+ * 原来两者共用 g_lock —— 等于把「本来已经分开的两个实例」又串行化了。
+ * 文件头注释第 4 条专门说了「编码与解码各持一个实例，分开后互不干扰」，
+ * 但一把全局锁让这个设计白做了。
+ *
+ * 后果是实打实的：发射线程每 20 ms 要 encode 一次；接收线程每收一个包要
+ * decode **3 次**（DmrRx.decode 里的 3 帧循环），包是 60 ms 一个，
+ * 同时收多个话组还要乘上话组数。接收一解码，发射就被挡住 ——
+ * 发射线程追不上音频时钟，AudioRecord 的缓冲开始堆积，
+ * 追上时又把几帧连着发出去。对方听到的就是「话音断续」。
+ *
+ * 两个实例没有共享状态（见注释 4），各用一把锁是安全的，也不会死锁：
+ * 任何路径都不会同时持有两把。 */
+pthread_mutex_t g_encLock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t g_decLock = PTHREAD_MUTEX_INITIALIZER;
+
 void          *g_handle  = nullptr;   /* dlopen 句柄 */
 VocoderHandle  g_enc     = nullptr;   /* 编码专用实例 */
 VocoderHandle  g_dec     = nullptr;   /* 解码专用实例 */
@@ -359,10 +376,10 @@ Java_net_beacon_dmr_vocoder_Vocoder_nativeEncode(JNIEnv *env, jclass,
     if (env->GetArrayLength(jpcm) < PCM_FRAME_SAMPLES) return -2;
     if (env->GetArrayLength(jout) < CODEC_FRAME_BYTES) return -3;
 
-    pthread_mutex_lock(&g_lock);
+    pthread_mutex_lock(&g_encLock);
 
     jshort *pcm = env->GetShortArrayElements(jpcm, nullptr);
-    if (pcm == nullptr) { pthread_mutex_unlock(&g_lock); return -4; }
+    if (pcm == nullptr) { pthread_mutex_unlock(&g_encLock); return -4; }
 
     uint8_t codec[32];
     memset(codec, 0, sizeof(codec));
@@ -371,11 +388,11 @@ Java_net_beacon_dmr_vocoder_Vocoder_nativeEncode(JNIEnv *env, jclass,
     env->ReleaseShortArrayElements(jpcm, pcm, JNI_ABORT);   /* 只读，不写回 */
 
     jbyte *out = env->GetByteArrayElements(jout, nullptr);
-    if (out == nullptr) { pthread_mutex_unlock(&g_lock); return -5; }
+    if (out == nullptr) { pthread_mutex_unlock(&g_encLock); return -5; }
     memcpy(out, codec, CODEC_FRAME_BYTES);
     env->ReleaseByteArrayElements(jout, out, 0);
 
-    pthread_mutex_unlock(&g_lock);
+    pthread_mutex_unlock(&g_encLock);
     return CODEC_FRAME_BYTES;
 }
 
@@ -387,10 +404,10 @@ Java_net_beacon_dmr_vocoder_Vocoder_nativeDecode(JNIEnv *env, jclass,
     if (env->GetArrayLength(jcodec) < CODEC_FRAME_BYTES) return -2;
     if (env->GetArrayLength(jpcm) < PCM_FRAME_SAMPLES) return -3;
 
-    pthread_mutex_lock(&g_lock);
+    pthread_mutex_lock(&g_decLock);
 
     jbyte *codec = env->GetByteArrayElements(jcodec, nullptr);
-    if (codec == nullptr) { pthread_mutex_unlock(&g_lock); return -4; }
+    if (codec == nullptr) { pthread_mutex_unlock(&g_decLock); return -4; }
 
     int16_t pcm[PCM_FRAME_SAMPLES];
     memset(pcm, 0, sizeof(pcm));
@@ -399,11 +416,11 @@ Java_net_beacon_dmr_vocoder_Vocoder_nativeDecode(JNIEnv *env, jclass,
     env->ReleaseByteArrayElements(jcodec, codec, JNI_ABORT);
 
     jshort *out = env->GetShortArrayElements(jpcm, nullptr);
-    if (out == nullptr) { pthread_mutex_unlock(&g_lock); return -5; }
+    if (out == nullptr) { pthread_mutex_unlock(&g_decLock); return -5; }
     memcpy(out, pcm, sizeof(pcm));
     env->ReleaseShortArrayElements(jpcm, out, 0);
 
-    pthread_mutex_unlock(&g_lock);
+    pthread_mutex_unlock(&g_decLock);
     return PCM_FRAME_SAMPLES;
 }
 
@@ -714,7 +731,12 @@ Java_net_beacon_dmr_vocoder_Vocoder_nativeProbe(JNIEnv *env, jclass, jstring jpa
 
 extern "C" JNIEXPORT void JNICALL
 Java_net_beacon_dmr_vocoder_Vocoder_nativeRelease(JNIEnv *, jclass) {
+    /* 三把锁都拿住再释放实例 —— 否则正在 encode/decode 的线程会用到已 free 的对象。
+     * 加锁顺序固定为 g_lock → g_encLock → g_decLock，而 encode/decode 只拿自己那一把，
+     * 不构成环，不会死锁。 */
     pthread_mutex_lock(&g_lock);
+    pthread_mutex_lock(&g_encLock);
+    pthread_mutex_lock(&g_decLock);
     if (g_destroy) {
         if (g_enc) { g_destroy(g_enc); g_enc = nullptr; }
         if (g_dec) { g_destroy(g_dec); g_dec = nullptr; }
@@ -724,5 +746,7 @@ Java_net_beacon_dmr_vocoder_Vocoder_nativeRelease(JNIEnv *, jclass) {
         g_handle = nullptr;
     }
     g_create = nullptr; g_destroy = nullptr; g_encode = nullptr; g_decode = nullptr;
+    pthread_mutex_unlock(&g_decLock);
+    pthread_mutex_unlock(&g_encLock);
     pthread_mutex_unlock(&g_lock);
 }

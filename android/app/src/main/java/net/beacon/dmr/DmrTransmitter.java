@@ -172,7 +172,16 @@ public final class DmrTransmitter {
          *
          * 32 帧 = 640 ms，足够吸收常见卡顿；代价只是 PTT 松开时最多多 0.6 秒
          * 未播完的尾巴（实际会被 release() 丢弃，不影响时延）。 */
-        int bufBytes = Math.max(minBuf, FRAME_SAMPLES * 2 * 32);
+        /* 采集缓冲：按「32 帧」算，而且必须把抽取倍数算进去。
+         *
+         * ★ v2.1 之前的算式是 `FRAME_SAMPLES * 2 * 32` —— 这个只在 8 kHz 直采时
+         * 等于 32 帧（640 ms）。走 48 kHz 抽取时一帧是 `160 × 6 = 960` 个采样，
+         * 同一个算式只给出 107 ms，**比设计意图小 6 倍**。缓冲一薄，
+         * 线程稍有停顿（GC、调度、编码慢一点）AudioRecord 就会覆盖还没读走的
+         * 采样 —— 丢的是麦克风侧的音频，主站那边表现为「话音断续」，
+         * 而网络统计里一个丢包都没有，非常难查。 */
+        final int decim = needResample ? (rate / TARGET_RATE) : 1;
+        int bufBytes = Math.max(minBuf, FRAME_SAMPLES * 2 * decim * 32);
 
         try {
             AudioFormat fmt = new AudioFormat.Builder()
@@ -279,6 +288,14 @@ public final class DmrTransmitter {
     /* ================================================================ */
 
     private void txLoop(MmdvmSession session, int rate, boolean resample) {
+        /* 发射是硬实时的：每 20 ms 必须交出一帧。默认优先级会被 UI 线程、
+         * 接收解码、GC 抢走 CPU，一旦某几帧迟到，音频时钟就对不上 ——
+         * 表现是「话音断续」。提到 URGENT_AUDIO 是音频线程的标准做法。 */
+        try {
+            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
+        } catch (Throwable ignored) {
+        }
+
         final int decim = resample ? (rate / TARGET_RATE) : 1;
         final int readPerFrame = FRAME_SAMPLES * decim;
 
@@ -291,10 +308,25 @@ public final class DmrTransmitter {
 
         byte[] pkt = new byte[DmrTx.PACKET_BYTES];
 
+        /* 连续编码失败计数，用来只在第一次失败时写一条日志，不刷屏 */
+        int encodeFail = 0;
+
         float[] fir = resample ? designLowPass(FIR_TAPS, 3200.0 / rate) : null;
         float[] hist = resample ? new float[FIR_TAPS] : null;
 
         long startedAt = System.currentTimeMillis();
+
+        /* ---- 发射健康度 ----
+         * 「话音断续」最常见的原因不是 DSP 算法，而是**线程跟不上音频时钟**：
+         * 每 20 ms 必须交出一帧，一旦某一帧的处理超过 20 ms，积压就开始了，
+         * AudioRecord 的缓冲被填满后直接覆盖未读采样 —— 丢的是麦克风侧音频，
+         * 网络上却一个包都不丢，极难从外部判断。
+         *
+         * 这里量的是**读完之后**的纯处理耗时（DSP + 声码器编码），不含阻塞读，
+         * 每 5 秒报一次。峰值一旦逼近 20 ms 就是 CPU 瓶颈，跟算法无关。 */
+        long procMaxMs = 0, procSumMs = 0;
+        int procFrames = 0;
+        long lastReport = startedAt;
 
         while (transmitting) {
             // 主站掉线就立刻停，避免对着空气喊
@@ -322,6 +354,8 @@ public final class DmrTransmitter {
             if (!transmitting) break;
             if (got < readPerFrame) continue;
 
+            final long procT0 = System.nanoTime();
+
             if (resample) {
                 decimate(raw, readPerFrame, pcm, fir, hist, decim);
             } else {
@@ -342,8 +376,42 @@ public final class DmrTransmitter {
             if (listener != null) listener.onLevel(levelOf(pcm));
 
             if (Vocoder.nativeEncode(pcm, ambe) != Vocoder.CODEC_BYTES) {
-                log("声码器编码失败，跳过该帧");
-                continue;
+                /* ★ 这里不能 continue。
+                 *
+                 * continue 会让这一帧「消失」，而 bundleFill 不前进 ——
+                 * 下一个帧直接顶上来，于是这个 60 ms 的包里装的是
+                 * 「第 n 帧 + 第 n+2 帧 + 第 n+3 帧」，时间轴被压缩了 20 ms。
+                 * 对方解码时就是一次跳变，连着发生就是「话音断续」。
+                 *
+                 * nativeEncode 只在成功时才写 ambe，所以失败时 ambe 里
+                 * 还是上一帧的内容 —— 直接沿用它，时间轴保持对齐，
+                 * 最多是重复了 20 ms 的音频，听不出来。
+                 */
+                encodeFail++;
+                if (encodeFail == 1) log("声码器编码失败，沿用上一帧");
+            } else {
+                encodeFail = 0;
+            }
+
+            /* ---- 健康度统计：纯处理耗时（不含阻塞读） ---- */
+            long procMs = (System.nanoTime() - procT0) / 1_000_000L;
+            procSumMs += procMs;
+            procFrames++;
+            if (procMs > procMaxMs) procMaxMs = procMs;
+            long nowMs = System.currentTimeMillis();
+            if (nowMs - lastReport >= 5000) {
+                float avg = procFrames > 0 ? (float) procSumMs / procFrames : 0f;
+                /* 20 ms 是每帧的预算。峰值超过预算 = 线程跟不上音频时钟，
+                 * 积压 → AudioRecord 覆盖未读采样 → 对方听到「断续」。 */
+                String verdict = (procMaxMs >= 20) ? "  ⚠ 超过 20ms 预算，会积压"
+                        : (procMaxMs >= 14 ? "  （接近预算）" : "");
+                log(String.format(java.util.Locale.US,
+                        "发射健康：%d 帧，处理 平均 %.1f ms / 峰值 %d ms（预算 20 ms）%s",
+                        procFrames, avg, procMaxMs, verdict));
+                procMaxMs = 0;
+                procSumMs = 0;
+                procFrames = 0;
+                lastReport = nowMs;
             }
 
             System.arraycopy(ambe, 0, bundle, bundleFill, Vocoder.CODEC_BYTES);
@@ -662,13 +730,17 @@ public final class DmrTransmitter {
 
     /** 门限 = 噪声底 + 9 dB。再高会开始吃轻声的声母 */
     private static final float NG_THR_MULT = 2.8f;
-    /** 保持窗 16 帧 × 20 ms = 320 ms，覆盖词间停顿和塞音的闭合段 */
-    private static final int NG_HOLD_FRAMES = 16;
-    /** 开（≈30 ms）/ 关（≈230 ms）—— 开得快抢在声母前，关得慢不切气音 */
-    private static final float NG_OPEN = 0.55f;
-    private static final float NG_CLOSE = 0.08f;
-    /** 最大衰减。再多就不像「安静」而像「断线」了 */
-    private static final float NG_MAX_CUT_DB = 18f;
+    /** 保持窗 30 帧 × 20 ms = 600 ms。
+     *
+     *  v2.1 最初是 16 帧（320 ms），**太短了**：真实说话词与词之间常有 300~500 ms
+     *  的停顿，保持窗一过门就关，下一个词的声母直接被压掉 —— 声码器把那截编成
+     *  静音，对方听到的就是「断续」。600 ms 覆盖绝大多数词间停顿，
+     *  只有真正的换气/句末才会关门，而噪声抑制本来就只需要在这些地方生效。 */
+    private static final int NG_HOLD_FRAMES = 30;
+    /** 关门 ≈ 200 ms。慢到不会切掉词尾的气音 */
+    private static final float NG_CLOSE = 0.10f;
+    /** 最大衰减 14 dB。再多就不像「安静」而像「断线」了 */
+    private static final float NG_MAX_CUT_DB = 14f;
 
     private void noiseGate(short[] pcm, float frameRms) {
         /* 噪声底：下降快跟（0.35 ≈ 60 ms），上升极慢（0.0004 ≈ 50 s）。
@@ -684,18 +756,33 @@ public final class DmrTransmitter {
 
         float thr = ngFloor * NG_THR_MULT;
 
-        if (frameRms >= thr) ngHold = NG_HOLD_FRAMES;
-        else if (ngHold > 0) ngHold--;
-
         float want = 1.0f;
-        if (ngHold <= 0 && frameRms > 1f && frameRms < thr) {
+        if (frameRms >= thr) {
+            ngHold = NG_HOLD_FRAMES;          // 有声音，开门并续期
+        } else if (ngHold > 0) {
+            ngHold--;                         // 保持期内继续全开
+        } else if (frameRms > 1f) {
             float cutDb = 20f * (float) Math.log10(thr / frameRms);
             if (cutDb > NG_MAX_CUT_DB) cutDb = NG_MAX_CUT_DB;
             want = (float) Math.pow(10.0, -cutDb / 20.0);
         }
 
-        float k = (want > ngGain) ? NG_OPEN : NG_CLOSE;
-        ngGain += (want - ngGain) * k;
+        /* ★ 开门是硬开，关门才平滑。
+         *
+         * 原来开门用 0.55 的系数，从 −14 dB 回到满增益要 ~70 ms ——
+         * 也就是**每个词的开头 70 ms 都被压着**。而声母（b/p/d/t/g/k）
+         * 本身就集中在头 30~60 ms，正好全被吃掉。声码器拿到一截几乎静音的
+         * 起音，会把它判成无声帧，对方听到的就是「字头没了、说话断续」。
+         *
+         * 硬开不会产生咔声：关门只发生在底噪上，那一刻的绝对电平已经很低
+         * （−55 dBFS × 0.2 ≈ −69 dBFS），从这么小的电平跳到语音的真实起音，
+         * 听到的就是起音本身，不是阶跃。 */
+        if (want > ngGain) {
+            ngGain = want;
+            ngPrev = want;                    // 连块内渐变也跳过，整块全开
+        } else {
+            ngGain += (want - ngGain) * NG_CLOSE;
+        }
 
         /* 两块的增益都基本是 1 就别白算一遍 */
         if (ngGain > 0.999f && ngPrev > 0.999f) { ngPrev = ngGain; return; }

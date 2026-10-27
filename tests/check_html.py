@@ -67,7 +67,7 @@ must = ['txRxOn','txRxVol','txRxVolVal','txRxJit','txRxJitVal','txBtnRxTest',
         # 国内 DMR 集成
         'segNet','netInfo','cn86Data','cnTgData','txNetHint','setNetName',
         # 收听页发射条（对讲页已取消）
-        'viewListen','ptxBar','txIdState','ptxTgName','txIdQuick','txHostQuick',
+        'viewListen','ptxBar','txIdState','txTgName','txIdQuick','txHostQuick',
         'pttTg','pttLbl','txHint',
         # 设置页「常见端口与注意事项」
         'setPortCard','setPortBadge','setPortGo','setPortList']

@@ -604,13 +604,17 @@ html[data-theme="dark"] .pickpanel{box-shadow:0 12px 30px rgba(0,0,0,.55)}
   width:26px;height:26px;border:0;border-radius:6px;background:transparent;
   color:var(--dim);cursor:pointer;font-size:12px;line-height:1;font-family:inherit}
 .pickdel:hover{background:var(--tx2);color:var(--tx)}
-/* 底部「存为我的主站」—— 用户刚手打完地址，顺手收进列表 */
-.pickfoot{padding:8px 10px;border-top:1px solid var(--border2)}
-.pickadd{width:100%;padding:8px 10px;border-radius:8px;cursor:pointer;
-  font-family:inherit;font-size:12px;font-weight:600;text-align:center;
+/* 底部「添加自定义主站」—— 自带输入框，不依赖上面那个地址框的状态 */
+.pickfoot{display:flex;gap:6px;padding:8px 10px;border-top:1px solid var(--border2)}
+.picknew{flex:1 1 auto;min-width:0;padding:7px 9px;border-radius:8px;
+  border:1px solid var(--border);background:var(--bg);color:var(--text);
+  font-size:12px;font-family:inherit;outline:none;transition:.15s}
+.picknew:focus{border-color:var(--accent);background:var(--panel)}
+.pickadd{flex:none;padding:7px 14px;border-radius:8px;cursor:pointer;
+  font-family:inherit;font-size:12px;font-weight:700;text-align:center;
   background:var(--accent2);border:1px solid var(--border);color:var(--accent)}
 .pickadd:hover{filter:brightness(.97)}
-.pickadd b{font-family:var(--mono);word-break:break-all}
+.pickadd:active{transform:translateY(1px)}
 .pickhint{display:block;font-size:11px;color:var(--dim);line-height:1.5}
 .txstat{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .pill{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:99px;
@@ -19935,6 +19939,29 @@ function customHostAdd(raw){
   store.set('customHosts',list);
   return '';
 }
+/* 从面板底部那个输入框读地址并添加。
+ * 加完顺手把它选成当前主站 —— 用户的意图就是「用这个地址」，不该让他再加一次。 */
+function txHostAddFromInput(){
+  const inp=txEl('txHostNew');
+  const raw=String((inp&&inp.value)||'').trim();
+  if(!raw){ toast('先填一个主站地址'); if(inp)try{inp.focus();}catch(e){} return; }
+  const err=customHostAdd(raw);
+  if(err){ toast(err); return; }
+
+  /* 归一化后的 host / port 从列表里反查，避免在这里重复写一遍解析逻辑 */
+  const norm=raw.replace(/^[a-z]+:\/\//i,'').replace(/\/+$/,'');
+  const m=norm.match(/^([^:\s]+)(?::(\d{1,5}))?$/);
+  const host=m?m[1]:norm;
+  const hit=(state.customHosts||[]).find(x=>x.host===host);
+  const port=(m&&m[2])||(hit&&hit.port)||DEF_CN_PORT;
+
+  const h=txEl('txHost'); if(h)h.value=host;
+  const p=txEl('txPort'); if(p)p.value=String(port);
+  txSave();
+  txFillHostList();
+  txHostPanel(false);
+  toast('已添加并选用 '+host+':'+port);
+}
 function customHostDel(host){
   const list=state.customHosts||[];
   const i=list.findIndex(x=>x.host===host);
@@ -19976,13 +20003,17 @@ function txFillHostList(){
         :row;
     }
   }
-  /* 底部固定一条「把当前填的地址存起来」—— 用户刚手打完地址，
-     顺手就能收进「我的主站」，下次不用再打。 */
-  const typed=cur&&!all.some(x=>x.host===cur);
+  /* 底部固定一条「添加自定义主站」，自带输入框。
+   *
+   * ★ v2.1 最初这里是「把上面填的地址存为我的主站」，靠渲染时读 #txHost 的值。
+   * 但 txFillHostList() 只在面板打开 / 搜索框输入时重绘，**在地址框里打字不会重绘**，
+   * 所以那个按钮永远不会出现 —— 用户看到的是「请先填地址」的提示，
+   * 于是「自定义服务器功能没生效」。
+   * 改成自带输入框，不依赖任何别的控件的状态，永远可用。 */
   html+='<div class="pickfoot">'
-    +(typed?'<button type="button" class="pickadd" data-add="1">'
-      +'＋ 把 <b>'+esc(cur)+'</b> 存为我的主站</button>'
-      :'<span class="pickhint">在上面的「主站地址」里填好地址，这里会出现「存为我的主站」</span>')
+    +'<input id="txHostNew" class="picknew" autocomplete="off" spellcheck="false"'
+    +' placeholder="自定义主站，如 my.dmr.cn:62031" aria-label="自定义主站地址">'
+    +'<button type="button" class="pickadd" data-add="1">添加</button>'
     +'</div>';
   body.innerHTML=html;
   /* 对讲页顶部那个快捷 <select> 用同一份数据，主站表拉回来之后一起刷新 */
@@ -20033,21 +20064,17 @@ function txHostWire(){
     const add=t.closest('[data-add]');
     if(add){
       e.stopPropagation();
-      const inp=txEl('txHost');
-      const raw=String((inp&&inp.value)||'').trim();
-      const err=customHostAdd(raw);
-      if(err){ toast(err); return; }
-      const h=txEl('txHost'); if(h)h.value=raw.replace(/^[a-z]+:\/\//i,'').replace(/:\d+$/,'');
-      const pEl=txEl('txPort');
-      const portM=raw.match(/:(\d{1,5})$/);
-      if(pEl&&portM)pEl.value=portM[1];
-      txSave();
-      txFillHostList();
-      toast('已存为我的主站');
+      txHostAddFromInput();
       return;
     }
     const row=t.closest('.pickrow');
     if(row)txHostPick(row.dataset.host, row.dataset.port);
+  });
+  /* 回车直接添加 —— 手打地址的人打完就想回车，不该强迫他去找按钮 */
+  if(body)body.addEventListener('keydown',e=>{
+    if(e.key==='Enter'&&e.target&&e.target.id==='txHostNew'){
+      e.preventDefault(); txHostAddFromInput();
+    }
   });
   const q=txEl('txHostQ');
   if(q)q.addEventListener('input',()=>txFillHostList());
@@ -23140,7 +23167,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.03';
+const PAGE_VER='2026.11.05';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
