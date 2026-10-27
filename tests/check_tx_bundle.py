@@ -149,21 +149,32 @@ def main():
        'zeroSpins 若在外层循环内声明，每次迭代都清零，保护永远不成立')
 
     print('\n=== 7. 用户麦克风增益的位置 ===')
-    # 增益若放在 AGC 之前，会被 AGC 原样抵消 —— 滑块能拖但声音不变，
-    # 这种「看起来在工作」的失效最难被发现，所以用结构检查钉住。
-    gpos = body.find('applyMicGain(pcm)')
-    ok('链里有 applyMicGain(pcm)', gpos >= 0)
-    ok('增益在 AGC 之后', gpos >= 0 and pos[3] >= 0 and gpos > pos[3],
-       '放在 AGC 之前会被它原样抵消，用户拖滑块听不出差别')
-    ok('增益在噪声门之后', gpos >= 0 and pos[4] >= 0 and gpos > pos[4],
-       '放在噪声门之前，抬增益会把已经被门压掉的底噪重新提回来')
-    # 电平读数也要在增益之后量，否则拖滑块时读数不动，同样会让人以为没生效
+    # 两个方向都不能错，错哪边都会「滑块能拖但没用」：
+    #   · 放在 AGC 之前  → AGC 把它原样抵消
+    #   · 放在软限幅之后 → 只能把已经失真的声音调小，毛刺一个不少
+    # v2.4.2 就是后者，用户反馈「−12 dB 好了一点但不够」。这里守住新结构。
+    m2 = re.search(r'private void agc\(.*?\n    \}', src, re.S)
+    agc_body = strip_comments(m2.group(0)) if m2 else ''
+    ok('能定位到 agc 方法体', bool(agc_body))
+
+    gpos = agc_body.find('agcGain * micGain')
+    ok('用户增益并进 AGC 的输出乘数', gpos >= 0,
+       '单独在 agc 之外乘，就是「限幅之后再乘」的老路')
+    kpos = agc_body.find('KNEE')
+    ok('软限幅在乘数之后', gpos >= 0 and kpos > gpos,
+       '限幅必须在用户增益之后：否则调小增益只减小音量，谐波一点没少')
+    ok('限幅介入有计数', 'st.limHits++' in agc_body,
+       '没有计数就分不清「前级削波」和「后级限幅」，两者处置方式相反')
+    ok('旧的分段增益已移除', 'applyMicGain' not in strip_comments(src),
+       '留着它就是限幅之后再乘，会重新引入 v2.4.2 的问题')
+
     lpos = body.find('listener.onLevel')
-    ok('发射电平在增益之后量', lpos >= 0 and gpos >= 0 and lpos > gpos,
+    apos = body.find('agc(pcm, frameRms, st)')
+    ok('发射电平在所有增益与限幅之后量',
+       lpos >= 0 and apos >= 0 and lpos > apos,
        '在增益之前量，用户调增益时读数不动，会以为滑块坏了')
-    ok('放大后走软限幅而不是直接截断',
-       'softLimit' in strip_comments(src) and 'SOFT_KNEE' in strip_comments(src),
-       '硬截断会削出方波，AMBE 编出来是破音')
+    ok('采集阶段有削波统计', 'countNearFull' in body,
+       '这是唯一能区分「手机 MIC 自己过载」和「我们后级搞炸」的测量点')
 
     print(f'\n================  {passed} 通过 / {failed} 失败  ================')
     return 0 if failed == 0 else 1

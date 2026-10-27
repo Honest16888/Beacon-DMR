@@ -1591,22 +1591,26 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
       <h3>🎙 发射（说给对方）</h3>
       <div class="rxrow">
         <div class="rxlbl"><b>麦克风增益</b><span>在自动电平的基础上再抬或压。自动电平先把声音拉到固定响度，
-          这一档是你自己的口味 —— 觉得对方听着小声就往右，觉得发炸就往左</span></div>
+          这一档是你自己的口味 —— 觉得对方听着小声就往右，觉得发炸就往左。
+          <b>往左不只是变小声，是真的少失真</b>（增益在限幅之前）</span></div>
         <div class="rxctl">
-          <input type="range" id="txMicGain" min="-12" max="12" step="1" value="0" aria-label="麦克风增益">
+          <input type="range" id="txMicGain" min="-24" max="12" step="1" value="0" aria-label="麦克风增益">
           <span class="mono" id="txMicGainVal">0 dB</span>
         </div>
       </div>
       <div class="rxrow">
-        <div class="rxlbl"><b>发射电平</b><span>按住 PTT 时实时显示当前送出语音的电平（dBFS）。
-          −16 附近是正常，超过 −6 就快削波了</span></div>
+        <div class="rxlbl"><b>发射电平</b><span>本次发射的峰值电平（dBFS），每按一次 PTT 重新起算。
+          −16 附近是正常，超过 −6 就贴着满量程了</span></div>
         <div class="rxctl"><span class="mono wide" id="txLevelDb">—</span></div>
       </div>
       <div class="txnote">
-        增益作用在<b>自动电平之后</b> —— 放在它前面会被自动电平原样抵消，
-        你会觉得「调了没反应」。<br>
+        增益作用在<b>自动电平之后、软限幅之前</b> —— 放在自动电平前面会被它原样抵消，
+        你会觉得「调了没反应」；放在软限幅后面则只能把已经失真的声音调小，毛刺一个不少。<br>
         往右调太多会触发<b>软限幅</b>：不会硬削出方波，但声音会变「平」，
-        对方听上去就是「一直很响、没有起伏」。<b>−6 ~ +6 dB 是比较安全的区间。</b>
+        对方听上去就是「一直很响、没有起伏」。<b>−6 ~ +6 dB 是比较安全的区间。</b><br>
+        如果已经拉到 −24 dB 对方还说炸，问题多半不在这一级 ——
+        看松手后的<b>发射小结</b>：<b>采集削波</b>高是手机话筒本身过载（离远点），
+        <b>限幅</b>高才是我们这边太激进。
       </div>
     </div>
 <div class="txcard">
@@ -19375,7 +19379,7 @@ const state = {
   awakeOn:true, scanResume:true,
   /* 通联（对讲页）的接收参数 —— 独立于「收听」页那套，因为走的是另一条链路 */
   rxOn:true, rxVol:1, rxJit:240,
-  /* 发射侧的用户麦克风增益（dB，−12 ~ +12）。
+  /* 发射侧的用户麦克风增益（dB，−24 ~ +12）。
      和上面那套接收参数放一起是因为它们在同一个卡片里，但作用点完全不同：
      这个作用在**自动电平之后**，抬的是真正送进声码器的音量。 */
   micGain:0,
@@ -21866,7 +21870,7 @@ function rxStatsTick(){
     const mg=Number(st.micGain);
     if(isFinite(mg)){
       micGainSynced=true;
-      const v=Math.max(-12,Math.min(12,Math.round(mg)));
+      const v=Math.max(-24,Math.min(12,Math.round(mg)));
       if(Math.abs(v-(Number(state.micGain)||0))>=0.5){
         state.micGain=v; store.set('micGain',v); micGainSyncUI();
       }
@@ -22243,7 +22247,7 @@ function rxBind(){
   /* 麦克风增益。用 input 而不是 change —— 拖着滑块就要能立刻听到差别，
      松手才生效会让人以为没反应。原生侧只是改一个 float，代价可忽略。 */
   on('txMicGain','input',e=>{
-    state.micGain=Math.max(-12,Math.min(12,parseInt(e.target.value,10)||0));
+    state.micGain=Math.max(-24,Math.min(12,parseInt(e.target.value,10)||0));
     store.set('micGain',state.micGain);
     micGainSyncUI(); micGainApply();
   });
@@ -23042,6 +23046,11 @@ window.onDmrEvent=function(json){
            直接清成「—」等于把刚测到的东西扔了 */
         const d=txEl('txLevelDb');
         if(d){ d.classList.remove('on'); d.classList.add('off'); }
+      }else{
+        /* 按下 PTT = 新一次测量开始。原生侧峰值是从这次发射起算的，
+           界面必须同步清空，否则会短暂显示上一通的峰值，让人以为一开口就这么响。 */
+        const d=txEl('txLevelDb');
+        if(d){ d.textContent='—'; d.classList.remove('on'); d.classList.add('off'); }
       }
       hdGate();   /* 半双工闸门：发射时掐掉 HOSE，免得听见自己绕网络回来的声音 */
       txSync();
@@ -23295,7 +23304,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.11';
+const PAGE_VER='2026.11.12';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
@@ -23816,7 +23825,7 @@ function boot(){
   state.rxVol=Math.max(0,Math.min(2,Number(store.get('rxVol',1))||1));
   state.rxJit=Math.max(0,Math.min(600,Number(store.get('rxJit',240))||0));
   /* 麦克风增益：0 是默认（不动），范围由原生侧再夹一次 */
-  state.micGain=Math.max(-12,Math.min(12,Number(store.get('micGain',0))||0));
+  state.micGain=Math.max(-24,Math.min(12,Number(store.get('micGain',0))||0));
   state.recOn=store.get('recOn',true);
   /* 网络选择要早于订阅载入 —— 两套网络的订阅列表是分开存的 */
   state.net=store.get('net','bm')==='cn'?'cn':'bm';

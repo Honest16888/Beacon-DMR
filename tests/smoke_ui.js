@@ -588,7 +588,7 @@ const mg1 = await ev(`
   return { has:!!s, min:s&&s.min, max:s&&s.max, step:s&&s.step, val:s&&s.value,
            lbl:document.getElementById('txMicGainVal').textContent,
            lvl:document.getElementById('txLevelDb').textContent };`);
-ok('增益滑块存在且范围 −12 ~ +12', mg1.has && mg1.min === '-12' && mg1.max === '12', mg1);
+ok('增益滑块存在且范围 −24 ~ +12', mg1.has && mg1.min === '-24' && mg1.max === '12', mg1);
 ok('默认 0 dB 且读数显示 0 dB', mg1.val === '0' && mg1.lbl === '0 dB', mg1);
 ok('发射电平初始为 —', mg1.lvl === '—', mg1);
 
@@ -614,13 +614,17 @@ ok('负增益显示 −9 dB（不带正号）', mg3.neg.lbl === '-9 dB' && mg3.n
 ok('回到 0 后熄灭且显示 0 dB', mg3.zero === false && mg3.lbl === '0 dB', mg3);
 
 const mg4 = await ev(`
-  /* 越界值必须被夹住，不能把 30 原样送进原生 */
-  state.micGain=99; micGainSyncUI(); const hi=state.micGain;
-  state.micGain=0; micGainSyncUI();
+  /* 越界值必须被夹住，不能把 30 / −30 原样送进原生 */
   const s=document.getElementById('txMicGain');
   s.value='30'; s.dispatchEvent(new Event('input',{bubbles:true}));
-  return { hi, clamped:state.micGain };`);
-ok('越界值被夹到 +12', mg4.clamped === 12, mg4);
+  const hi=state.micGain;
+  s.value='-30'; s.dispatchEvent(new Event('input',{bubbles:true}));
+  const lo=state.micGain;
+  s.value='0'; s.dispatchEvent(new Event('input',{bubbles:true}));
+  return { hi, lo };`);
+ok('越界值被夹到 +12', mg4.hi === 12, mg4);
+/* 下限必须真的到 −24：v2.4.2 只到 −12，用户拉到底仍然发炸 */
+ok('下限夹到 −24（不是 −12）', mg4.lo === -24, mg4);
 
 const mg5 = await ev(`
   /* level 事件带 db 字段 → 发射电平读数跟手 */
@@ -634,6 +638,14 @@ const mg5 = await ev(`
 ok('发射电平保留一位小数：−13.3 dB', mg5.on.txt === '-13.3 dB', mg5);
 ok('发射中读数点亮', mg5.on.hot === true, mg5);
 ok('松手后变暗但保留读数', mg5.off.dim === true && mg5.off.txt === '-13.3 dB', mg5);
+
+const mg6 = await ev(`
+  /* 再按一次 PTT = 新一次测量，读数必须先清空。
+     否则会短暂显示上一通的峰值，让人以为一开口就这么响。 */
+  window.onDmrEvent(JSON.stringify({type:'tx',on:true,dstId:91}));
+  const d=document.getElementById('txLevelDb');
+  return { txt:d.textContent, on:d.classList.contains('on') };`);
+ok('按下 PTT 清空上一通的读数', mg6.txt === '—' && mg6.on === false, mg6);
 
 console.log(`\n================  ${pass} 通过 / ${fail} 失败  ================`);
 ws.close(); chrome.kill();

@@ -64,18 +64,28 @@ public final class DmrTransmitter {
 
     /* ---- 用户麦克风增益 ----
      *
-     * ★ 必须作用在 AGC **之后**。
+     * ★ 必须在 AGC 算完增益**之后**、软限幅**之前**。
      *
-     * AGC 的目标电平是固定的（−16 dBFS），你在它前面放大 6 dB，
-     * 它就在后面把增益降 6 dB —— 输出一点变化都没有。用户拖动滑块
-     * 发现「完全没反应」，比没有这个功能更糟。
+     * 这两个约束看起来矛盾，其实说的是两件不同的事：
      *
-     * 放在 AGC 之后 = 「在自动电平的基础上再抬/压」，
-     * 滑块动多少、听感就变多少。 */
-    private static final float MIC_GAIN_MIN_DB = -12f;
+     *   · 不能在 AGC 之前 —— AGC 的目标电平固定（−16 dBFS），你在它前面
+     *     放大 6 dB，它就在后面把增益降 6 dB，输出一个 bit 都不变，
+     *     滑块能拖但没反应；
+     *   · 不能在软限幅之后 —— 限幅产生的谐波已经烙在信号里了，
+     *     再整体乘小只是把「炸」的音量调小，毛刺一个没少。
+     *
+     * v2.4.2 把增益放在限幅之后，用户反馈「−12 dB 好了一点但不够」——
+     * 就是这个原因。现在把它并进 AGC 的输出乘数（{@code agcGain * micGain}），
+     * 乘完再限幅：调小增益 → 送进限幅的信号本来就小 → 限幅根本不介入 →
+     * 失真跟着一起消失，而不只是变小声。 */
+    private static final float MIC_GAIN_MIN_DB = -24f;
     private static final float MIC_GAIN_MAX_DB = 12f;
-    /** 软限幅的膝点：约 0.79 满量程，低于它的样本原样通过 */
-    private static final float SOFT_KNEE = 26000f;
+    /** 前级削波判定线：|sample| 到这个值就算贴满量程。
+     *
+     *  取 32500 而不是 32767，是为了抓住「已经贴顶但差几个 LSB」的那部分 ——
+     *  手机 MIC 过载时波形顶端是平的，采样值会在满量程附近反复出现，
+     *  只数正好等于 32767 会明显低估。 */
+    private static final int CLIP_LEVEL = 32500;
 
     public interface Listener {
         void onTxStart(int dstId);
@@ -130,10 +140,10 @@ public final class DmrTransmitter {
     }
 
     /**
-     * 设置麦克风增益（dB），−12 ~ +12。发射过程中改也立即生效。
+     * 设置麦克风增益（dB），−24 ~ +12。发射过程中改也立即生效。
      *
-     * <p>作用点在 AGC <b>之后</b>：AGC 的目标电平固定，放在它前面会被原样抵消，
-     * 用户会以为滑块坏了。见 {@link #applyMicGain} 的说明。
+     * <p>作用点见 {@link #MIC_GAIN_MIN_DB} 上方的说明：AGC 算完增益之后、
+     * 软限幅之前。所以调小它是真的「少失真」，不只是「变小声」。
      */
     public void setMicGainDb(float db) {
         if (db < MIC_GAIN_MIN_DB) db = MIC_GAIN_MIN_DB;
@@ -347,6 +357,15 @@ public final class DmrTransmitter {
         long pktCount, pktEarly, pktLate;
         int gapMaxMs; long lastPktNano;
         int encodeFail;
+        /* ---- 电平/失真三兄弟 ----
+         * 这三个数合起来能唯一确定「发炸」到底发生在哪一级，缺一个就分不清：
+         *   inClip   大 → 手机 MIC 本身过载（采集阶段就削平了，后级救不回来）
+         *   limHits  大 → AGC 之后的信号顶到软限幅（我们后级的问题，调增益有效）
+         *   两个都小   → 失真不在电平上，得往低频/声码器方向查
+         */
+        long inSamples, inClip;        // 采集阶段：样本总数 / 贴满量程的样本数
+        long limSamples, limHits;      // 限幅级：样本总数 / 触发软限幅的样本数
+        float outPeakDb = -120f;       // 本次发射的峰值（dBFS），送进编码器之前
     }
 
     private void txLoop(MmdvmSession session, int rate, boolean resample) {
@@ -462,24 +481,37 @@ public final class DmrTransmitter {
                 System.arraycopy(raw, 0, pcm, 0, FRAME_SAMPLES);
             }
 
-            /* 链序：高通 → 高频补偿 → 量电平 → AGC。
+            /* 链序：高通 → 高频补偿 → 量电平 → AGC（含用户增益 + 软限幅）→ 噪声门。
              *
              * 「量电平」单独抽出来，是因为 AGC 必须知道**处理前**这一帧有多响：
              * 拿处理后的结果去反推增益，高通和 EQ 的衰减会被算进「信号很轻」里，
              * 增益就会一路偏高。 */
             highPass(pcm);   /* 切掉 280 Hz 以下：低频是 AMBE 最大的比特黑洞 */
             presence(pcm);   /* 2 kHz +3 dB：可懂度核心区，补回被低频挤掉的辅音能量 */
+
+            /* 前级削波统计：read() 出来的**原始采样**有多少已经贴着满量程。
+             *
+             * 这是唯一能区分「手机 MIC 自己过载」和「我们后级把信号搞炸」的地方。
+             * 一旦在采集阶段就削平了，后面任何增益、限幅、降噪都救不回来 ——
+             * 只能让用户离话筒远一点。没有这个数字，两种情况的日志长得一模一样。 */
+            st.inSamples += readPerFrame;
+            st.inClip += countNearFull(raw, readPerFrame);
+
             final float frameRms = rmsOf(pcm);
-            agc(pcm, frameRms);   /* 电平归一化，MIC 源各机差异太大 */
+            agc(pcm, frameRms, st);   /* 电平归一化 + 用户增益 + 软限幅，见 agc() */
             noiseGate(pcm, frameRms);  /* ★ 必须放在 AGC 之后 */
-            /* ★ 用户增益在 AGC 之后 —— 放在前面会被 AGC 原样抵消 */
-            applyMicGain(pcm);
 
             if (listener != null) {
-                /* 电平在 applyMicGain 之后量 —— 用户要看到的是**真正发出去**的
-                 * 那一帧有多响，否则调增益时读数不动，等于闭着眼睛调。 */
+                /* 电平在**所有增益和限幅之后**量 —— 用户要看到的是真正发出去的
+                 * 那一帧有多响，否则调增益时读数不动，等于闭着眼睛调。
+                 *
+                 * 数字取**本次发射的峰值**而不是当前帧的瞬时值：说话总有停顿，
+                 * 瞬时值会在停顿帧上掉到 −55 dBFS 那种毫无意义的值（v2.4.2 的
+                 * 截图就是 −54.9 dB），用户根本没法据此判断该往哪边调。 */
                 final float outRms = rmsOf(pcm);
-                listener.onLevel(levelOfRms(outRms), dbOfRms(outRms));
+                final float outDb = dbOfRms(outRms);
+                if (outDb > st.outPeakDb) st.outPeakDb = outDb;
+                listener.onLevel(levelOfRms(outRms), st.outPeakDb);
             }
 
             if (Vocoder.nativeEncode(pcm, ambe) != Vocoder.CODEC_BYTES) {
@@ -657,6 +689,27 @@ public final class DmrTransmitter {
                 st.gapMaxMs, st.pktEarly, st.pktLate));
         sb.append(String.format(java.util.Locale.US,
                 "\n  编码    ：失败 %d 帧", st.encodeFail));
+
+        /* ---- 电平 / 失真三兄弟 ----
+         *
+         * 用户说「对方听着发炸」时，这三个数能把责任分到具体一级，
+         * 缺一个都分不清 —— 而且处置方式完全相反，猜错就是白折腾一轮：
+         *   采集削波高 → 手机 MIC 过载，只能离远点；
+         *   限幅高     → 我们后级太激进，调小增益有效。 */
+        final float inPct = st.inSamples > 0 ? st.inClip * 100f / st.inSamples : 0f;
+        final float limPct = st.limSamples > 0 ? st.limHits * 100f / st.limSamples : 0f;
+        sb.append(String.format(java.util.Locale.US,
+                "\n  电平    ：送出声码器最高 %.1f dBFS（短时 RMS，−16 附近正常）", st.outPeakDb));
+        sb.append(String.format(java.util.Locale.US,
+                "\n  削波    ：采集 %.2f%%（前级）· 限幅 %.2f%%（后级）", inPct, limPct));
+        sb.append("\n  判断    ：").append(
+                inPct >= 0.20f
+                        ? "⚠ 麦克风输入本身已削波 —— 手机 MIC 过载，调增益救不回来，请离话筒远一点、说话轻一点"
+                        : limPct >= 2.0f
+                        ? "⚠ 软限幅在持续介入 —— 把麦克风增益往左调，这次会真的少失真而不只是变小声"
+                        : st.outPeakDb < -30f
+                        ? "输入电平偏低（离得远或说话轻）—— 增益可以往右抬"
+                        : "电平正常，失真不在电平这一级（往低频 / 声码器方向查）");
         log(sb.toString());
     }
 
@@ -855,7 +908,7 @@ public final class DmrTransmitter {
      *
      *  @param frameRms 本帧在**滤波之后、增益之前**的 RMS，由 txLoop 量好传进来
      */
-    private void agc(short[] pcm, float frameRms) {
+    private void agc(short[] pcm, float frameRms, TxStat st) {
         float rms = frameRms;
 
         if (agcFrames < 1) {
@@ -901,14 +954,33 @@ public final class DmrTransmitter {
             agcGain += (want - agcGain) * k;
         }
 
-        if (agcGain > 0.99f && agcGain < 1.02f) return;   // 基本是 1 倍就别白算一遍
+        /* ★ 用户增益并进同一个乘数，而且必须在限幅**之前**。
+         *
+         * v2.4.2 是「先限幅、再乘用户增益」，用户把增益拉到 −12 dB
+         * 只听到「好了一点但不够」—— 因为限幅产生的谐波已经烙在信号里，
+         * 再整体乘小只是把「炸」调小，毛刺一个没少。
+         *
+         * 并进这个乘数之后，调小增益 = 送进限幅的信号本来就小 = 限幅不介入
+         * = 失真跟着消失。这才是滑块该有的行为。 */
+        final float g = agcGain * micGain;
+
+        /* 总增益基本是 1 倍就别白算一遍。注意判的是**乘积**而不是 agcGain ——
+         * 只判 agcGain 的话，agcGain≈1 且用户增益 −12 dB 时会直接跳过，
+         * 用户增益整个失效。 */
+        if (g > 0.999f && g < 1.002f) {
+            st.limSamples += pcm.length;
+            return;
+        }
 
         final float KNEE = 30146f;       // 0.92 × 32768
         final float SPAN = 2622f;        // 到满量程的余量
         for (int i = 0; i < pcm.length; i++) {
-            float x = pcm[i] * agcGain;
+            float x = pcm[i] * g;
             float a = x < 0 ? -x : x;
             if (a > KNEE) {
+                /* 软限幅介入。这个计数就是「我们后级有没有把信号搞炸」的
+                 * 直接证据 —— 它和采集阶段的 inClip 一起看才能分清责任。 */
+                st.limHits++;
                 float over = (a - KNEE) / SPAN;
                 a = KNEE + SPAN * (1f - (float) Math.exp(-over));
                 x = x < 0 ? -a : a;
@@ -918,6 +990,7 @@ public final class DmrTransmitter {
             else if (v < -32768) v = -32768;
             pcm[i] = (short) v;
         }
+        st.limSamples += pcm.length;
     }
 
     /* ---------------- 噪声门（下行扩展器） ----------------
@@ -1051,42 +1124,30 @@ public final class DmrTransmitter {
         return true;
     }
 
-    /* ---------------- 用户麦克风增益 ---------------- */
+    /* ---------------- 采集阶段的削波统计 ---------------- */
 
     /**
-     * 把用户设定的增益乘到 PCM 上，并做软限幅。
+     * 数一数这批原始采样里有多少已经贴着满量程。
      *
-     * <p>增益为 0 dB 时直接返回 —— 默认路径上不多做一次乘法。
+     * <p>这是整条链上**唯一**能区分「手机 MIC 自己过载」和「我们后级把信号
+     * 搞炸」的测量点，因为它是 `AudioRecord.read()` 一出来、任何处理之前
+     * 的状态。一旦在这里就削平了，后面的 AGC、限幅、降噪全都无能为力 ——
+     * 削掉的波形信息不可能凭空长回来。
+     *
+     * <p>两种情况的日志长得一模一样（都是「对方说发炸」），
+     * 只有这个比例能分辨，而处置方式完全相反：
+     * <ul>
+     *   <li>这里高 → 让用户离话筒远一点、说话轻一点；调增益没用</li>
+     *   <li>这里低而 {@code limHits} 高 → 是我们后级太激进，调小增益有效</li>
+     * </ul>
      */
-    private void applyMicGain(short[] pcm) {
-        final float g = micGain;
-        if (g == 1.0f) return;
-        for (int i = 0; i < pcm.length; i++) {
-            pcm[i] = softLimit(pcm[i] * g);
+    private static int countNearFull(short[] a, int n) {
+        int c = 0;
+        for (int i = 0; i < n; i++) {
+            int v = a[i];
+            if (v >= CLIP_LEVEL || v <= -CLIP_LEVEL) c++;
         }
-    }
-
-    /**
-     * 软限幅：|v| 超过膝点后按双曲线逼近满量程，<b>永远不硬削</b>。
-     *
-     * <pre>
-     *   shaped = knee + room · over / (over + room)
-     * </pre>
-     *
-     * 这个式子在 over = 0 处导数为 1（与直通段平滑衔接），over → ∞ 时
-     * 渐近到 knee + room = 32767，且全程单调。
-     *
-     * <p>为什么不能直接 clamp：硬削波会造出大量高次谐波，
-     * AMBE 会把它们当噪声分走比特，听感是「炸」而不是「响」——
-     * 音量上去了，可懂度反而掉下来。
-     */
-    private static short softLimit(float v) {
-        final float abs = v < 0 ? -v : v;
-        if (abs <= SOFT_KNEE) return (short) v;
-        final float room = 32767f - SOFT_KNEE;
-        final float over = abs - SOFT_KNEE;
-        final float shaped = SOFT_KNEE + room * (over / (over + room));
-        return (short) (v < 0 ? -shaped : shaped);
+        return c;
     }
 
     /**
