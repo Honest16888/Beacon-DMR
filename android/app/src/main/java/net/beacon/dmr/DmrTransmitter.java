@@ -33,6 +33,15 @@ public final class DmrTransmitter {
     private static final int TARGET_RATE = 8000;
     private static final int FALLBACK_RATE = 48000;
     private static final int FRAME_SAMPLES = 160;          // 20 ms @ 8 kHz
+
+    /** 抗混叠 FIR 的抽头数。
+     *
+     *  原来是 31 抽头 + Hann 窗，过渡带宽约 3.1·fs/N = 3.1·48000/31 ≈ 4800 Hz ——
+     *  而 8 kHz 输出只有 3400→4000 这 600 Hz 的余量。31 抽头根本压不住
+     *  4 kHz 以上的成分，全折叠回话带里，听感是「金属味、嘶嘶声」。
+     *  127 抽头把过渡带压到约 1170 Hz，代价是每输出样本 127 次乘加 ——
+     *  8 kHz × 127 ≈ 100 万 MAC/s，对手机可以忽略。 */
+    private static final int FIR_TAPS = 127;
     private static final int FRAMES_PER_PACKET = 3;        // 一个 DMRD 包承载 3 帧
 
     /** 单次发射的硬上限，防止 PTT 卡住把话组占死 */
@@ -244,8 +253,8 @@ public final class DmrTransmitter {
 
         byte[] pkt = new byte[DmrTx.PACKET_BYTES];
 
-        float[] fir = resample ? designLowPass(31, 3400.0 / rate) : null;
-        float[] hist = resample ? new float[31] : null;
+        float[] fir = resample ? designLowPass(FIR_TAPS, 3400.0 / rate) : null;
+        float[] hist = resample ? new float[FIR_TAPS] : null;
 
         long startedAt = System.currentTimeMillis();
 
@@ -280,6 +289,9 @@ public final class DmrTransmitter {
             } else {
                 System.arraycopy(raw, 0, pcm, 0, FRAME_SAMPLES);
             }
+
+            dcBlock(pcm);   /* 切掉 120 Hz 以下的隆隆和直流 */
+            agc(pcm);       /* 电平归一化，MIC 源各机差异太大 */
 
             if (listener != null) listener.onLevel(levelOf(pcm));
 
@@ -328,6 +340,75 @@ public final class DmrTransmitter {
         try {
             r.release();
         } catch (Exception ignored) {
+        }
+    }
+
+    /* ---------------- 发射侧前端处理 ---------------- */
+
+    /** 一阶直流阻断（截止约 120 Hz）。状态跨帧保留，块边界不会出现阶跃。
+     *
+     *  手机在 MIC 源下常有几十赫兹的隆隆和直流偏移。AMBE 的比特预算全在
+     *  300–3400 Hz，低频占掉的每一分都是从语音里偷的 —— 而且编出来是
+     *  「嗡嗡」的底噪。先把它切掉，再谈增益。 */
+    private float hpX1, hpY1;
+    private static final float HP_A =
+            (float) (1.0 / (1.0 + 2 * Math.PI * 120.0 / TARGET_RATE));
+
+    private void dcBlock(short[] pcm) {
+        final float a = HP_A;
+        float x1 = hpX1, y1 = hpY1;
+        for (int i = 0; i < pcm.length; i++) {
+            float x = pcm[i];
+            float y = a * (y1 + x - x1);
+            x1 = x;
+            y1 = y;
+            int v = (int) y;
+            if (v > 32767) v = 32767;
+            else if (v < -32768) v = -32768;
+            pcm[i] = (short) v;
+        }
+        hpX1 = x1;
+        hpY1 = y1;
+    }
+
+    private float agcGain = 1.0f;
+    private static final float AGC_TARGET = 20000f;   // 约 -4 dBFS 峰值
+    private static final float AGC_MAX = 4.0f;        // 最多提 12 dB
+    private static final float AGC_GATE = 700f;       // 低于这个峰值当静音，不抬底噪
+
+    /** 峰值归一化（不是压缩器）。
+     *
+     *  手机 MIC 源的电平差异能到 20 dB：同样正常说话，有的设备峰值 3000，
+     *  有的 25000。AMBE 对输入电平很敏感，太轻的输入编出来又闷又糊。
+     *
+     *  策略刻意做得迟钝：
+     *    · 只往上提，不往下压 —— 压会损失动态，语音变平、辨识度下降；
+     *    · 攻击快、释放慢 —— 句首立刻起来，句尾慢慢回落，不「抽气」；
+     *    · 带噪声门，安静时回落到 1 倍，不把底噪放大。
+     */
+    private void agc(short[] pcm) {
+        int peak = 0;
+        for (int i = 0; i < pcm.length; i++) {
+            int a = pcm[i] < 0 ? -pcm[i] : pcm[i];
+            if (a > peak) peak = a;
+        }
+        float want;
+        if (peak > AGC_GATE) {
+            want = AGC_TARGET / peak;
+            if (want > AGC_MAX) want = AGC_MAX;
+            if (want < 1.0f) want = 1.0f;
+        } else {
+            want = 1.0f;                 // 安静 → 回落，别把底噪放大
+        }
+        /* 20 ms 一帧：0.35 约 60 ms 提升到位，0.03 约 650 ms 回落 */
+        float k = (want > agcGain) ? 0.35f : 0.03f;
+        agcGain += (want - agcGain) * k;
+        if (agcGain < 1.02f) return;     // 基本是 1 倍就别白算一遍
+        for (int i = 0; i < pcm.length; i++) {
+            int v = (int) (pcm[i] * agcGain);
+            if (v > 32767) v = 32767;
+            else if (v < -32768) v = -32768;
+            pcm[i] = (short) v;
         }
     }
 

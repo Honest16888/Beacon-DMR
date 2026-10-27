@@ -337,7 +337,18 @@ public final class DmrAudio {
             buf = f;
         } else {
             for (int i = 0; i < n; i++) {
-                int v = (int) (f[i] * g);
+                float x = f[i] * g;
+                /* 软限幅而不是硬削。硬削在 8 kHz 带宽里产生的高次谐波
+                 * 会全部叠回话带，听起来「炸」；软限幅把超出部分压扁，
+                 * 波形不出现直角，失真小得多。
+                 * 只在 0.9 满刻度以上动手，正常电平一个样本都不改。 */
+                float a = x < 0 ? -x : x;
+                if (a > 29491f) {                       // 0.9 × 32767
+                    float over = (a - 29491f) / 3277f;  // 以 0.1 满刻度为单位
+                    a = 29491f + 3277f * (1f - (float) Math.exp(-over));
+                    x = x < 0 ? -a : a;
+                }
+                int v = (int) x;
                 if (v > 32767) v = 32767;
                 else if (v < -32768) v = -32768;
                 buf[i] = (short) v;
