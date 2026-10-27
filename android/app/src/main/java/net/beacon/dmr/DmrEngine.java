@@ -59,6 +59,8 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
     private volatile boolean rxOn = true;
     /** 当前/最近一次说话的来源与目标。onPlayStart 时上报给界面 */
     private volatile int curSrcId = 0;
+    /** 最近一次接收的音频电平（dBFS）。−120 表示还没收到过 */
+    private volatile float lastRxDb = -120f;
     private volatile int curDstId = 0;
     private volatile int curSlot = 1;
     private volatile boolean curPrivate = false;
@@ -128,8 +130,11 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
             }
 
             @Override
-            public void onLevel(float level) {
-                emit("rxlevel", "v", level);
+            public void onLevel(float level, float dbfs) {
+                lastRxDb = dbfs;
+                /* 保留一位小数：dB 读数的意义在于「能比较」，
+                 * 整数会让 −18.4 和 −18.9 看起来一样。 */
+                emit("rxlevel", "v", level, "db", Math.round(dbfs * 10f) / 10.0);
             }
         });
     }
@@ -247,6 +252,15 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
     /** 已建立会话之后收到的 MSTNAK 条数（都被有意忽略了，仅作排障依据） */
     public int getLateNakCount() {
         return session.getLateNakCount();
+    }
+
+    /** 最近一次接收的音频电平（dBFS）。
+     *
+     *  <p>注意这是<b>解码后音频</b>的电平，不是空口信号强度 ——
+     *  DMRD 包里没有 RSSI 字段，主站也不会下发，这个链路上不存在
+     *  「信号几格」这种量。−40 以下基本是底噪，−20 ~ −12 是正常说话。 */
+    public float getRxDb() {
+        return lastRxDb;
     }
 
     /** 累计收到 MSTPONG 的次数；0 表示主站不回 pong（有些主站确实不回） */

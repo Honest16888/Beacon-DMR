@@ -566,6 +566,9 @@ public class MainActivity extends Activity {
                 o.put("rxPlaying", dmr.isRxPlaying());
                 o.put("rxVol", dmr.getRxVolume());
                 o.put("rxJitter", dmr.getRxJitter());
+                /* 接收音频电平（dBFS）。DMRD 包不带 RSSI，所以这是这条链路上
+                 * 唯一可量化的电平指标 —— 界面上标成「音频电平」而不是「信号强度」 */
+                o.put("rxDb", Math.round(dmr.getRxDb() * 10f) / 10.0);
                 /* 丢包统计：靠 DMRD 包的 8 位序号跳变算出来的。
                  * rxStats 是给界面直接显示的一句话，rxLoss 给进度条/告警用。 */
                 o.put("rxStats", dmr.getRxStats());

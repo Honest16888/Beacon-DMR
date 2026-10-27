@@ -52,7 +52,7 @@ public final class DmrAudio {
         void onPlayStop();
 
         /** 播放电平 0~1，已节流 */
-        void onLevel(float level);
+        void onLevel(float level, float dbfs);
     }
 
     private final Listener listener;
@@ -78,6 +78,8 @@ public final class DmrAudio {
 
     private long lastLevelAt;
     private float peakSinceLevel;
+    /** 节流窗口内的峰值 dBFS，给界面的 dB 读数用 */
+    private float peakDbSinceLevel = -120f;
 
     public DmrAudio(Listener listener) {
         this.listener = listener;
@@ -279,6 +281,7 @@ public final class DmrAudio {
 
         playing = true;
         peakSinceLevel = 0f;
+        peakDbSinceLevel = -120f;
         if (listener != null) listener.onPlayStart();
 
         /* 先把预填充内容搬进局部数组再写：writeFrame 里可能因为
@@ -374,16 +377,35 @@ public final class DmrAudio {
          * 因为语音的峰值更能反映「有人在说话」 */
         if (listener != null) {
             float peak = 0f;
+            double sum = 0;
             for (int i = 0; i < n; i++) {
-                int a = buf[i] < 0 ? -buf[i] : buf[i];
+                int v = buf[i];
+                int a = v < 0 ? -v : v;
                 if (a > peak) peak = a;
+                sum += (double) v * v;
             }
             float lv = Math.min(1f, peak / 32768f * 3.2f);
             if (lv > peakSinceLevel) peakSinceLevel = lv;
+
+            /* RMS → dBFS，给界面一个可读的数字。
+             *
+             * ★ DMRD 包**不带 RSSI** —— 主站不会告诉我们空口信号有多强，
+             * 所以「信号强度」这个量在这个链路上根本不存在。能测的只有
+             * 「解码出来的音频有多响」，这是唯一诚实的量化指标：
+             *   −40 dBFS 以下  基本是静音 / 底噪
+             *   −20 ~ −12 dBFS 正常说话
+             *   −6 dBFS 附近   已经贴着满量程，再高就要削波
+             * 这里取整个节流窗口内的**峰值 dB**，比瞬时值稳，
+             * 不会因为采样点刚好落在过零点就掉到 −60。 */
+            float rms = (float) Math.sqrt(sum / Math.max(1, n));
+            float db = rms > 0.5f ? (float) (20.0 * Math.log10(rms / 32768.0)) : -120f;
+            if (db > peakDbSinceLevel) peakDbSinceLevel = db;
+
             long now = System.currentTimeMillis();
             if (now - lastLevelAt >= 100) {
-                listener.onLevel(peakSinceLevel);
+                listener.onLevel(peakSinceLevel, peakDbSinceLevel);
                 peakSinceLevel = 0f;
+                peakDbSinceLevel = -120f;
                 lastLevelAt = now;
             }
         }

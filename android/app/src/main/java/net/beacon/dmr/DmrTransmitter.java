@@ -50,6 +50,18 @@ public final class DmrTransmitter {
     /** 单次发射的硬上限，防止 PTT 卡住把话组占死 */
     private static final int MAX_TX_MS = 180_000;
 
+    /* ---- 「有信号但码字全 0」的探针 ----
+     *
+     * 这是 v2.3 那个静音 bug 留下的教训：删掉一行 arraycopy，包照发、
+     * 电平条照跳、日志全干净，对方一个字都听不到。这类故障在本机没有任何
+     * 可观测信号，只能在运行时主动比对「麦克风电平」和「码字内容」。
+     *
+     * 800 ≈ −32 dBFS：正常说话的 RMS 在 1000~8000，这个阈值不会误报。
+     * AMBE 的静音帧不是全零（46 44 60 20 …），所以真有信号时出现全零码字
+     * 必然意味着链路断了。 */
+    private static final float ZERO_CODE_RMS = 800f;
+    private static final int ZERO_CODE_FRAMES = 25;   // 25 × 20 ms = 0.5 秒
+
     public interface Listener {
         void onTxStart(int dstId);
 
@@ -354,6 +366,8 @@ public final class DmrTransmitter {
          * 放在里面每次外层迭代都会清零，那个「连续 200 次就报错」的保护
          * 等于永远不成立。 */
         int zeroSpins = 0;
+        /* 连续「有信号但码字全 0」的帧数，见下面的运行时兜底 */
+        int zeroCode = 0;
 
         /* stop() 会把字段 recorder 置空，而本线程可能正卡在 read() 里。
          * 抓一份局部引用，避免下一次 read 撞上 null。 */
@@ -471,8 +485,43 @@ public final class DmrTransmitter {
                 lastReport = nowMs;
             }
 
+            /* ★ 运行时兜底：麦克风明明有信号，编出来的码字却全是 0。
+             *
+             * 这只有两种可能：声码器返回了空数据，或者码字没被正确装进 bundle。
+             * 两种情况的表现完全一样 —— **对方听到的是静音**，而本地一切正常：
+             * PTT 亮着、电平条照跳、包照发、主站照转、发射小结干干净净。
+             *
+             * v2.3 就是这样漏掉了一行 arraycopy，v2.3 / v2.4 发出去全是静音。
+             * 这类故障没有任何本地可观测信号，所以必须在这里主动埋一个探针：
+             * 真机上唯一能暴露它的地方就是这条日志。
+             *
+             * 注意：AMBE 的「静音帧」不是全零（自检里静音码字是 46 44 60 20 …），
+             * 所以「有信号 + 全零码字」不可能是正常情况。 */
+            if (frameRms > ZERO_CODE_RMS && isAllZero(ambe)) {
+                zeroCode++;
+                if (zeroCode == ZERO_CODE_FRAMES) {
+                    log("⚠ 连续 " + ZERO_CODE_FRAMES + " 帧码字全为 0，但麦克风有信号"
+                            + "（RMS " + (int) frameRms + "）—— 码字没有被装进 bundle，"
+                            + "对方会听到完全的静音");
+                }
+            } else {
+                zeroCode = 0;
+            }
+
             /* ---- 发包：强制 60 ms 节拍 ---- */
+
+            /* ★★ 这一行绝对不能少。
+             *
+             * `bundle` 是 byte[27]，Java 的初始值全是 0。少了这次拷贝，
+             * 每个 DMRD 包里装的就是**三帧全零码字 = 静音**：
+             * PTT 照按、包照发、主站照转、本地日志一切正常，
+             * 但对方一个字都听不到 —— 而且从任何本地指标都看不出来。
+             *
+             * v2.3 重写这个循环时漏掉了这一行，v2.3 / v2.4 两个版本
+             * 发出去的全是静音。`tests/check_tx_bundle.py` 现在守着它。 */
+            System.arraycopy(ambe, 0, bundle, bundleFill, Vocoder.CODEC_BYTES);
             bundleFill += Vocoder.CODEC_BYTES;
+
             if (bundleFill >= DmrTx.AMBE_BUNDLE) {
                 bundleFill = 0;
 
@@ -939,6 +988,13 @@ public final class DmrTransmitter {
     private static int levelOf(short[] pcm) {
         int lv = (int) (rmsOf(pcm) / 32768.0 * 400);      // 经验缩放，满量程约 100
         return Math.max(0, Math.min(100, lv));
+    }
+
+    /** 码字是否全为 0。用来发现「有信号却编出空码字」这类静默故障。 */
+    private static boolean isAllZero(byte[] a) {
+        if (a == null) return true;
+        for (byte b : a) if (b != 0) return false;
+        return true;
     }
 
     /**

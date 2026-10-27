@@ -547,6 +547,39 @@ const n3 = await ev(`
   return { editing:document.getElementById('txTgName').tagName, before };`);
 ok('个呼时拒绝改名', n3.editing === 'SPAN', n3);
 
+console.log('\n=== 12. 接收音频电平（dBFS） ===');
+/* DMRD 包不带 RSSI，所以界面标「音频」而不是「信号」。
+ * 这一节锁死三件事：读数保留一位小数、按电平分档变色、峰值按句重置。 */
+const d1 = await ev(`
+  window.onDmrEvent(JSON.stringify({type:'rx',on:true,srcId:4601001,dstId:91,slot:1,priv:false}));
+  window.onDmrEvent(JSON.stringify({type:'rxlevel',v:0.4,db:-18.43}));
+  const el=document.getElementById('npDb');
+  return { txt:el&&el.textContent, lv:el&&el.dataset.lv, title:el&&el.title };`);
+ok('dB 读数保留一位小数', d1.txt === '-18.4 dB', d1);
+ok('正常说话档位是 ok', d1.lv === 'ok', d1);
+ok('提示里写清「不是空口信号强度」', /RSSI/.test(d1.title || ''), d1);
+
+const d2 = await ev(`
+  window.onDmrEvent(JSON.stringify({type:'rxlevel',v:0.9,db:-6.2}));
+  const a=document.getElementById('npDb');
+  const hot=a.dataset.lv;
+  window.onDmrEvent(JSON.stringify({type:'rxlevel',v:0.05,db:-45.0}));
+  const b=document.getElementById('npDb');
+  return { hot, low:b.dataset.lv, txt:b.textContent, title:b.title };`);
+ok('接近满量程标 hot', d2.hot === 'hot', d2);
+ok('底噪标 low', d2.low === 'low', d2);
+ok('峰值按句累积（−6.2 被记住）', /-6\.2/.test(d2.title || ''), d2);
+
+const d3 = await ev(`
+  /* 新的一句开始 → 峰值重新起算 */
+  window.onDmrEvent(JSON.stringify({type:'rx',on:true,srcId:4601001,dstId:91,slot:1,priv:false}));
+  window.onDmrEvent(JSON.stringify({type:'rxlevel',v:0.3,db:-22.0}));
+  const t=document.getElementById('npDb').title;
+  window.onDmrEvent(JSON.stringify({type:'rx',on:false}));
+  return { title:t, lv:document.getElementById('npDb').dataset.lv };`);
+ok('新句子峰值不继承上一句', !/-6\.2/.test(d3.title || ''), d3);
+ok('一句结束后读数变暗', d3.lv === 'idle', d3);
+
 console.log(`\n================  ${pass} 通过 / ${fail} 失败  ================`);
 ws.close(); chrome.kill();
 await sleep(300);

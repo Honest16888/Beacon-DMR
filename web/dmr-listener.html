@@ -103,6 +103,14 @@ html[data-theme="dark"] .np-tg.priv{background:#2b1416}
 .np-sep{width:1px;height:34px;background:var(--border)}
 .vu{display:flex;align-items:flex-end;gap:2px;height:30px;width:104px;flex:none}
 .vu i{flex:1;background:var(--border);border-radius:1.5px;transition:height .07s linear,background .07s linear}
+/* 接收音频电平读数。等宽数字 + tabular-nums，避免 −8.4 → −10.2 时整行抖动 */
+.np-db{font-family:var(--mono);font-size:12.5px;font-weight:600;line-height:1;flex:none;
+  min-width:64px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;
+  transition:color .12s linear,opacity .12s linear}
+.np-db[data-lv="low"]{color:var(--muted)}
+.np-db[data-lv="ok"]{color:var(--ok)}
+.np-db[data-lv="hot"]{color:var(--tx)}
+.np-db[data-lv="idle"]{color:var(--muted);opacity:.5}
 .np-time{font-family:var(--mono);font-size:15px;color:var(--muted);min-width:52px}
 .recbtn{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:7px;
   border:1px solid var(--border);background:var(--panel);color:var(--muted);transition:.15s}
@@ -476,6 +484,8 @@ canvas{display:block;width:100%}
   .np-name{max-width:none;font-size:11.5px}
   #btnRec{order:2}
   .np-tg{order:3;padding:4px 9px;font-size:12px}
+  /* 折行后 dB 读数跟着波形排，缩一点但别隐藏 —— 它就是要「随时看得到」 */
+  .np-db{order:5;font-size:11.5px;min-width:56px}
   .vu{order:4;width:72px;height:24px}
   .np-time{order:5;margin-left:auto;min-width:44px;font-size:14px}
   .np-main .np-sep{display:none}
@@ -1036,6 +1046,8 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
             title="把发射目标一键切到对方，按住 PTT 就能回">回复</button>
     <div class="np-sep"></div>
     <div class="vu" id="vu"></div>
+    <div class="np-db" id="npDb" data-lv="idle"
+         title="接收音频电平（dBFS）。DMRD 包不带 RSSI，所以这不是空口信号强度">—</div>
     <div class="np-time" id="npTime">0.0s</div>
     <button class="recbtn" id="btnRec" title="把本次通话录成 WAV 文件"><span class="recdot"></span>录音</button>
   </div>
@@ -22958,6 +22970,8 @@ window.onDmrEvent=function(json){
       Q.rxing=!!ev.on;
       if(ev.on){
         Q.last={ srcId:ev.srcId|0, dstId:ev.dstId|0, slot:ev.slot|0, priv:!!ev.priv };
+        /* 新的一句开始 → 峰值重新起算，否则上一通大声说话会把峰值一直顶住 */
+        Q.dbPeak=null;
         const r=resolveId(Q.last.srcId);
         txLog('📥 收到 '+(r&&r.call?(r.call+' '):'ID ')+Q.last.srcId
               +' → '+(Q.last.priv?'个呼 ':'话组 ')+Q.last.dstId
@@ -22965,6 +22979,10 @@ window.onDmrEvent=function(json){
         /* 顺手攒进「最近听到」，用户点一下就能屏蔽 —— 比手打呼号可靠得多 */
         rxHeardPush(Q.last.srcId,Q.last.dstId);
         rxTgPush(Q.last.dstId);
+      }else{
+        /* 一句结束：读数留在最后的值上但变暗，别让它假装还在收 */
+        const d=$('#npDb');
+        if(d)d.dataset.lv='idle';
       }
       hdGate();
       qRender();
@@ -22981,8 +22999,26 @@ window.onDmrEvent=function(json){
       break;
     }
     case 'rxlevel':{
-      /* 对讲页那块电平条已经拆掉，接收电平现在只体现在悬浮 PTT 变绿上；
-         这里保留分支是为了不让原生侧上报的 rxlevel 变成未知事件。 */
+      /* 接收音频电平（dBFS）。
+       *
+       * DMRD 包里没有 RSSI 字段，主站也不下发 —— 这条链路上**不存在**
+       * 「信号几格」这种量。能测的只有解码出来的音频有多响，
+       * 所以界面上标「音频」而不是「信号」，不假装自己是 S 表。
+       *
+       * 参考刻度：−40 以下基本是底噪，−20 ~ −12 正常说话，
+       * −6 附近贴着满量程，再高就要削波。 */
+      const el=$('#npDb');
+      if(el){
+        const db=Number(ev.db);
+        if(isFinite(db)&&db>-110){
+          el.textContent=db.toFixed(1)+' dB';
+          el.dataset.lv=db>-12?'hot':(db>-30?'ok':'low');
+          if(Q.dbPeak==null||db>Q.dbPeak)Q.dbPeak=db;
+          el.title='接收音频电平 '+db.toFixed(1)+' dBFS'
+                  +' · 本句峰值 '+Q.dbPeak.toFixed(1)+' dBFS'
+                  +'\n（DMRD 包不带 RSSI，这不是空口信号强度）';
+        }
+      }
       break;
     }
     case 'level':{
@@ -23167,7 +23203,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.09';
+const PAGE_VER='2026.11.10';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
