@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">信标 DMR · Java</string>
+    <string name="title">信标 DMR</string>
+    <string name="subtitle">Java 版 · 收听</string>
+    <string name="tg_hint">勾选即订阅，改完立刻生效</string>
+    <string name="idle_tg">未在通话</string>
+    <string name="idle_caller">等待呼叫</string>
+    <string name="mute">静音</string>
+    <string name="unmute">收听</string>
+    <string name="volume">音量</string>
+    <string name="state_idle">未连接</string>
+    <string name="state_connecting">连接中…</string>
+    <string name="state_open">已连接</string>
+</resources>

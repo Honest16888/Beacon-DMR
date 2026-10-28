@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 图形全部落在 108x108 画布的中心安全圆（半径 33）内 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 外弧 -->
+    <path
+        android:pathData="M36,45 A24,24 0 0,1 72,45"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <!-- 内弧 -->
+    <path
+        android:pathData="M43.5,51 A15,15 0 0,1 64.5,51"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000" />
+    <!-- 发射点 -->
+    <path
+        android:pathData="M54,60 m-5.5,0 a5.5,5.5 0 1,0 11,0 a5.5,5.5 0 1,0 -11,0"
+        android:fillColor="#FFFFFFFF" />
+    <!-- 塔身 -->
+    <path
+        android:pathData="M50.6,65 L57.4,65 L55.2,83 L52.8,83 Z"
+        android:fillColor="#FFFFFFFF" />
+    <!-- 底座横杠 -->
+    <path
+        android:pathData="M47,83 L61,83"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="3"
+        android:strokeLineCap="round" />
+</vector>

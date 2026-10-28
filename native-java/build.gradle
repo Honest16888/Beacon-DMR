@@ -1,0 +1,12 @@
+// 纯 Java 版信标 DMR —— 顶层构建脚本
+//
+// 和 android/ 那份（WebView 版）是两个独立工程，互不影响：
+//   android/      前端在 web/index.html，原生层只做 UDP + 声码器 + 桥
+//   native-java/  全部逻辑在 Java 里，界面用系统 View + XML
+//
+// 这一份刻意不引入 androidx / 第三方库：
+//   · 少 2 MB 依赖，冷启动快
+//   · 没有 R8 / 反射风险（WebView 版为了 @JavascriptInterface 一直不敢开混淆）
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 浅色。配色直接取自 WebView 版 web/index.html 的 :root 变量，
+     两个版本的观感要一致 —— 用户会来回装。 -->
+<resources>
+    <color name="bg">#eef1f5</color>
+    <color name="panel">#ffffff</color>
+    <color name="panel2">#f7f9fb</color>
+    <color name="border">#dde3ea</color>
+    <color name="text">#12161c</color>
+    <color name="muted">#67707e</color>
+    <color name="dim">#93a0b0</color>
+    <color name="accent">#0b6bcb</color>
+    <color name="accent_weak">#e6f0fb</color>
+    <color name="ok">#12a150</color>
+    <color name="warn">#d9822b</color>
+    <color name="bad">#c22a2f</color>
+    <color name="wave">#0b6bcb</color>
+    <!-- 启动图标渐变。和 WebView 版保持一致，两个 App 并排装在桌面上不能一个蓝一个别色。 -->
+    <color name="ic_bg_start">#FF2E86E0</color>
+    <color name="ic_bg_end">#FF0A4E96</color>
+</resources>

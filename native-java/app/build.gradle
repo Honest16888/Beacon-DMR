@@ -1,0 +1,56 @@
+plugins { id 'com.android.application' }
+
+// 签名沿用和 WebView 版**同一份** keystore：以后合并成一个 App 时能直接覆盖安装。
+def ksProps = new Properties()
+def ksFile = rootProject.file('keystore.properties')
+if (ksFile.exists()) {
+    ksFile.withInputStream { ksProps.load(it) }
+}
+def hasKeystore = ksFile.exists() && ksProps['storeFile']
+
+android {
+    namespace 'net.beacon.dmr'
+    compileSdk 34
+
+    defaultConfig {
+        /* ★ applicationId 故意和 WebView 版（net.beacon.dmr）不同。
+         *
+         * 重写期间两个版本要能同时装着：旧版还能正常用，新版随时可以试。
+         * 等新版的收听 / 看板 / 设置 / 收发全部对齐，再把这里改成
+         * net.beacon.dmr 正式接班 —— 到那时 SharedPreferences 和
+         * 话组订阅表都已经是新格式，不需要迁移。
+         */
+        applicationId "net.beacon.dmr.java"
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName "3.0.0-alpha1"
+    }
+
+    signingConfigs {
+        release {
+            if (hasKeystore) {
+                storeFile rootProject.file(ksProps['storeFile'])
+                storePassword ksProps['storePassword']
+                keyAlias ksProps['keyAlias']
+                keyPassword ksProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            /* 这里和 WebView 版相反：没有 JS 桥，可以放心开混淆。
+             * 但 alpha 阶段先关掉 —— 出问题时堆栈要能直接读。 */
+            minifyEnabled false
+            if (hasKeystore) signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+// 刻意没有 dependencies {} —— 见 build.gradle 的说明。
