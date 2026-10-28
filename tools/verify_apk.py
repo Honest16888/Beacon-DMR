@@ -117,7 +117,10 @@ if assets:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
     print('  ---- v2.5.3 ----')
     for k in ['sampleRate:8000', 'initSink', 'AudioWorkletNode',
-              'data:text/javascript;utf8,', 'this.last*=0.995', '2026.11.24']:
+              'data:text/javascript;utf8,', 'this.last*=0.995']:
+        print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
+    print('  ---- v2.5.4 ----')
+    for k in ['sinkWatch', 'sinkAbandoned', 'audioDiag', 'statechange', '2026.11.25']:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
 else:
     print('  !! 没找到 index.html')

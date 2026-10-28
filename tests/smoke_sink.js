@@ -148,7 +148,31 @@ const sil = await ev(`(()=>{
 ok('静音 → 解除 → 清空 全程无异常', sil.ok === true, sil.err ? '→ ' + sil.err : '');
 ok('用户静音状态被记住', sil.muted === true);
 
-console.log('\n=== 5. 运行时错误 ===');
+console.log('\n=== 5. 看门狗：攒帧溢出要认输，不能吃帧 ===');
+/* 「第一次进软件偶尔没声音，重启才好」的形态：
+   addModule 的 Promise 迟迟不 settle，sinkPending 一直挂着 true，
+   而 push() 在 pending 期间的策略是「先攒着」—— 于是每一帧都被吃掉。
+   现在攒到 1.5 秒就认输，改走逐帧排期。 */
+const wd = await ev(`(()=>{
+  const bak={sink:Audio_.sink, pending:Audio_.pending, pendingFlag:Audio_.sinkPending};
+  Audio_.sink=null; Audio_.sinkPending=true; Audio_.sinkAbandoned=false; Audio_.pending=[];
+  let played=0;
+  const origPlay=Audio_.play.bind(Audio_);
+  Audio_.play=function(f){ played++; return origPlay(f); };
+  for(let k=0;k<90;k++){
+    const f=new Float32Array(160); f.fill(0.05);
+    Audio_.push(f);
+  }
+  const r={abandoned:!!Audio_.sinkAbandoned, left:(Audio_.pending||[]).length, played};
+  Audio_.play=origPlay;
+  Audio_.sink=bak.sink; Audio_.pending=bak.pending||[]; Audio_.sinkPending=false;
+  return r;
+})()`);
+ok('攒帧溢出后认输（sinkAbandoned）', wd.abandoned === true);
+ok('攒下的帧交给了逐帧排期，没被吃掉', wd.played > 70, `→ ${wd.played} 帧`);
+ok('pending 已清空', wd.left === 0);
+
+console.log('\n=== 6. 运行时错误 ===');
 ok('页面没有未捕获异常', errs.length === 0, errs.length ? '→ ' + errs.slice(0, 3).join(' | ') : '');
 
 console.log('\n' + '='.repeat(18) + `  ${pass} 通过 / ${fail} 失败  ` + '='.repeat(18));

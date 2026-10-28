@@ -1420,6 +1420,12 @@ body.dragging .dghint{display:block}
           2.6 kHz 抬高 2.5 dB，小喇叭最容易被这一点推破音。</span></div>
         <label class="sw"><input type="checkbox" id="setPresence"><i></i></label>
       </div>
+      <div class="setrow">
+        <div class="setlbl"><b>音频自检</b><span>收不到声音时先看这一行。<b>环=on</b> 才是正常路径；
+          <b>ctx</b> 不是 running 说明音频被系统挂起了（来电、别的应用抢音频焦点）。
+          报问题的时候把这一行发过来，比描述准得多。</span></div>
+        <div class="setctl"><span class="mono" id="audioDiag" style="font-size:11px;text-align:right">—</span></div>
+      </div>
       <div class="setrow tog">
         <div class="setlbl"><b>收听时保持屏幕常亮</b><span>收音期间不熄屏；关掉可省电</span></div>
         <label class="sw"><input type="checkbox" id="setAwake"><i></i></label>
@@ -19367,6 +19373,34 @@ const Audio_ = {
     /* 环形缓冲输出是首选路径；建好之前先把帧攒着，别让第一句话卡一下 */
     this.sinkPending=true;
     this.initSink();
+    /* ★ v2.5.4 看门狗 —— 修「第一次进软件偶尔收不到声音，重启才好」。
+     *
+     * 环形缓冲是异步建起来的：addModule() 返回的是 Promise。若这个 Promise
+     * 迟迟不 settle（冷启动编译慢、AudioContext 还是 suspended 状态时
+     * WebView 会把它挂住），sinkPending 就一直挂着 true ——
+     * 而 push() 在 sinkPending 期间的策略是「先攒着」，于是**每一帧都被攒进
+     * pending 然后丢掉**，一点声音都没有。重启后上下文是新的、用户已经点过
+     * 屏幕（有手势），addModule 正常返回，所以「重启可解决」。
+     *
+     * 1.2 秒还没建好就认输：放弃环形缓冲，把攒下的帧交给逐帧排期。
+     * 逐帧排期在 8 kHz 上下文里同样不重采样，音质一样，只是抗抖动差一点 ——
+     * 但总比没声音强。 */
+    clearTimeout(this.sinkWatch);
+    this.sinkWatch=setTimeout(()=>{
+      if(this.sink||!this.sinkPending)return;
+      this.sinkAbandoned=true; this.sinkPending=false;
+      const p=this.pending||[]; this.pending=[];
+      for(let i=0;i<p.length;i++)this.play(p[i]);
+    },1200);
+    /* 上下文从 suspended 回到 running 时清一次环：
+       挂起期间环里会积压最多 4 秒的旧语音，一恢复就全放出来会很难受。 */
+    try{
+      this.ctx.addEventListener('statechange',()=>{
+        if(this.ctx.state==='running'&&this.sink){
+          try{ this.sink.port.postMessage({action:'reset'}); }catch(e){}
+        }
+      });
+    }catch(e){}
     this.ready=true; return true;
   },
   /* ★ v2.5.3 环形缓冲输出 —— 官方播放器好听的第二个原因。
@@ -19388,7 +19422,7 @@ const Audio_ = {
        48 kHz，同一条流就会被以 6 倍速播出去。宁可退回逐帧排期，
        也不能出一个「说话像快进」的版本。 */
     if(!this.rate8000){ this.sinkPending=false; return; }
-    if(!c||!c.audioWorklet||this.sink||this.sinkTried)return;
+    if(!c||!c.audioWorklet||this.sink||this.sinkTried){ this.sinkPending=false; return; }
     this.sinkTried=true;
     const SRC=[
       'class DmrSink extends AudioWorkletProcessor{',
@@ -19431,12 +19465,15 @@ const Audio_ = {
          官方 Hoseline 播放器用的也是 data URL —— 正是为了绕开这个。 */
       const url='data:text/javascript;utf8,'+encodeURIComponent(SRC);
       c.audioWorklet.addModule(url).then(()=>{
-        if(this.sink)return;
+        /* 看门狗已经认输、或者别的路径先建好了 → 别再建第二个，
+           否则两套输出同时在跑，声音会叠。 */
+        if(this.sink||this.sinkAbandoned)return;
         const n=new AudioWorkletNode(c,'dmr-sink',
           {numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[1]});
         n.port.onmessage=(e)=>{ const m=e.data; if(m&&m.action==='stat')this.underSamples=m.under; };
         n.connect(this.gain);
         this.sink=n; this.sinkPending=false;
+        clearTimeout(this.sinkWatch);
         /* 攒下来的那几帧一次倒进去，第一句话不丢头 */
         const p=this.pending||[]; this.pending=[];
         for(let i=0;i<p.length;i++)this.send(p[i]);
@@ -19578,7 +19615,16 @@ const Audio_ = {
     if(this.sink){ this.send(f); return; }
     if(this.sinkPending){
       this.pending=this.pending||[];
-      if(this.pending.length<50)this.pending.push(f);
+      this.pending.push(f);
+      /* 攒到 1.5 秒还没建好 —— 别再往下丢了，直接认输改走逐帧排期。
+         以前这里是「满了就不 push」，等于把音频静静吃掉，正是
+         「第一次进软件偶尔没声音」的那个形态。 */
+      if(this.pending.length>75){
+        this.sinkAbandoned=true; this.sinkPending=false;
+        clearTimeout(this.sinkWatch);
+        const p=this.pending; this.pending=[];
+        for(let i=0;i<p.length;i++)this.play(p[i]);
+      }
       return;
     }
     this.play(f);
@@ -24386,7 +24432,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.24';
+const PAGE_VER='2026.11.25';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
@@ -24536,6 +24582,22 @@ $('#setPresence').addEventListener('change',e=>{
   Audio_.setPresence(state.presence);
   toast(state.presence?'已开启窄带增强':'已关闭窄带增强（声音会闷一点）');
 });
+/* 音频自检读数。只在设置页可见时更新，平时不占 CPU。
+   出「收不到声音」这类偶发问题时，这一行就是证据 ——
+   比「没声音了」这种描述有用得多。 */
+setInterval(()=>{
+  const el=document.getElementById('audioDiag');
+  if(!el||!el.offsetParent)return;
+  const c=Audio_.ctx;
+  el.textContent=[
+    'ctx='+(c?c.state:'未建'),
+    (c?c.sampleRate:'—')+'Hz',
+    '环='+(Audio_.sink?'on':(Audio_.sinkAbandoned?'放弃':'未建')),
+    '欠载='+(Audio_.underSamples||0),
+    '待发='+((Audio_.pending&&Audio_.pending.length)||0),
+    '增益='+(state.volume*state.gain).toFixed(2)
+  ].join(' · ');
+},1000);
 $('#setAwake').addEventListener('change',e=>{
   state.awakeOn=!!e.target.checked; store.set('awakeOn',state.awakeOn); syncAwake();
   toast(state.awakeOn?'收听时保持屏幕常亮':'已关闭屏幕常亮');

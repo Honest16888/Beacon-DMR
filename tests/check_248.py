@@ -268,12 +268,12 @@ ok('设置页有自动登录开关', 'id="setAutoConn"' in html)
 
 # ============================================================
 print('\n=== 10. 版本号 ===')
-ok("PAGE_VER 是 2026.11.24", "PAGE_VER='2026.11.24'" in html)
+ok("PAGE_VER 是 2026.11.25", "PAGE_VER='2026.11.25'" in html)
 gp = os.path.join(REPO, 'android', 'app', 'build.gradle')
 if os.path.exists(gp):
     g = read(gp)
-    ok('build.gradle versionName = 2.5.3', 'versionName "2.5.3"' in g)
-    ok('build.gradle versionCode = 29', re.search(r'versionCode\s+29', g) is not None)
+    ok('build.gradle versionName = 2.5.4', 'versionName "2.5.4"' in g)
+    ok('build.gradle versionCode = 30', re.search(r'versionCode\s+30', g) is not None)
 else:
     ok('能读到 android/app/build.gradle', False)
 
@@ -472,10 +472,24 @@ ok('环形缓冲只在 8k 上下文启用（否则会 6 倍速）',
 ok('worklet 用 data URL 加载（file:// 下 blob 会被拒）',
    "data:text/javascript;utf8," in html)
 ok('环形缓冲优先、逐帧排期兜底', 'if(this.sink){ this.send(f); return; }' in html)
-ok('建好之前先攒帧，第一句不丢头', 'if(this.pending.length<50)this.pending.push(f);' in html)
+ok('建好之前先攒帧，第一句不丢头', 'this.pending.push(f);' in html)
 ok('欠载时淡出而不是硬跳到 0', 'this.last*=0.995' in html)
 ok('静音时清空环', "postMessage({action:'reset'})" in html)
 ok('静音期间不往环里塞', 'if(this.muted||this.userMuted)return;' in html)
+
+# ★ v2.5.4 偶发「第一次进软件收不到声音，重启才好」
+#
+# addModule 的 Promise 迟迟不 settle 时，sinkPending 一直挂 true，
+# 而 push() 在 pending 期间的策略是「先攒着」→ 每一帧都被吃掉 = 完全没声。
+# 现在攒到 1.5 秒就认输改走逐帧排期，绝不静默吃帧。
+ok('有建缓冲的看门狗', 'this.sinkWatch=setTimeout' in html)
+ok('看门狗超时会认输并交还帧',
+   'this.sinkAbandoned=true; this.sinkPending=false;' in html)
+ok('攒帧溢出也认输（不再静默丢弃）', 'if(this.pending.length>75){' in html)
+ok('晚到的 worklet 不会重复建节点', 'if(this.sink||this.sinkAbandoned)return;' in html)
+ok('上下文恢复 running 时清环（避免放旧语音）',
+   "this.ctx.addEventListener('statechange'" in html)
+ok('设置页有音频自检读数', 'id="audioDiag"' in html)
 
 print('\n' + '=' * 18 + f'  {passed} 通过 / {failed} 失败  ' + '=' * 18)
 raise SystemExit(1 if failed else 0)
