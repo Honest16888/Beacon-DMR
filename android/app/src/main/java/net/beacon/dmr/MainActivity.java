@@ -59,6 +59,17 @@ public class MainActivity extends Activity {
 
     /** 保活服务当前是否已启动。只在目标状态变化时才去动服务。 */
     private boolean keepAliveOn = false;
+
+    /**
+     * 页面是否在收听（HOSE 或原生）。
+     *
+     * <p>★ 加这个是因为原来的启动条件只有 {@code connected || rxOn}：
+     * 前者是「发射连上主站」、后者是「原生接收开着」。纯听 BM（HOSE）时
+     * 两个都不成立 —— 于是**后台没有前台服务**，进程被系统降成 cached
+     * 之后直接冻结，WebSocket 就断了。
+     * 用户报的「BM 容易掉线」，一半是没心跳（已补 45 秒），另一半就是这个。
+     */
+    private volatile boolean audioWanted;
     private DmrEngine dmr;
 
     @SuppressLint({"SetJavaScriptEnabled", "AddJavascriptInterface"})
@@ -303,7 +314,9 @@ public class MainActivity extends Activity {
     private void syncKeepAlive() {
         boolean connected = dmr != null && dmr.isConnected();
         boolean rxOn = dmr != null && dmr.isRxOn();
-        boolean want = connected || rxOn;
+        /* ★ v2.6.2 加上 audioWanted —— 纯守听（没连发射主站、原生接收也关着）
+         * 时也要有前台服务，否则后台一冻结 HOSE 就断。 */
+        boolean want = connected || rxOn || audioWanted;
         if (want == keepAliveOn) return;
         keepAliveOn = want;
         if (want) {
@@ -440,6 +453,18 @@ public class MainActivity extends Activity {
                 dv.setSystemUiVisibility(f);
             });
         }
+        /**
+         * 页面在收听 / 不在收听。
+         *
+         * <p>由 JS 的 {@code setPlay()} 调用。用来决定要不要维持前台服务 ——
+         * 见 {@link MainActivity#audioWanted} 的说明。
+         */
+        @JavascriptInterface
+        public void keepAlive(final boolean on) {
+            audioWanted = on;
+            runOnUiThread(MainActivity.this::syncKeepAlive);
+        }
+
 
         /** 收听中：持 Partial WakeLock，熄屏也保住 WebAudio 的调度线程 */
         @JavascriptInterface

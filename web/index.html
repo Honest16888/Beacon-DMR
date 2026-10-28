@@ -19987,7 +19987,7 @@ const state = {
   /* 扫描 / 录音 / 记录 那块面板是否被手动收起（手机上一收就能多看好几行） */
   tabFolded:false,
   recOn:true, recActive:false, recs:[], playingRec:null, recAudio:null,
-  spotter:{ ws:null, open:false, subscribed:[], retry:0, timer:null },
+  spotter:{ ws:null, open:false, subscribed:[], retry:0, timer:null, ka:null },
   /* 国内链路（China DMR / radiowo）。和 spotter 并列，由 net 决定用哪条。 */
   net:'bm',                                  // 'bm' 国际 BrandMeister | 'cn' 国内 China DMR
   rw:{ ws:null, open:false, subscribed:[], retry:0, timer:null, ka:null,
@@ -21125,6 +21125,7 @@ function spotterConnect(){
     sp.open=true; sp.retry=0; setDot($('#dotAudio'),'on');
     const subs=effSubs();
     if(subs.length){ ws.send(mpEncode([T.GROUP_JOIN,subs])); sp.subscribed=subs.slice(); }
+    startSpotterKa();
     renderStatus(); renderMine(); renderTab();
   };
   ws.onmessage=ev=>{
@@ -21134,6 +21135,7 @@ function spotterConnect(){
     handleSpotter(msg);
   };
   ws.onclose=()=>{
+    stopSpotterKa();
     sp.open=false; sp.ws=null; sp.subscribed=[];
     setDot($('#dotAudio'),'err'); renderMine(); renderTab(); renderStatus();
     if(!effSubs().length)return;
@@ -21145,9 +21147,39 @@ function spotterConnect(){
   };
   ws.onerror=()=>{ setDot($('#dotAudio'),'err'); };
 }
+/* ★ v2.6.2 BM 收听的心跳。
+ *
+ * 之前**一条都没有** —— 国内（radiowo）有 25 秒重发订阅，BM 这边什么都没有。
+ * 而 HOSE 在守听时可能长时间没有任何报文：订阅的组没人说话，就没有
+ * CALL_START / CALL_END / CALL_AUDIO。中间链路上的 NAT / 运营商网关
+ * 一般 30~120 秒不活跃就丢映射，下一个包直接发不出去了 ——
+ * 表现就是「挂着挂着就掉线了，而且不报错」。
+ *
+ * 心跳用「重发当前订阅」而不是自定义 ping：HOSE 的 GROUP_JOIN 本来就是
+ * 幂等的（加入已经加入的组 = 什么都不变），不像自定义帧会被服务端当未知类型。
+ * 45 秒一次，比常见 NAT 超时短，又不会太吵。
+ *
+ * 注意它和国内那条（rw.ka=25s）分开维护：两条链路可能同时存在过一小会儿
+ * （切网的那一瞬间），各自的定时器必须能被各自干净地清掉。 */
+const SPOTTER_KA_MS = 45000;
+function startSpotterKa(){
+  const sp=state.spotter;
+  stopSpotterKa();
+  sp.ka=setInterval(()=>{
+    if(!sp.ws||sp.ws.readyState!==1)return;
+    const subs=sp.subscribed.slice();
+    /* 空订阅不发 —— 服务端不需要知道「我什么都不要」，
+     * 而且空数组在 HOSE 里语义接近 RESET，容易误伤。 */
+    if(subs.length)spotterSend([T.GROUP_JOIN,subs]);
+  },SPOTTER_KA_MS);
+}
+function stopSpotterKa(){
+  const sp=state.spotter;
+  if(sp.ka){ clearInterval(sp.ka); sp.ka=null; }
+}
 function spotterClose(){
   const sp=state.spotter;
-  clearTimeout(sp.timer); sp.retry=99;
+  clearTimeout(sp.timer); stopSpotterKa(); sp.retry=99;
   if(sp.ws){ try{ sp.ws.onclose=null; sp.ws.close(); }catch(e){} }
   sp.ws=null; sp.open=false; sp.subscribed=[];
   if(state.recActive)Rec.finish();
@@ -22791,6 +22823,15 @@ function renderPlayBtn(){
 function setPlay(on, quiet){
   on=!!on;
   state.audioOn=on;
+  /* ★ v2.6.2 把「在收听」这个状态告诉原生。
+   *
+   * 原来前台服务的启动条件是 connected(发射连着) || rxOn(原生接收开)，
+   * 纯听 BM（HOSE）时两个都不成立 —— 后台没有任何前台服务，
+   * 进程被系统降成 cached 之后直接冻结，WebSocket 就断了。
+   * 这是「BM 容易掉线」的另一半原因（另一半是没有心跳）。
+   * 国内那条链路以前也会中招，只是它还有 25 秒心跳、
+   * 断了也会重连，所以不明显。 */
+  try{ if(window.Android&&Android.keepAlive)Android.keepAlive(on); }catch(e){}
   /* 记住用户的选择：默认是开的，但用户手动点了静音，下次进来就该是静音。
      不加这一句的话，每次冷启动都会把静音的用户重新打开，等于没记住。 */
   store.set('audioOn',on);

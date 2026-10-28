@@ -374,7 +374,6 @@ public final class MmdvmSession {
     /** 那个会话最后一次确认存在过的时刻（ms）。用来算还要等多久。 */
     public static volatile long carrySinceMs;
     /** 主站回收会话需要的时间。等满这个数再登录，比撞上去再重试快得多。 */
-    private static final int SESSION_RECLAIM_MS = 20000;
 
     /* ---- MSTNAK（主站拒绝）处理 ---- */
     private volatile int nakCount;
@@ -694,25 +693,28 @@ public final class MmdvmSession {
             nakWaitUntil = 0L;
         }
 
-        /* ② 跨进程：上次是被杀掉的，主站那边可能还挂着会话。
+        /* ② 跨进程：上次是被杀掉的，主站那边**可能**还挂着会话。
          *
-         * 这种情况原来完全没处理 —— 进程一死，内存里的 hadSession /
-         * lastDisconnectMs 全没了，重开就当成「第一次连接」直接发 RPTL，
-         * 必然撞 MSTNAK，然后靠 15+20+30… 的重试链硬等。
-         * 与其撞上去再等，不如**先等满回收时间再发第一个包** ——
-         * 用户看到的是「正在登录…」多转十几秒，而不是「被拒绝 / 第 N 次重试」。
+         * ★ v2.6.2 撤掉了这里原来的「先等满 20 秒再发第一个包」。
          *
-         * 只在「上次退出距今不到回收时间」时才等：如果已经过了五分钟，
-         * 主站早就回收了，再等就是白等。 */
+         * 那是我上一版（v2.5.8）的判断，方向错了：它把「偶尔会撞车」当成了
+         * 「一定会撞车」，于是**每次**冷启动都要白等 20 秒。而实际情况是
+         * 大多数时候主站早就回收了，第一次发 RPTL 就能过。
+         * 用户的原话：「bm 的第一次要等很久，体验不好」—— 就是我加的那 20 秒。
+         *
+         * 现在的策略回到<b>乐观首发</b>：
+         *   · 直接发 RPTL。成功就是成功，一条路都不用多走；
+         *   · 真被拒（MSTNAK）才进重试链，首档 15 秒正是主站 hand-off timer。
+         *
+         * 代价是撞车时要多绕一轮 15 秒；收益是绝大多数情况下省掉 20 秒。
+         * 「偶尔多等 15 秒」比「每次多等 20 秒」划算得多。
+         *
+         * carrySession 保留下来做一件小事：被拒时知道「这大概率是上次没断干净」，
+         * 文案里就能直接说清楚，而不是让用户去猜密码。 */
         if (carrySession) {
-            long gap = carrySinceMs > 0 ? System.currentTimeMillis() - carrySinceMs : Long.MAX_VALUE;
-            if (gap >= 0 && gap < SESSION_RECLAIM_MS) {
-                long wait = SESSION_RECLAIM_MS - gap;
-                nakWaitUntil = System.currentTimeMillis() + wait;
-                log("上次没正常断开（距今 " + (gap / 1000) + " 秒），主站会话可能还挂着；"
-                        + "先等 " + (wait / 1000) + " 秒让主站释放，再登录");
-            }
-            /* 用掉一次就作废 —— 下次再连时以新的状态为准 */
+            long gap = carrySinceMs > 0 ? System.currentTimeMillis() - carrySinceMs : -1;
+            log("上次没正常断开" + (gap >= 0 ? "（距今 " + (gap / 1000) + " 秒）" : "")
+                    + "，主站可能还留着会话；如果这次被拒，多半就是这个原因");
             carrySession = false;
         }
         handshakeDeadline = Math.max(nakWaitUntil, System.currentTimeMillis())
