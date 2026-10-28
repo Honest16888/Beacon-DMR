@@ -3,7 +3,9 @@ package net.beacon.dmr.mmdvm;
 import android.content.Context;
 
 import net.beacon.dmr.audio.AudioOut;
-import net.beacon.dmr.mmdvm.vocoder.Vocoder;
+import net.beacon.dmr.core.HostCheck;
+import net.beacon.dmr.vocoder.Vocoder;
+import net.beacon.dmr.DmrTx;
 
 import java.io.File;
 import java.util.Collections;
@@ -100,6 +102,19 @@ public final class DmrLink implements MmdvmSession.Listener, DmrTransmitter.List
     private final MmdvmSession session;
     private final DmrTransmitter transmitter;
     private final DmrRx rx = new DmrRx();
+
+    /**
+     * 发射动作的串行执行器 —— 见 {@link #ptt} 的说明。
+     *
+     * <p>单线程是刻意的：按和放必须严格先后，否则会出现「松手还在发射」。
+     * 守护线程，进程退出时不拖住。
+     */
+    private final java.util.concurrent.ExecutorService txSeq =
+            java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "dmr-ptt");
+                t.setDaemon(true);
+                return t;
+            });
 
     private volatile boolean vocoderReady;
     private volatile String vocoderReport = "";
@@ -252,6 +267,26 @@ public final class DmrLink implements MmdvmSession.Listener, DmrTransmitter.List
             return;
         }
 
+        /* ★ 地址格式本地先查一遍。
+         *
+         * 真机上出过一次 4602.ma4614ster.brandmeister.network —— 数字被插进了
+         * "master" 中间，界面上只回一句 Load failed : Host not found，
+         * 一句话都不提「地址写错了」。这种能在本地判断的事不该交给 DNS。
+         *
+         * 注意必须用 normalize 之后的串去 configure：原来传的是原始 host，
+         * 带前后空格的话 InetAddress.getAllByName(" 4602…" ) 一样查不到，
+         * 而上面的空串检查用的是 trim()，两者不一致。 */
+        HostCheck.Result hc = HostCheck.check(host);
+        if (hc.bad()) {
+            cb.onState(MmdvmSession.State.ERROR, hc.message
+                    + (hc.suggestion == null ? "" : "。改成 " + hc.suggestion + " 再试"));
+            return;
+        }
+        if (hc.level == HostCheck.Level.WARN) {
+            log("⚠ " + hc.message);
+        }
+        final String hostOk = HostCheck.normalize(host);
+
         if (!vocoderReady) {
             String report = loadVocoder();
             if (vocoderReady) {
@@ -268,7 +303,7 @@ public final class DmrLink implements MmdvmSession.Listener, DmrTransmitter.List
         this.password = password.trim();
         session.setStationInfo(callsign, location, description, "",
                 MmdvmSession.DEFAULT_SWID, 0);
-        session.configure(host, port, dmrId, essid, password);
+        session.configure(hostOk, port, dmrId, essid, password);
         /* 原生接管期间抖动缓冲要更厚，见 NATIVE_PRE_ROLL */
         audio.setPreRollFrames(NATIVE_PRE_ROLL);
         try {
@@ -315,6 +350,29 @@ public final class DmrLink implements MmdvmSession.Listener, DmrTransmitter.List
         sb.append("  密码    ").append(password.isEmpty() ? "✗ 空（必须填）"
                 : "✓ 已填 " + password.length() + " 字符").append('\n');
         sb.append("  时隙    TS").append(slot).append(" · 色码 ").append(cc).append('\n');
+
+        sb.append("\n【地址格式】\n");
+        {
+            HostCheck.Result hc = HostCheck.check(host);
+            switch (hc.level) {
+                case OK:
+                    sb.append("  ✓ 格式合法\n");
+                    break;
+                case WARN:
+                    sb.append("  ⚠ ").append(hc.message).append('\n');
+                    break;
+                default:
+                    sb.append("  ✗ ").append(hc.message).append('\n');
+                    if (hc.suggestion != null) {
+                        sb.append("    → 建议改成 ").append(hc.suggestion).append('\n');
+                    }
+                    /* 地址写错的时候，下面 DNS 那段必然是「解析失败」。
+                     * 先把结论摆出来，免得用户去怀疑网络。 */
+                    sb.append("    → 这一项不通过，下面【域名解析】必然失败，"
+                            + "先把地址改对再点连接\n");
+                    break;
+            }
+        }
 
         sb.append("\n【域名解析】\n");
         if (host == null || host.trim().isEmpty()) {
@@ -447,13 +505,42 @@ public final class DmrLink implements MmdvmSession.Listener, DmrTransmitter.List
     /**
      * 按下 / 松开 PTT。
      *
-     * @return 失败原因，成功返回 null
+     * <p>★ <b>这个方法绝不碰网络。</b>它只做三件很快的事：检查前提条件、
+     * 把动作排进单线程执行器、立刻返回。真正的
+     * {@code DmrTransmitter.start()} / {@code stop()} 在那个线程里跑。
+     *
+     * <p>为什么必须这样：{@code start()} 里第一件事就是发 LC 头帧
+     * （{@code DatagramSocket.send}），{@code stop()} 里要补终止帧 ——
+     * 两者都是网络操作。从 {@code OnTouchListener} 直接调过来等于在主线程发 UDP，
+     * Android 会抛 {@code NetworkOnMainThreadException}。
+     *
+     * <p>真机上的表现是「连上了，一按发射就崩」，堆栈一路是
+     * {@code View.dispatchTouchEvent → startPtt → DmrLink.ptt → sendDmrd → sendto}。
+     * 连接那几条路早就移到后台线程了，唯独 PTT 漏了 —— 因为它不是「点击一下」，
+     * 而是 {@code onTouch} 的 DOWN/UP，写的时候容易当成纯 UI 事件。
+     *
+     * <p>用<b>单线程</b>执行器而不是每次 new Thread：按和放是两个任务，
+     * 必须严格按顺序执行。快速「点一下就松」时，如果 start 和 stop 跑在两个
+     * 并行线程上，stop 可能先看到 {@code transmitting == false} 直接返回，
+     * 然后 start 才把发射打开 —— 结果是松手之后一直在发射。
+     *
+     * @return 立即检查出的失败原因（权限 / 未连接 / 声码器）；已受理返回 null。
+     *         异步阶段的失败通过 {@link Listener#onTx} 的 reason 报出来。
      */
     public String ptt(boolean down, int tgid, int slot, int colorCode, boolean privateCall) {
         if (!down) {
-            transmitter.stop("松开 PTT");
+            /* 松开也要排队 —— 它要 join 发射线程并补一个终止帧，同样是网络操作。 */
+            txSeq.execute(() -> {
+                try {
+                    transmitter.stop("松开 PTT");
+                } catch (Throwable t) {
+                    log("停止发射失败：" + t);
+                }
+            });
             return null;
         }
+
+        /* 这几个检查都是内存操作，留在调用线程做，好在按下的一瞬间就给出提示。 */
         if (!hasAudioPermission()) return "缺少录音权限";
         if (!session.isConnected()) return "尚未连接主站";
         if (!vocoderReady) {
@@ -462,12 +549,32 @@ public final class DmrLink implements MmdvmSession.Listener, DmrTransmitter.List
                     + "点「诊断」看具体原因";
         }
 
-        setTxParams(slot, colorCode);
-        txDstId = tgid;
-        /* repeaterId 传登录 ID（含 ESSID 别名）—— 主站据此把通联归到本机热点；
-         * srcId 仍是裸 DMR ID，呼号归属不变。 */
-        return transmitter.start(session, myId, session.getLoginId(), tgid, slot, colorCode,
-                privateCall ? DmrTx.FLCO_USER_USER : DmrTx.FLCO_GROUP);
+        final int tg = tgid;
+        final int sl = slot;
+        final int cc = colorCode;
+        final boolean priv = privateCall;
+        final int loginId = session.getLoginId();
+
+        txSeq.execute(() -> {
+            String err;
+            try {
+                setTxParams(sl, cc);
+                txDstId = tg;
+                /* repeaterId 传登录 ID（含 ESSID 别名）—— 主站据此把通联归到本机热点；
+                 * srcId 仍是裸 DMR ID，呼号归属不变。 */
+                err = transmitter.start(session, myId, loginId, tg, sl, cc,
+                        priv ? DmrTx.FLCO_USER_USER : DmrTx.FLCO_GROUP);
+            } catch (Throwable t) {
+                err = "发射启动失败：" + t;
+            }
+            if (err != null) {
+                /* 异步阶段的失败必须有个出口，否则用户只看到「按住说话」闪一下
+                 * 又变回去，不知道发生了什么。onTx(false, …, reason) 会弹 Toast。 */
+                log("发射失败：" + err);
+                cb.onTx(false, tg, err);
+            }
+        });
+        return null;
     }
 
     public boolean isTransmitting() {

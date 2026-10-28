@@ -1,6 +1,7 @@
 package net.beacon.dmr.mmdvm;
 
-import net.beacon.dmr.mmdvm.vocoder.Vocoder;
+import net.beacon.dmr.vocoder.Vocoder;
+import net.beacon.dmr.DmrTx;
 
 /**
  * DMR 接收解码：把主站推来的 DMRD 语音包还原成 PCM。

@@ -45,18 +45,20 @@ javac -encoding UTF-8 -d "$OUT" \
   "$CORE/MsgPack.java" \
   "$CORE/MuLaw.java" \
   "$CORE/Geo.java" \
+  "$CORE/HostCheck.java" \
   "$JAVA_DIR/audio/AudioChain.java" \
   "$JAVA_DIR/live/LiveStore.java" \
-  "$JAVA_DIR/mmdvm/vocoder/Vocoder.java" \
-  "$JAVA_DIR/mmdvm/DmrTx.java" \
+  "$JAVA_DIR/vocoder/Vocoder.java" \
+  "$JAVA_DIR/DmrTx.java" \
   "$JAVA_DIR/mmdvm/DmrRx.java" \
   "$ROOT/tests/CoreSelfTest.java" \
   "$ROOT/tests/GeoTest.java" \
   "$ROOT/tests/AudioChainTest.java" \
   "$ROOT/tests/StatsTest.java" \
-  "$ROOT/tests/DmrRxTest.java"
+  "$ROOT/tests/DmrRxTest.java" \
+  "$ROOT/tests/HostCheckTest.java"
 
-for t in CoreSelfTest GeoTest AudioChainTest StatsTest DmrRxTest; do
+for t in CoreSelfTest GeoTest AudioChainTest StatsTest DmrRxTest HostCheckTest; do
   java -Dfile.encoding=UTF-8 -cp "$(cp_join "$OUT")" "$t"
 done
 

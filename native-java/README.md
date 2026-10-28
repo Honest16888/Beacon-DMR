@@ -219,28 +219,90 @@ bash tools/build_vocoder.sh     # 在 ASCII 镜像里重编，只拷 libbeaconvo
 削它等于赌 dlsym 要的符号恰好都在 `.dynsym` 里 —— 赔率是「装完发不出去、
 而且没有任何报错」。`useLegacyPackaging = true` 也一样，和 WebView 版逐项一致。
 
-## 「连不上主站」的三个成因（alpha3 修）
+## 「连不上主站」到「连上了但一按就崩」
 
-真机反馈「这一版本连接主站连不上」。MMDVM 登录失败有七八种成因，
-而它们的**界面表现完全一样**：停在「未连接」或者弹一句 MSTNAK。
-排查后发现三条是设计错误，不是环境问题：
+真机反馈走了两轮。第一轮是「连接主站连不上」，加了诊断按钮后拿到报告，
+发现是两个**同时存在**的问题叠在一起；第二轮是「连上了一发射就崩溃」。
+下面按发现顺序记，每一条都是「界面表现查不出来、代码里一眼能看出」的类型。
 
-1. **`DmrLink.connect()` 开头「声码器没就绪就 return」** —— 声码器一旦加载失败
-   （插件 .so 缺失、ABI 不匹配、libc++ 冲突），点「连接主站」**什么都不发生**，
-   原因只躺在自检弹窗里。而登录（UDP 62031）和声码器（PCM ⇄ AMBE）是两件独立的事：
-   **不发射就完全不需要声码器**。现在改成「声码器坏了也能登录，只是暂时不能 PTT」。
-2. **`onTxConnect()` 里挡了一道 `ensureMicPermission()`** —— 登录和麦克风毫无关系，
-   只有按 PTT 才需要。后果是没给权限的用户点「连接主站」只看到一个权限框，
-   随手点「拒绝」就永远连不上，而界面上没有任何一句话说明是因为权限。
-   麦克风现在只在 `startPtt()` 里申请。
-3. **没有任何连接诊断** —— 让用户描述「它说连不上」是查不了的。
+### 第一轮：连不上（alpha4 修）
 
-现在设置页有一行整宽的「诊断（连不上时点这个）」，`DmrLink.diagnose()`
-分六段输出【配置】【域名解析】【本机 UDP】【录音权限】【声码器】【当前会话】，
-**不联网、不发包、不改状态**，随时可以点。报告可以直接长按复制。
+MMDVM 登录失败有七八种成因，界面表现完全一样：停在「未连接」或弹一句 MSTNAK。
+所以先给 `DmrLink.diagnose()` 加诊断按钮，让用户把一屏报告发回来 ——
+**没有这一步，后面三条一条也查不出来。**
+
+**① 主站地址写错了：`4602.ma4614ster.brandmeister.network`**
+
+`4614`（DMR ID 的前四位）被插进了 `master` 中间。这种地址的唯一后果是 DNS 查不到，
+而界面上只会写 `Load failed : Host not found` —— **一句话都不提「地址写错了」**。
+用户只能得出「软件坏了」。
+
+`core/HostCheck.java` 现在把能在本地判断的事全接过来：空格、全角字符、非法字符、
+域名段边界、IPv4 越界、BrandMeister 域名格式。**能猜出正确写法时直接弹
+「改好并连接」**——`guessBm()` 取第一个 4 位数字段作主站号，上面那串会被
+准确猜回 `4602.master.brandmeister.network`。
+
+顺带修了一个真 bug：`session.configure()` 传的是**原始** host，而空值检查用的是
+`host.trim()`。粘贴时带了前后空格的话，`getAllByName(" 4602…")` 一样查不到。
+
+**② JNI 符号全断：`UnsatisfiedLinkError: No implementation found for
+...net.beacon.dmr.mmdvm.vocoder.Vocoder.nativeInit`**
+
+Phase 3 搬家时「只改 package 行、逻辑一行没动」—— 而 JNI 的符号名由**全限定类名**
+拼出来。`libbeaconvoc.so` 里导出的是 `Java_net_beacon_dmr_vocoder_Vocoder_nativeInit`，
+包名一改就对不上。`DmrTx` 同样断，只是还没人按 PTT 所以没暴露。
+
+那句报错极具误导性：`is the library loaded?` 读起来像「.so 没打进包」，
+实际 .so 好好地在 `lib/arm64-v8a/` 里。现在两个类移回原包
+（`net.beacon.dmr.DmrTx` / `net.beacon.dmr.vocoder.Vocoder`），
+并加了 **`tools/check_jni.py`**：扫所有 `native` 声明，拼出期望符号，
+逐个 ABI 比对 `.so` 的 `.dynsym`。接在 `build_java.sh` 里，编译前跑。
+
+**③ 声码器坏了会静默阻断登录**
+`connect()` 开头写的是「声码器没就绪就 return」，于是点「连接主站」什么都不发生。
+而登录（UDP 62031）和声码器（PCM ⇄ AMBE）是两件独立的事 —— **不发射就完全不需要声码器**。
+现在声码器坏了也能登录，只是暂时不能按 PTT。
+
+**④ 连接前申请麦克风权限**
+登录和麦克风毫无关系。没给权限的用户点连接只看到权限框，随手点「拒绝」就永远连不上，
+而界面上一个字都不提权限。麦克风现在只在 `startPtt()` 里申请。
+
+### 第二轮：连上了，一按发射就崩（alpha4 修）
+
+```
+android.os.NetworkOnMainThreadException
+  at BlockGuardOs.sendto
+  at MmdvmSession.send(MmdvmSession.java:1717)
+  at DmrTransmitter.start(DmrTransmitter.java:288)
+  at DmrLink.ptt(DmrLink.java:514)
+  at MainActivity.startPtt(MainActivity.java:395)
+  at View.dispatchTouchEvent
+```
+
+连接那几条路早就移到后台线程了，**唯独 PTT 漏了** —— 因为它不是「点一下」，
+而是 `OnTouchListener` 的 DOWN/UP，写的时候容易当成纯 UI 事件。
+可 `DmrTransmitter.start()` 里第一件事就是发 LC 头帧，`stop()` 里要补终止帧，
+两者都是 `DatagramSocket.send`。
+
+现在 `DmrLink.ptt()` **绝不碰网络**：只做内存检查，然后把动作排进 `txSeq`。
+用**单线程**执行器而不是每次 `new Thread`，因为按和放必须严格先后 ——
+快速「点一下就松」时如果跑在并行线程上，`stop()` 可能先看到
+`transmitting == false` 直接返回，然后 `start()` 才把发射打开，
+**结果是松手之后一直在发射**。
+
+异步启动带来的第二个问题：失败时不会有 `onTx(true)` 先到，而
+`pttDown` 还停在 true —— 用户松手后再按就再也压不下去，屏幕上只看到按钮闪了一下。
+所以 `onTx(false, …)` 里要复位 `pttDown`，并按「有没有真的开起来过」
+分别显示「没发出去：…」和「发射中断：…」。
+
+### 诊断报告长什么样
+
+设置页底部一整行「诊断（连不上时点这个）」，`DmrLink.diagnose()` 分七段输出
+【配置】【地址格式】【域名解析】【本机 UDP】【录音权限】【声码器】【当前会话】，
+**不联网、不发包、不改状态**，随时可以点，文字可以长按复制。
 
 配套的小修：
-- 连接 / 断开 / 自检 / 诊断全部移到后台线程（`MmdvmSession.connect()` 第一件事是
+- 连接 / 断开 / 自检 / 诊断全部移到后台线程（`connect()` 第一件事是
   `InetAddress.getAllByName()`，DNS 卡住会冻界面数秒，用户会以为按钮没生效而反复点）。
 - 连接按钮置忙（「正在登录…」），并加 30 s 看门狗 —— 握手超时 24 s + 断开后等待 2 s，
   最坏 26 s 才等到 ERROR；看门狗兜住「已经在连接中，忽略重复请求」那条静默 return。
@@ -292,8 +354,22 @@ bash native-java/tests/run.sh      # 125 项，桌面 JDK 直接跑，不需要�
   「同步码 + 嵌入信令在场的 64 轮往返全部一致」：同步码写在 p[13] 低半字节和
   p[19] 高半字节，正好和 AMBE 抢同一批位 —— 取错半字节的表现是
   「每 6 帧（360 ms）坏一次」，而不是报错
+- **`HostCheckTest` 45 项** —— 主站地址校验。每一条都对应一种真实写法，
+  而每一种在界面上都只表现成 `Load failed : Host not found`，
+  看不出是哪个字错了。其中一条钉的就是真机上那串
+  `4602.ma4614ster.brandmeister.network` → 必须猜回正确地址
 
-合计 **125 项**。
+合计 **170 项**。
+
+### 另外还有一道静态检查
+
+`tools/check_jni.py` 不在上面这 170 项里，但同样挂在出包流程上（编译之前跑）：
+扫所有 `native` 方法声明，按 JNI 规则拼出符号名，逐个 ABI 比对 `.so` 的 `.dynsym`。
+对不上就直接失败。
+
+它防的是一个**只在运行时才暴露**的错误：改一个 `package` 行，所有 native 调用静默全断，
+报错是英文的 `No implementation found for … is the library loaded?` ——
+读起来像「.so 没打进包」，实际是符号名还带着旧包名。这个坑踩过一次（见上一节 ②）。
 
 ## 进度
 

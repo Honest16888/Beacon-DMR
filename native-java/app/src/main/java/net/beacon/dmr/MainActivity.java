@@ -24,6 +24,7 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import net.beacon.dmr.audio.AudioOut;
+import net.beacon.dmr.core.HostCheck;
 import net.beacon.dmr.core.MuLaw;
 import net.beacon.dmr.core.Palette;
 import net.beacon.dmr.core.Prefs;
@@ -117,6 +118,14 @@ public final class MainActivity extends Activity
 
     /** PTT 当前是否按着。用来防重复下发（DOWN 事件可能来两次） */
     private boolean pttDown;
+    /**
+     * 本次 PTT 是否真的开始发射过。
+     *
+     * <p>用来区分 {@link #onTx} 收到的 {@code false} 是哪一种：
+     * 真的说过话之后正常/异常结束 =「发射中断」，从没开起来就失败 =「没发出去」。
+     * 发射是异步启动的（见 {@code DmrLink.ptt}），所以按下的瞬间还判断不出来。
+     */
+    private boolean txStarted;
     /** 上一次请求录音权限的时机，避免连续弹窗 */
     private long permAskedAt = 0;
     private static final int REQ_MIC = 1001;
@@ -856,14 +865,23 @@ public final class MainActivity extends Activity
     public void onTx(boolean on, int dstId, String reason) {
         ui.post(() -> {
             if (on) {
+                txStarted = true;
                 pttBtn.setText("发射中…");
                 pttBtn.setTextColor(pal.bad);
             } else {
+                /* 发射是异步启动的，失败时不会有 onTx(true) 先到。
+                 * 这里必须复位 pttDown —— 否则用户松手之后再按就再也压不下去了，
+                 * 而他看到的只是按钮闪了一下，完全不知道发生了什么。 */
+                pttDown = false;
                 pttBtn.setText("按住说话");
                 pttBtn.setTextColor(pal.text);
                 if (reason != null && !"松开 PTT".equals(reason)) {
-                    Toast.makeText(this, "发射结束：" + reason, Toast.LENGTH_SHORT).show();
+                    /* 「发射结束：声码器未就绪」读起来像说完了，实际一个字都没发出去 ——
+                     * 按有没有真的开起来分两种说法。 */
+                    String head = txStarted ? "发射中断：" : "没发出去：";
+                    Toast.makeText(this, head + reason, Toast.LENGTH_LONG).show();
                 }
+                txStarted = false;
             }
             updateTxDiag();
         });
@@ -1074,7 +1092,15 @@ public final class MainActivity extends Activity
                     Toast.LENGTH_SHORT).show();
         }
 
-        @Override public void onTxConnect() {
+        @Override public void onTxConnect() { txConnect(); }
+
+        /**
+         * 连接 / 断开主站。
+         *
+         * <p>从 {@link SettingsPage.Listener#onTxConnect()} 调，也从「地址写错了 →
+         * 一键修正」的对话框回调里调 —— 所以必须是一个方法，不能inline在匿名类里。
+         */
+        private void txConnect() {
             if (link == null) return;
             if (link.isConnected()) {
                 /* 断开要 join 发射线程（最多 600 ms），也放后台，别冻界面。
@@ -1093,13 +1119,30 @@ public final class MainActivity extends Activity
 
             String host = Prefs.host(MainActivity.this);
             int id = Prefs.dmrId(MainActivity.this);
-            if (host.isEmpty()) {
-                Toast.makeText(MainActivity.this, "先填主站地址", Toast.LENGTH_SHORT).show();
+            if (host.trim().isEmpty()) {
+                Toast.makeText(MainActivity.this, "先填主站地址（中国区填 4602.master.brandmeister.network）",
+                        Toast.LENGTH_LONG).show();
                 return;
             }
             if (id < 1000) {
                 Toast.makeText(MainActivity.this, "DMR ID 至少要 4 位（一般是 7 位）",
                         Toast.LENGTH_LONG).show();
+                return;
+            }
+
+            /* ★ 地址格式本地先查一遍，错的就拦住，别浪费一次 DNS + 握手。
+             *
+             * 真机上出过 4602.ma4614ster.brandmeister.network（4614 是 DMR ID 的前四位，
+             * 被插进了 master 中间）。这种地址的唯一后果是 DNS 查不到，而界面上只会显示
+             * 「Load failed : Host not found」—— 一句话都不提「你地址写错了」。
+             * 能猜出正确写法的时候，直接给一个「改好并连接」的按钮。 */
+            HostCheck.Result hc = HostCheck.check(host);
+            if (hc.bad()) {
+                if (hc.suggestion != null) {
+                    askFixHost(host, hc);
+                } else {
+                    Toast.makeText(MainActivity.this, hc.message, Toast.LENGTH_LONG).show();
+                }
                 return;
             }
             /* ★ 这里**不要**申请麦克风权限。
@@ -1149,6 +1192,43 @@ public final class MainActivity extends Activity
                 }
             }, 30_000);
             updateTxDiag();
+        }
+
+        /**
+         * 「地址看起来写错了」—— 给出正确写法，一键替换。
+         *
+         * <p>为什么要弹框而不是直接 Toast 一句原因：这条路径 90% 的情况都是
+         * 打错了一两个字（多加数字、漏了 master、全角句号），而正确写法是能算出来的。
+         * 让用户自己去输入框里找那个错字，比给他一个按钮难得多 ——
+         * 尤其是 {@code 4602.ma4614ster} 这种，肉眼扫十遍也未必看得出。
+         */
+        private void askFixHost(String bad, HostCheck.Result hc) {
+            String fix = hc.suggestion;
+            String msg = hc.message
+                    + "\n\n现在填的：\n" + bad
+                    + "\n\n改成这个：\n" + fix;
+
+            new AlertDialog.Builder(MainActivity.this)
+                    .setTitle("主站地址看起来写错了")
+                    .setMessage(msg)
+                    .setPositiveButton("改好并连接", (d, w) -> {
+                        applyHost(fix);
+                        txConnect();
+                    })
+                    .setNeutralButton("只改地址", (d, w) -> {
+                        applyHost(fix);
+                        Toast.makeText(MainActivity.this,
+                                "地址已改好，确认其它设置后再点「连接主站」",
+                                Toast.LENGTH_LONG).show();
+                    })
+                    .setNegativeButton("取消", null)
+                    .show();
+        }
+
+        /** 写进 Prefs + 同步输入框，两处都要改否则下次进来还是旧的。 */
+        private void applyHost(String host) {
+            Prefs.setHost(MainActivity.this, host);
+            if (settingsPage != null) settingsPage.setHostText(host);
         }
 
         @Override public void onTxSelfTest() {

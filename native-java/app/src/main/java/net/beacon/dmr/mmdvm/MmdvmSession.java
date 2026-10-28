@@ -48,7 +48,7 @@ import java.util.Locale;
  *       报文本身没有任何区分标志。</li>
  * </ul>
  *
- * <p>本类只负责连接与收发。DMRD 包由 {@link DmrTx} 组装，音频由 {@link DmrTransmitter} 采集。
+ * <p>本类只负责连接与收发。DMRD 包由 {@link net.beacon.dmr.DmrTx} 组装，音频由 {@link DmrTransmitter} 采集。
  */
 public final class MmdvmSession {
 

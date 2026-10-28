@@ -23,11 +23,11 @@ android {
         applicationId "net.beacon.dmr.java"
         minSdk 26
         targetSdk 34
-        versionCode 3
+        versionCode 4
         /* alpha1 = Phase 0/0.5/1/2（收听 + 话组表 + 看板 + 设置）
          * alpha3 = Phase 3（收发：MMDVM + 声码器 + FEC）—— 版本号直接跟 Phase 对齐，
          *          用户报问题时说「alpha3」我立刻知道是哪一版。 */
-        versionName "3.0.0-alpha3"
+        versionName "3.0.0-alpha4"
     }
 
     signingConfigs {

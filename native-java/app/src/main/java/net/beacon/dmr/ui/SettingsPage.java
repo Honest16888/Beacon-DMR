@@ -404,9 +404,24 @@ public final class SettingsPage {
         txState.setTextColor(ok ? pal.ok : pal.muted);
     }
 
+    /**
+     * 只同步主站地址这一个输入框。
+     *
+     * <p>给「地址写错了 → 一键改成正确写法」用。刻意不调 {@link #bindValues()} ——
+     * 那会把整页控件重新填一遍，用户刚改过、还没落盘的滑块位置会被冲掉。
+     *
+     * <p>{@code binding} 要临时关掉：否则 setText 会触发 TextWatcher，
+     * 又走一遍「边输边落盘」，虽然写的是同样的值，但多绕一圈没有意义。
+     */
+    public void setHostText(String host) {
+        if (txHost == null) return;
+        binding = true;
+        txHost.setText(host == null ? "" : host);
+        binding = false;
+    }
+
     /** 连接状态变了：按钮文字跟着换。 */
-    public void setTxConnected(boolean connected) {
-        txConnected = connected;
+    public void setTxConnected(boolean connected) {        txConnected = connected;
         if (btnConnect == null) return;
         btnConnect.setEnabled(true);
         btnConnect.setText(connected ? "断开连接" : "连接主站");

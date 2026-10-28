@@ -1,7 +1,16 @@
-package net.beacon.dmr.mmdvm.vocoder;
+package net.beacon.dmr.vocoder;
 
 /**
  * DroidStar 声码器插件（droidstar_vocoder_plugin）的 Java 封装。
+ *
+ * <p>★ <b>这个类必须留在 {@code net.beacon.dmr.vocoder} 包。</b>方法都是
+ * {@code native}，JNI 符号名由全限定类名拼出来；{@code libbeaconvoc.so} 里导出的
+ * 是 {@code Java_net_beacon_dmr_vocoder_Vocoder_nativeInit}。包名一改就
+ * {@code UnsatisfiedLinkError}（错误信息是英文的 "No implementation found for
+ * ... is the library loaded?"，看着像 .so 没打进包，实际是符号名不匹配）。
+ *
+ * <p>所以它不在 {@code mmdvm/} 目录下，尽管用它的全是 {@code mmdvm} 里的类。
+ * 目录分层是审美，JNI 符号是正确性。
  *
  * <p>插件本体是 wiblingen/droidstar_vocoder_plugin 的预编译产物，
  * 以 libdsvocoder.so 的名字随 APK 分发（必须带 lib 前缀，否则 Android 不会解压）。

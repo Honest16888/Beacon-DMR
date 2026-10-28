@@ -1,7 +1,18 @@
-package net.beacon.dmr.mmdvm;
+package net.beacon.dmr;
 
 /**
  * DMR 发射帧组装（Homebrew / MMDVM 的 55 字节 DMRD 包）。
+ *
+ * <p>★ <b>这个类必须留在 {@code net.beacon.dmr} 包，不能跟着别的类挪进
+ * {@code net.beacon.dmr.mmdvm}。</b>它的方法是 {@code native}，JNI 的符号名由
+ * <b>全限定类名</b>拼出来 —— {@code libbeaconvoc.so} 里导出的名字是
+ * {@code Java_net_beacon_dmr_DmrTx_nativeVoice}。包名一改，符号就对不上，
+ * JVM 抛 {@code UnsatisfiedLinkError: No implementation found for ...}。
+ *
+ * <p>这个坑踩过一次：Phase 3 搬家时「只改 package 行、逻辑一行没动」，
+ * 结果是所有 native 调用全断，而且<b>只在第一次真正调用时才暴露</b> ——
+ * 声码器那条路径用户先撞上了，DmrTx 这条要等按 PTT 才炸。
+ * 现在 {@code tools/check_jni.py} 会在出包前把这件事查一遍。
  *
  * <p>native 侧是 DroidStar dmr.cpp 发射路径的移植，包含完整的 FEC 链：
  * RS(12,9) → BPTC(196,96) → Golay(20,8,7) → QR(16,7) → Hamming(16,11)。

@@ -22,6 +22,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJ="$ROOT/native-java"
+TOOLS="$ROOT/tools"
 VARIANT="${1:-release}"
 DIST="$ROOT/dist"
 
@@ -42,6 +43,14 @@ fi
 
 echo "==> 纯逻辑自检"
 bash "$PROJ/tests/run.sh" | tail -3
+
+# ★ JNI 符号一致性：Java 的 native 声明必须和 .so 的 .dynsym 对得上。
+# 这一步放在编译之前 —— 对不上的话编出来的包一按 PTT 就 UnsatisfiedLinkError，
+# 而那个报错信息（"is the library loaded?"）会把人往「.so 没打进包」上带，
+# 实际是包名改过、符号名还是旧的。查一次比在真机上猜一轮便宜得多。
+echo "==> JNI 符号一致性"
+python3 "$TOOLS/check_jni.py" --root "$PROJ/../native-java/app/src/main" --quiet 2>/dev/null \
+  || python "$TOOLS/check_jni.py" --root "$PROJ/../native-java/app/src/main" --quiet
 
 echo "==> 构建 $VARIANT"
 ( cd "$PROJ" && ./gradlew --no-daemon ":app:assemble${VARIANT^}" )

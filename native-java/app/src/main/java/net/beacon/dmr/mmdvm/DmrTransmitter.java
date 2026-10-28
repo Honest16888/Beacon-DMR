@@ -6,7 +6,8 @@ import android.media.AudioRecord;
 import android.media.MediaRecorder;
 import android.os.Build;
 
-import net.beacon.dmr.mmdvm.vocoder.Vocoder;
+import net.beacon.dmr.vocoder.Vocoder;
+import net.beacon.dmr.DmrTx;
 
 /**
  * DMR 发射链路：麦克风 → 声码器 → DMRD 包 → 主站。
