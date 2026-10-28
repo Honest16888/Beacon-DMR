@@ -683,6 +683,46 @@ const mg7 = await ev(`
 ok('原生报 0 dB 不会冲掉本地存的 −18', mg7.hasEl && mg7.v === -18 && mg7.saved === -18, mg7);
 ok('保存后读数仍是 −18 dB', mg7.lbl === '-18 dB', mg7);
 
+console.log('\n=== 9. v2.5.5 设置页折叠 / 提示板块 / 自检读数 ===');
+const fold = await ev(`
+  setView('settings');
+  const root=document.getElementById('viewSettings');
+  const cards=[...root.querySelectorAll('.foldable')];
+  const first=cards[0];
+  setFoldSet(first,true,false);
+  const opened=first.classList.contains('open');
+  setView('listen');
+  const afterLeave=first.classList.contains('open');
+  setView('settings');
+  const backAgain=first.classList.contains('open');
+  return {n:cards.length, opened, afterLeave, backAgain,
+          banner:document.getElementById('txBanner').style.display,
+          bannerTxt:(document.getElementById('txBannerTitle')||{}).textContent,
+          tap:document.getElementById('tapStart').classList.contains('on'),
+          ctx:Audio_.ctx?Audio_.ctx.state:'无'};`);
+ok('设置页有可折叠卡片', fold.n > 5, fold);
+ok('手动展开生效', fold.opened === true, fold);
+ok('切到别的页面自动折叠', fold.afterLeave === false, fold);
+ok('切回设置页仍是收起状态', fold.backAgain === false, fold);
+ok('通联状态横幅默认隐藏（不再常驻占版面）',
+  fold.banner === 'none' && !fold.bannerTxt, fold);
+ok('上下文 running 时不挂「轻触开始收听」',
+  fold.ctx === 'running' && fold.tap === false, fold);
+
+const diagW = await ev(`
+  setView('settings');
+  const el=document.getElementById('audioDiag');
+  /* 设置页默认全收起，卡片里的行是 display:none —— 先把它展开再量宽度，
+     否则拿到的是 0，测了个寂寞。 */
+  const card=el.closest('.foldable'); if(card)setFoldSet(card,true,false);
+  el.textContent='ctx=running · 8000Hz · 环=on · 欠载=0 · 闸=通 · 原=开 · 增益=1.00';
+  const w=el.getBoundingClientRect().width;
+  const row=el.closest('.setrow').getBoundingClientRect().width;
+  return {w:Math.round(w), row:Math.round(row), h:Math.round(el.getBoundingClientRect().height)};`);
+ok('自检读数占满整行（不再被 38px 数值位压成竖排）',
+  diagW.w > diagW.row * 0.7, diagW);
+ok('自检读数只占一两行（没有逐字换行）', diagW.h < 60, diagW);
+
 console.log(`\n================  ${pass} 通过 / ${fail} 失败  ================`);
 ws.close(); chrome.kill();
 await sleep(300);

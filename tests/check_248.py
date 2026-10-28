@@ -268,12 +268,12 @@ ok('设置页有自动登录开关', 'id="setAutoConn"' in html)
 
 # ============================================================
 print('\n=== 10. 版本号 ===')
-ok("PAGE_VER 是 2026.11.25", "PAGE_VER='2026.11.25'" in html)
+ok("PAGE_VER 是 2026.11.26", "PAGE_VER='2026.11.26'" in html)
 gp = os.path.join(REPO, 'android', 'app', 'build.gradle')
 if os.path.exists(gp):
     g = read(gp)
-    ok('build.gradle versionName = 2.5.4', 'versionName "2.5.4"' in g)
-    ok('build.gradle versionCode = 30', re.search(r'versionCode\s+30', g) is not None)
+    ok('build.gradle versionName = 2.5.5', 'versionName "2.5.5"' in g)
+    ok('build.gradle versionCode = 31', re.search(r'versionCode\s+31', g) is not None)
 else:
     ok('能读到 android/app/build.gradle', False)
 
@@ -490,6 +490,47 @@ ok('晚到的 worklet 不会重复建节点', 'if(this.sink||this.sinkAbandoned)
 ok('上下文恢复 running 时清环（避免放旧语音）',
    "this.ctx.addEventListener('statechange'" in html)
 ok('设置页有音频自检读数', 'id="audioDiag"' in html)
+
+# ★ v2.5.5 「刷新后波形正常但没声音，点一下静音再点收听才行」
+#
+# 刷新后 MMDVM 在 1.2 秒自动连上，Q.rxing 一起来 hdGate() 就把 HOSE 按掉
+# （「同一句话让位给原生」）。可原生接收的开关是 rxOn && audioOn，
+# 而启动那次 rxApply() 是在 MMDVM 还没连的时候发的，原生侧连上会重置 ——
+# 于是原生不播、HOSE 也让位，两边都不出声。波形照画（走 decode()，与音频图无关）。
+# 用户点静音再点收听时 setPlay 会调 rxApply() 把原生重新拉起来，所以「能救回来」。
+ok('让位前先确认原生真的在放（rxOn）',
+   'const same=!!(state.rxOn&&Q.rxing&&Q.last&&cur' in html)
+i_conn = html.find("if(st==='CONNECTED'){")
+seg = html[i_conn:i_conn + 900] if i_conn > 0 else ''
+ok('连上主站后重发接收参数', 'rxApply();' in seg)
+ok('连上主站后重判半双工闸', 'hdGate();' in seg)
+ok('decode 记录最近一帧时刻（给自愈判活）', 'this.lastAt=Date.now();' in html)
+ok('半双工闸有自愈出口', 'if(live&&!TX.txing&&!(state.rxOn&&Q.rxing))Audio_.setMute(false);' in html)
+ok('自检读数带半双工闸状态', "'闸='+(Audio_.muted?'让位':'通')" in html)
+
+# ★ v2.5.5 设置页三处 UI
+ok('「通联为实验性功能」常驻横幅已删（默认隐藏）',
+   'id="txBanner" style="display:none"' in html)
+ok('正常状态横幅显式隐藏', "box.style.display='none';" in html)
+ok('离开设置页自动折叠', 'if(prev===\'settings\'&&v!==\'settings\')setFoldCollapseAll();' in html)
+ok('有 setFoldCollapseAll()', 'function setFoldCollapseAll(){' in html)
+ok('长读数行改成上下两段', '<div class="setrow col">' in html)
+ok('长读数行不再被 38px 数值位压扁', '.setrow.col .setctl .mono{' in html)
+
+# ★ v2.5.5 「刷新之后没声音，点一下静音再点收听才行」
+#
+# 根因不是我们的代码：浏览器规定 AudioContext 必须先有一次用户手势才允许出声，
+# 在那之前它一直是 suspended，currentTime 冻结 —— 数据照收、波形照画，
+# 就是一个音都不出。而且没有手势时 resume() 返回的 Promise 直接挂住不 settle，
+# 所以 audioGuard 每 3 秒拉一次也拉不起来。
+# 实测见 tests/probe_audio_boot.js（故意不带 --autoplay-policy 参数）。
+# 既然绕不过去，就把「现在需要点一下」显式写在屏幕上。
+ok('有「轻触开始收听」提示条', 'id="tapStart"' in html)
+ok('提示条只在上下文没 running 时出现',
+   "const need=!!(state.audioOn&&c&&c.state!=='running');" in html)
+ok('任意点击都会 resume 并收掉提示',
+   "if(state.audioOn)Audio_.resume();" in html)
+ok('提示条每 600ms 复查一次', 'setInterval(tapStartCheck,600)' in html)
 
 print('\n' + '=' * 18 + f'  {passed} 通过 / {failed} 失败  ' + '=' * 18)
 raise SystemExit(1 if failed else 0)

@@ -954,6 +954,22 @@ html[data-theme="dark"] .qbadge span.priv{background:#2b1416;border-color:#4a202
 .setcard h3{margin:0;padding:11px 14px;font-size:12.5px;font-weight:700;letter-spacing:.3px;
   display:flex;align-items:center;gap:7px;border-bottom:1px solid var(--border2);background:var(--panel2)}
 html[data-theme="dark"] .setcard h3{background:transparent}
+/* ---------- 「轻触开始收听」提示条 ----------
+   浏览器（含 Android WebView）规定：AudioContext 必须**先有一次用户手势**
+   才允许出声，在那之前它一直是 suspended。这不是 bug，是自动播放策略 ——
+   而且代码里任何一次 resume() 只要没有手势都不会生效（Promise 直接挂住）。
+   后果是：刷新之后数据照收、波形照画，就是一个音都不出，用户以为软件坏了。
+   既然绕不过去，就把它显式化成一句话：点一下就没了。 */
+#tapStart{position:fixed;left:50%;transform:translateX(-50%);
+  top:calc(var(--topbar-h,62px) + 12px);z-index:90;display:none;align-items:center;gap:8px;
+  padding:10px 18px;border-radius:999px;border:none;cursor:pointer;
+  background:var(--accent);color:#fff;font-size:12.5px;font-weight:600;letter-spacing:.2px;
+  box-shadow:0 8px 24px rgba(0,0,0,.22);animation:tapPulse 1.7s ease-in-out infinite;
+  -webkit-tap-highlight-color:transparent}
+#tapStart.on{display:flex}
+#tapStart:active{transform:translateX(-50%) scale(.97)}
+@keyframes tapPulse{0%,100%{opacity:.9}50%{opacity:1}}
+
 /* ---------- 设置页折叠 ----------
    设置页有十几个区块，全展开要滑好几屏，找一项得从头翻到尾。
    改成「只留标题、点开才展开」：一屏就能扫完全部条目。
@@ -978,6 +994,13 @@ html[data-theme="dark"] .setwrap .foldable > h3{background:var(--panel2)}
 .setctl{display:flex;align-items:center;gap:8px;flex:none;margin-left:auto}
 .setctl input[type=range]{width:160px}
 .setctl .mono{font-size:11px;color:var(--dim);width:38px;text-align:right;flex:none}
+/* 「音频自检」这类读数是一长串，塞不进右侧那 38px 的数值位 ——
+   直接放进去会被压成一列竖排的字（截图里就是这个样子）。
+   这种行改成上下两段：说明在上面，读数独占一整行、按自然断行折。 */
+.setrow.col{display:block}
+.setrow.col .setctl{display:block;margin:7px 0 0}
+.setrow.col .setctl .mono{display:block;width:auto;text-align:left;flex:none;
+  font-size:11px;line-height:1.7;color:var(--muted);overflow-wrap:anywhere}
 .seg{display:flex;gap:2px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:2px;flex:none}
 html[data-theme="dark"] .seg{background:var(--panel2)}
 .seg button{padding:5px 11px;border-radius:6px;font-size:12px;color:var(--muted);font-weight:600;
@@ -1183,6 +1206,10 @@ body.dragging .dghint{display:block}
     </div>
   </div>
 </div>
+
+<!-- 冷启动时 AudioContext 处于 suspended，必须一次用户手势才出声。
+     见 CSS 里 #tapStart 的注释。点了就 resume，随后自己消失。 -->
+<button id="tapStart" type="button">🔊 轻触屏幕开始收听</button>
 
 <div id="viewListen">
   <!-- 上下分区：上半屏 = 操作区（网络 / 发射条 / PTT），sticky 钉在顶栏下方，
@@ -1420,11 +1447,12 @@ body.dragging .dghint{display:block}
           2.6 kHz 抬高 2.5 dB，小喇叭最容易被这一点推破音。</span></div>
         <label class="sw"><input type="checkbox" id="setPresence"><i></i></label>
       </div>
-      <div class="setrow">
+      <div class="setrow col">
         <div class="setlbl"><b>音频自检</b><span>收不到声音时先看这一行。<b>环=on</b> 才是正常路径；
-          <b>ctx</b> 不是 running 说明音频被系统挂起了（来电、别的应用抢音频焦点）。
+          <b>ctx</b> 不是 running 说明音频被系统挂起了（来电、别的应用抢音频焦点）；
+          <b>闸=让位</b> 表示这一句交给了原生接收，HOSE 自己不出声。
           报问题的时候把这一行发过来，比描述准得多。</span></div>
-        <div class="setctl"><span class="mono" id="audioDiag" style="font-size:11px;text-align:right">—</span></div>
+        <div class="setctl"><span class="mono" id="audioDiag">—</span></div>
       </div>
       <div class="setrow tog">
         <div class="setlbl"><b>收听时保持屏幕常亮</b><span>收音期间不熄屏；关掉可省电</span></div>
@@ -1451,7 +1479,9 @@ body.dragging .dghint{display:block}
       </div>
     </div>
 
-    <div class="txbanner" id="txBanner">
+    <!-- 通联状态横幅：只在出问题时出现（warn / block / alias / nodv / web）。
+         「一切正常」这一档默认隐藏，别让它常驻占版面 —— 见 txBanner() 的 else 分支。 -->
+    <div class="txbanner" id="txBanner" style="display:none">
       <span class="tbico" id="txBannerIco">🧪</span>
       <div class="tbbody">
         <b id="txBannerTitle">通联为实验性功能</b>
@@ -19524,6 +19554,9 @@ const Audio_ = {
     let sum=0;
     for(let i=0;i<n;i++){ const s=MULAW[bytes[i]]; f[i]=s; sum+=s*s; }
     this.level=this.level*0.65+Math.sqrt(sum/n)*0.35;
+    /* 最近一帧到达的时刻。和 level 不同，它不会被平滑掉 ——
+       给 audioGuard() 判「数据还在流吗」用。 */
+    this.lastAt=Date.now();
     return f;
   },
   play(f){
@@ -19660,6 +19693,39 @@ function audioGuard(){
   if(!state.audioOn)return;
   const c=Audio_.ctx;
   if(c&&c.state!=='running'){ try{ c.resume(); }catch(e){} }
+  /* ★ v2.5.5 半双工闸自愈。
+     闸只该在两种情况下亮着：① 自己正在发射；② 原生确实在放**同一句话**。
+     可它只有一个入口（hdGate）和一个出口（CALL_END / 发射结束），
+     任何一头丢了事件，闸就永久卡在「让位」—— HOSE 从此一帧都不出声，
+     而波形照画（波形走 decode()，不经过音频图），看起来像「有信号没声音」。
+     每 3 秒复查一次：数据还在流、但既没在发射、原生也没在收 → 直接放开。 */
+  if(Audio_.muted){
+    const live=!!(Audio_.lastAt&&Date.now()-Audio_.lastAt<4000);
+    if(live&&!TX.txing&&!(state.rxOn&&Q.rxing))Audio_.setMute(false);
+  }
+}
+
+/* 冷启动「轻触开始收听」提示条。
+ *
+ * 实测（tests/probe_audio_boot.js，故意不带 --autoplay-policy 那个参数）：
+ *   冷启动 3 秒后  ctx.state = suspended，喂进去 50 帧全进了环形缓冲，
+ *                  played = 0 —— 一个样本都没出。
+ *   点一下屏幕后  ctx.state = running，currentTime 开始走，声音正常。
+ *
+ * 也就是说这不是我们的 bug，是浏览器的自动播放策略：**没有用户手势，
+ * AudioContext 不允许出声**，而且没有手势时 resume() 返回的 Promise 会一直
+ * 挂着不 settle —— 所以 audioGuard 每 3 秒拉一次也拉不起来。
+ *
+ * 既然绕不过去，就别让用户对着「波形在动但没声音」瞎猜：
+ * 把「现在需要点一下」直接写在屏幕上。点任意位置（包括这条提示本身）
+ * 都会触发 resume，随后提示自己消失。APK 里如果上下文本来就是 running，
+ * 这条永远不出现。 */
+function tapStartCheck(){
+  const el=document.getElementById('tapStart');
+  if(!el)return;
+  const c=Audio_.ctx;
+  const need=!!(state.audioOn&&c&&c.state!=='running');
+  if(el.classList.contains('on')!==need)el.classList.toggle('on',need);
 }
 
 /* ============================ 录音 ============================ */function encodeWav(samples,rate){
@@ -22604,7 +22670,12 @@ function setPlay(on, quiet){
  * 选好话组按住 PTT 就发，不需要再切页面。 */
 function setView(v){
   if(v==='tx')v='listen';      /* 老版本存下来的 'tx' 一律落到收听页 */
+  const prev=state.view;
   state.view=v;
+  /* 离开设置页就把展开的卡片全收回去 —— 展开是「此刻在找东西」的临时状态，
+     切到别的页面说明找完了，不该带到下次进来。放在改 display 之前，
+     此时设置页还可见，setFoldSet 改类名不会触发额外的重排闪烁。 */
+  if(prev==='settings'&&v!=='settings')setFoldCollapseAll();
   $('#viewListen').style.display=v==='listen'?'':'none';
   $('#viewDash').style.display=v==='dash'?'':'none';
   const sv=$('#viewSettings'); if(sv)sv.style.display=v==='settings'?'':'none';
@@ -22878,7 +22949,17 @@ function hdGate(){
    */
   if(TX.txing){ txMuteAll(true); return; }
   const cur=state.current;
-  const same=!!(Q.rxing&&Q.last&&cur
+  /* ★ v2.5.5 让位的前提是「原生那边真的在放」。
+   *
+   * 原生接收的开关是 `state.rxOn && state.audioOn`（见 rxApply）。只发不收
+   * 的用户 rxOn 是关的，原生一个字节都不会播 —— 这时候 HOSE 还傻乎乎地让位，
+   * 结果就是**两边都不出声**：波形照画（波形走 decode()，和音频图无关），
+   * 但一点声音没有。
+   * 刷新之后尤其容易撞上：MMDVM 在 1.2 秒后自动连上，Q.rxing 一起来就
+   * 把 HOSE 按掉，而此时原生那条还没热起来。
+   * 用户唯一的出路就是点一下静音再点开始收听 —— 那一对动作会调 rxApply()，
+   * 把原生重新拉起来。所以这条判据必须补上。 */
+  const same=!!(state.rxOn&&Q.rxing&&Q.last&&cur
                 &&Number(Q.last.dstId)===Number(cur.tg));
   txMuteAll(same);
 }
@@ -23434,6 +23515,7 @@ function txBanner(mode,arg){
         tt=txEl('txBannerText'), bt=txEl('txBannerBtn'), b2=txEl('txBannerBtn2');
   const set=(cls,ic,title,html,btn)=>{
     box.className='txbanner'+(cls?' '+cls:'');
+    box.style.display='';            /* 默认隐藏过（见下面的 else 分支），显示时要清掉 */
     if(ico)ico.textContent=ic;
     if(ti)ti.textContent=title;
     if(tt)tt.innerHTML=html;
@@ -23516,13 +23598,24 @@ function txBanner(mode,arg){
       null);
   }else{
     TX.blocked=false; store.set('txBlocked',false);
-    set('','🧪','通联为实验性功能',
-      '<b>收发都走</b> MMDVM / Homebrew（UDP 62031）直连主站，'
-      +'与收听用的 HOSE 是两条独立链路 —— 收听照旧，通联另外登录。<br>'
-      +'登录用的 ID 是 <b>DMR ID</b>；「ESSID 别名 ID」<b>默认 0（不用别名）</b>，'
-      +'和 Pi-Star 的 ESSID = None 一致，绝大多数情况就该保持 0。'
-      +'只有在 SelfCare 里额外登记过别名热点、想让两台设备同时在线时才填 01~99。',
-      null);
+    /* 「通联为实验性功能」那条常驻说明已经删掉。
+     * 它挂在「📻 扫描」下面，只要状态正常就一直占着设置页一大块版面，
+     * 而真正需要读它的人只有出问题的时候 —— 那时候 warn / block 两种
+     * 横幅会自己长出来。所以「一切正常」这一档就是**什么都不显示**。
+     * 底下的说明没有丢：内容并进了「📡 通联（MMDVM）」卡片底部的 setnote。 */
+    /* 仍然要把 DOM 复位（清类名、藏按钮），否则上一次 alt 模式留下的
+       第二颗按钮会挂在空盒子里，下次换成 warn 时又冒出来。 */
+    TX.b2='';
+    const bt=txEl('txBannerBtn'), b2=txEl('txBannerBtn2');
+    if(bt)bt.style.display='none';
+    if(b2)b2.style.display='none';
+    /* 标题正文也清掉 —— 藏起来的盒子留着上一次的文案，
+       下次换成 warn 时如果只改了类名没改文字，用户看到的就是旧内容。 */
+    const ti2=txEl('txBannerTitle'), tt2=txEl('txBannerText');
+    if(ti2)ti2.textContent='';
+    if(tt2)tt2.innerHTML='';
+    box.className='txbanner';
+    box.style.display='none';
   }
 }
 
@@ -23693,7 +23786,11 @@ function txEnter(){
   txMicSync();
   /* 上次被主站连续拒过就一直挂着「暂不开放」声明，直到用户主动重试。
      浏览器里则直接进「预览模式」—— 压根没有原生层，重试也没意义。 */
-  txBanner(!ANDROID ? 'web' : (store.get('txBlocked',false)?'block':'ok'));
+  /* ★ v2.5.5 浏览器预览模式那条大横幅改成「点了连接才出现」。
+   * 以前一进页面就顶着一整块「这里做不了什么」的说明 —— 占掉大半屏，
+   * 而真正想知道原因的人，一定是先点了「连接」才需要解释。
+   * 所以入口这里不再主动弹，改由 txConnectFlow / txConnect 的守卫按需调用。 */
+  txBanner(store.get('txBlocked',false)?'block':'ok');
   if(!ANDROID)txWebMode();
   /* 对讲台：信道表 / 大字区 / 接收参数回填。
    * 连接参数现在整体在「设置」页，这里只把折叠状态同步过去。 */
@@ -23858,7 +23955,7 @@ async function txBmConfFallback(){
 /* 连接入口：先预检，再走原来的 txConnect()。
  * 保持 txConnect() 同步不动 —— 冒烟测试和横幅按钮都直接调它。 */
 async function txConnectFlow(){
-  if(typeof Android==='undefined'){ toast('当前不在 App 内'); return; }
+  if(typeof Android==='undefined'){ txBanner('web'); toast('当前不在 App 内'); return; }
   if(TX.state==='CONNECTING'||TX.state==='AUTH'||TX.state==='CONF'){
     return toast('正在登录中，请稍候（被暂时拒绝会自动重试）');
   }
@@ -23927,7 +24024,7 @@ async function txConnectFlow(){
   txConnect();
 }
 function txConnect(){
-  if(typeof Android==='undefined'){ toast('当前不在 App 内'); return; }
+  if(typeof Android==='undefined'){ txBanner('web'); toast('当前不在 App 内'); return; }
   /* 重复点击没有好处：主站对同一个 Radio ID 只允许一个会话，
    * 登录途中再发一次 RPTL 只会换来 MSTNAK，把成功的路堵住。 */
   if(TX.state==='CONNECTING'||TX.state==='AUTH'||TX.state==='CONF'){
@@ -24124,7 +24221,18 @@ window.onDmrEvent=function(json){
        *   CONNECTED —— 这条路是通的，收回默认说明；
        *   ERROR     —— 原生侧已放弃重试，升级成「暂不开放」声明；
        *   正在重试   —— 橙色警告，顺手把 ESSID 这条解法推到眼前。 */
-      if(st==='CONNECTED')txBanner('ok');
+      if(st==='CONNECTED'){
+        txBanner('ok');
+        /* ★ v2.5.5 连上之后重发一次接收参数。
+         *
+         * rxApply() 在启动时（setPlay 里）就调过一次，但那时 MMDVM 还没连 ——
+         * 原生侧刚建立连接时会把接收状态重置成默认，启动那次下发等于白给。
+         * 后果是：原生不播，HOSE 又因为「同一句话让位给原生」被按掉，
+         * 两边都不出声，只能靠手动点静音再点收听把参数重新推下去。
+         * 这里连上就补发一次，再把半双工闸重新判一遍。 */
+        rxApply();
+        hdGate();
+      }
       else if(st==='ERROR')txBanner('block');
       else if(st==='CONNECTING'&&/拒绝|重试|倒计时/.test(detail))txBanner('warn');
       /* 被拒在「配置」这一步、但 ID 确实存在 —— 自动查名下其它可用记录，
@@ -24413,6 +24521,16 @@ function setFoldOpenByTitle(kw,persist){
   return hit;
 }
 
+/* 离开设置页时把所有展开的卡片收回去。
+   展开的唯一目的是「找某一项」，切走就说明找完了 ——
+   下次回来该是一屏扫全的初始状态，而不是先滚过上次留下的三四屏内容。
+   切回来时不重新展开，也就不需要记住「离开前展开了哪几个」。 */
+function setFoldCollapseAll(){
+  const root=document.getElementById('viewSettings');
+  if(!root)return;
+  root.querySelectorAll('.foldable.open').forEach(card=>setFoldSet(card,false,true));
+}
+
 txInitCc();
 txBind();
 txMicSync();
@@ -24432,7 +24550,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.25';
+const PAGE_VER='2026.11.26';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
@@ -24594,7 +24712,8 @@ setInterval(()=>{
     (c?c.sampleRate:'—')+'Hz',
     '环='+(Audio_.sink?'on':(Audio_.sinkAbandoned?'放弃':'未建')),
     '欠载='+(Audio_.underSamples||0),
-    '待发='+((Audio_.pending&&Audio_.pending.length)||0),
+    '闸='+(Audio_.muted?'让位':'通'),
+    '原='+(state.rxOn?'开':'关'),
     '增益='+(state.volume*state.gain).toFixed(2)
   ].join(' · ');
 },1000);
@@ -25027,7 +25146,17 @@ document.addEventListener('click',e=>{
     return;
   }
 });
-document.addEventListener('pointerdown',()=>{ if(state.audioOn)Audio_.resume(); });
+/* 任何一次点击/触摸都顺手把音频上下文拉起来 —— 这是浏览器唯一认的「手势」。
+   顺手把「轻触开始收听」那条提示收掉，不用等下一轮轮询。 */
+document.addEventListener('pointerdown',()=>{
+  if(state.audioOn)Audio_.resume();
+  const el=document.getElementById('tapStart');
+  if(el&&el.classList.contains('on'))el.classList.remove('on');
+});
+$('#tapStart').addEventListener('click',()=>{
+  Audio_.resume();
+  $('#tapStart').classList.remove('on');
+});
 /* 回到前台补一次 resume：Android 在后台有可能把 AudioContext 挂起 */
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden&&state.audioOn)Audio_.resume(); });
 document.addEventListener('keydown',e=>{
@@ -25309,6 +25438,10 @@ function boot(){
   /* 音频上下文看护：被系统挂起时自动恢复。
      只在真挂起时才动，正常情况下每 3 秒一次状态查询，开销可忽略。 */
   setInterval(audioGuard,3000);
+  /* 音频上下文没 running 就把「轻触开始收听」挂出来。
+     600ms 一次：冷启动时上下文是 suspended，这条要在用户第一眼就看到 ——
+     等他盯着波形纳闷半分钟才出现就晚了。上下文一 running 它自己就消失。 */
+  tapStartCheck(); setInterval(tapStartCheck,600);
   const tb=document.querySelector('.topbar');
   if(window.ResizeObserver&&tb)new ResizeObserver(syncTopbarH).observe(tb);
   if(effSubs().length)ensureSpotter();

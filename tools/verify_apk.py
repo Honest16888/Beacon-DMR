@@ -120,7 +120,11 @@ if assets:
               'data:text/javascript;utf8,', 'this.last*=0.995']:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
     print('  ---- v2.5.4 ----')
-    for k in ['sinkWatch', 'sinkAbandoned', 'audioDiag', 'statechange', '2026.11.25']:
+    for k in ['sinkWatch', 'sinkAbandoned', 'audioDiag', 'statechange']:
+        print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
+    print('  ---- v2.5.5 ----')
+    for k in ['const same=!!(state.rxOn&&Q.rxing', 'this.lastAt=Date.now()',
+              'setFoldCollapseAll', 'setrow col', '2026.11.26']:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
 else:
     print('  !! 没找到 index.html')
