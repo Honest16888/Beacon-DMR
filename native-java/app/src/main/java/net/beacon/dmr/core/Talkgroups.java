@@ -3,24 +3,16 @@ package net.beacon.dmr.core;
 import android.content.Context;
 import android.content.SharedPreferences;
 
-import java.io.BufferedReader;
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
 import java.util.LinkedHashSet;
-import java.util.List;
 import java.util.Set;
 
 /**
- * 内置话组表 + 用户订阅。
+ * 话组模型 + 用户订阅 / 自定义组的持久化。
  *
- * <p>表来自 {@code assets/talkgroups.tsv}，格式是「id \t 名称 \t 说明」，
- * 内容和 WebView 版 {@code web/index.html} 里的 {@code cnTgData} 一致
- * （国内组）再加几个国际常用组。以后接上 api.brandmeister.network 的在线表时，
- * 这份内置表就退化成「离线兜底」。
+ * <p>表的加载与合并交给 {@link TalkgroupRepo}（内置 → 缓存 → 在线，三级来源）。
+ * 这里只管「哪些是我订阅的」「哪些是我手动加的」。
  *
- * <p>订阅存 SharedPreferences，键是 {@code tg.subs}，值是逗号分隔的 ID。
- * 存字符串而不是 StringSet：StringSet 在某些 ROM 上顺序不稳定，
+ * <p>存字符串而不是 StringSet：StringSet 在部分 ROM 上顺序不稳定，
  * 而且调试时一行逗号串比看一个 Set 直观得多。
  */
 public final class Talkgroups {
@@ -39,44 +31,47 @@ public final class Talkgroups {
 
     private static final String PREFS = "dmr";
     private static final String KEY_SUBS = "tg.subs";
+    private static final String KEY_CUSTOM = "tg.custom";
     /** 没订阅过时默认订阅这几个 —— 装完就有声音，不用先勾一遍。 */
-    private static final int[] DEFAULTS = {91, 460, 98006};
+    private static final int[] DEFAULTS = {91, 460};
 
     private Talkgroups() {}
 
-    public static List<Tg> loadAll(Context ctx) {
-        List<Tg> out = new ArrayList<>();
-        try (BufferedReader r = new BufferedReader(new InputStreamReader(
-                ctx.getAssets().open("talkgroups.tsv"), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = r.readLine()) != null) {
-                if (line.isEmpty() || line.charAt(0) == '#') continue;
-                String[] p = line.split("\t");
-                if (p.length < 2) continue;
-                int id;
-                try { id = Integer.parseInt(p[0].trim()); } catch (NumberFormatException e) { continue; }
-                String name = p[1].trim();
-                String desc = p.length > 2 ? p[2].trim() : "";
-                out.add(new Tg(id, name, desc));
-            }
-        } catch (Exception e) {
-            /* 表读不出来时退回一个最小集合：至少让 App 能出声，
-             * 而不是给用户一个空列表加一句「加载失败」。 */
-            out.add(new Tg(91, "世界组", "Worldwide"));
-            out.add(new Tg(460, "中国组", "China Nationwide"));
-        }
-        return out;
-    }
+    /* ==================== 订阅 ==================== */
 
     public static Set<Integer> loadSubs(Context ctx) {
-        SharedPreferences sp = ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        String raw = sp.getString(KEY_SUBS, null);
+        String raw = prefs(ctx).getString(KEY_SUBS, null);
         if (raw == null) {
             Set<Integer> d = new LinkedHashSet<>();
             for (int v : DEFAULTS) d.add(v);
             return d;
         }
+        return parseInts(raw);
+    }
+
+    public static void saveSubs(Context ctx, Set<Integer> subs) {
+        prefs(ctx).edit().putString(KEY_SUBS, join(subs)).apply();
+    }
+
+    /* ==================== 手动添加的组 ==================== */
+
+    public static Set<Integer> loadCustom(Context ctx) {
+        return parseInts(prefs(ctx).getString(KEY_CUSTOM, ""));
+    }
+
+    public static void saveCustom(Context ctx, Set<Integer> custom) {
+        prefs(ctx).edit().putString(KEY_CUSTOM, join(custom)).apply();
+    }
+
+    /* ==================== 工具 ==================== */
+
+    private static SharedPreferences prefs(Context ctx) {
+        return ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+    }
+
+    private static Set<Integer> parseInts(String raw) {
         Set<Integer> s = new LinkedHashSet<>();
+        if (raw == null) return s;
         for (String t : raw.split(",")) {
             t = t.trim();
             if (t.isEmpty()) continue;
@@ -85,14 +80,13 @@ public final class Talkgroups {
         return s;
     }
 
-    public static void saveSubs(Context ctx, Set<Integer> subs) {
+    private static String join(Set<Integer> set) {
         StringBuilder sb = new StringBuilder();
-        for (int v : subs) {
+        for (int v : set) {
             if (sb.length() > 0) sb.append(',');
             sb.append(v);
         }
-        ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putString(KEY_SUBS, sb.toString()).apply();
+        return sb.toString();
     }
 
     public static int[] toArray(Set<Integer> subs) {
@@ -100,11 +94,5 @@ public final class Talkgroups {
         int i = 0;
         for (int v : subs) a[i++] = v;
         return a;
-    }
-
-    /** 在表里找话组名；找不到就返回 "TG 12345"。 */
-    public static String nameOf(List<Tg> all, int id) {
-        for (Tg t : all) if (t.id == id) return t.name;
-        return "TG " + id;
     }
 }

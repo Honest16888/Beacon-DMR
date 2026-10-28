@@ -1,12 +1,23 @@
-# id	名称	说明	—— 内置话组表。格式和 web/index.html 里的 cnTgData 一致，可直接对照。
-91	世界组	Worldwide
+# 内置话组表 —— 离线兜底 + 常用组。
+# 格式：id <TAB> 中文名 <TAB> 说明。
+# 国际组的英文名逐条核对过 api.brandmeister.network/v2/talkgroup；
+# 国内组取自 web/index.html 的 cnTgData。
+# 运行时还会去拉在线全表（1845 条）合并进来，本地这份只是「拉不到时也有得听」。
+9	本地组	Local —— 你所在主站的本地区
+91	世界组	World-wide
 92	欧洲	Europe
 93	北美	North America
-94	亚洲	Asia
-95	大洋洲	Oceania
-98	世界英语组	Worldwide English
-98006	中国组	China (BM)
-460	中国组	China Nationwide
+94	亚洲 / 中东	Asia, Middle East
+95	澳新	Australia, New Zealand
+98	无线电测试	Radio Test
+913	英语组	English
+460	中国	China
+46002	中国 2 区	China Section #2
+46004	中国 4 区	China Section #4
+46005	中国 5 区	China Section #5
+46007	中国 7 区	China Section #7
+2350	英国	United Kingdom
+3100	美国桥接	USA Bridge
 860	全国公共	China Nationwide
 46023	重庆组	重庆组
 86002	东北组	测试 交流 交友
