@@ -268,7 +268,7 @@ ok('设置页有自动登录开关', 'id="setAutoConn"' in html)
 
 # ============================================================
 print('\n=== 10. 版本号 ===')
-ok("PAGE_VER 是 2026.11.22", "PAGE_VER='2026.11.22'" in html)
+ok("PAGE_VER 是 2026.11.23", "PAGE_VER='2026.11.23'" in html)
 gp = os.path.join(REPO, 'android', 'app', 'build.gradle')
 if os.path.exists(gp):
     g = read(gp)
@@ -429,6 +429,36 @@ ok('接收增益默认 1×', 'audioOn:true, volume:0.8, gain:1,' in html)
 ok('老版本存下的 2× 会一次性改回', 'gainFix252' in html)
 ok('软限幅阈值放到 0.96', 'if(x>0.96)f[i]=0.96+0.04*' in html)
 ok('不再用 0.92 压正常语音', 'if(x>0.92)f[i]=0.92+0.08*' not in html)
+
+# ★ v2.5.2 噼啪声：软限幅在增益之前，出口照样被硬削波
+#
+# 链路顺序是 解码 → 软限幅(0.96) → gain(音量×增益) → 高通 → presence → destination。
+# μ-law 峰值本来就在 ±0.98，软限幅削不到什么，紧接着乘上增益、
+# 再过一道 +2.5 dB 的 presence，出口就冲过 1.0 被硬削波 —— 听感就是「噼啪」。
+#
+# 先试过 DynamicsCompressor，实测不管用（2 ms 起始抓不住单样本瞬态，
+# 1× 下出口仍有 1.05）。最终用 WaveShaper 做真软削波，见 tests/audio_limiter.js。
+ok('链路末端有软削波（WaveShaper）', 'createWaveShaper' in html)
+ok('不用压缩器冒充限幅器', 'createDynamicsCompressor' not in html)
+ok('软削波串在 presence 之后、destination 之前',
+   'pk.connect(pre); pre.connect(ws)' in html and 'ws.connect(this.ctx.destination)' in html)
+ok('0.7 以下是完全直通（正常语音不动）', 'a<=T ? x :' in html)
+ok('饱和上限留 2% 余量', 'CEIL=0.98' in html)
+ok('oversample 必须 none（2x/4x 会振铃过冲）', "ws.oversample='none'" in html)
+
+# ★ v2.5.2 队列过深：以前把 nextTime 往回拨到 now+0.15，
+# 但已 start 出去的 buffer 撤不回来 → 新旧音频重叠 → 噼啪 + 糊。
+ok('队列过深改为丢帧', 'if(ahead>0.45)return;' in html)
+ok('不再往回拨时间线', 'this.nextTime=now+this.pad' in html and
+   'ahead>0.45)return' in html)
+ok('断流淡入不再误判队列过深',
+   'if(this.nextTime&&this.nextTime<now+0.02)this.broken=true;' in html)
+
+# ★ v2.5.2 窄带增强开关：给「噼啪」留一个现场 A/B 的旋钮
+ok('设置里有窄带增强开关', 'id="setPresence"' in html)
+ok('默认开、关过的人记得住', "store.get('presence',true)!==false" in html)
+ok('切换走斜坡而不是硬赋值', 'this.pk.gain.setTargetAtTime' in html)
+ok('init 时按开关决定 EQ 增益', 'pk.gain.value=(state.presence!==false)?2.5:0;' in html)
 
 print('\n' + '=' * 18 + f'  {passed} 通过 / {failed} 失败  ' + '=' * 18)
 raise SystemExit(1 if failed else 0)

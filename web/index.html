@@ -1415,6 +1415,12 @@ body.dragging .dghint{display:block}
         </div>
       </div>
       <div class="setrow tog">
+        <div class="setlbl"><b>窄带增强（2.6 kHz）</b><span>把语音的清晰度提一点。DMR 只有 8 kHz 带宽，辅音本来偏闷；
+          但如果手机喇叭听着「噼啪」「发刺」，先关掉它对比一下 —— 这一档会在
+          2.6 kHz 抬高 2.5 dB，小喇叭最容易被这一点推破音。</span></div>
+        <label class="sw"><input type="checkbox" id="setPresence"><i></i></label>
+      </div>
+      <div class="setrow tog">
         <div class="setlbl"><b>收听时保持屏幕常亮</b><span>收音期间不熄屏；关掉可省电</span></div>
         <label class="sw"><input type="checkbox" id="setAwake"><i></i></label>
       </div>
@@ -19300,9 +19306,44 @@ const Audio_ = {
     const hp=this.ctx.createBiquadFilter();
     hp.type='highpass'; hp.frequency.value=180; hp.Q.value=0.7;
     const pk=this.ctx.createBiquadFilter();
-    pk.type='peaking'; pk.frequency.value=2600; pk.Q.value=0.9; pk.gain.value=2.5;
-    this.gain.connect(hp); hp.connect(pk); pk.connect(this.ctx.destination);
-    this.hp=hp; this.pk=pk;      /* 留引用：测试和以后调音色都要用到 */
+    pk.type='peaking'; pk.frequency.value=2600; pk.Q.value=0.9;
+    pk.gain.value=(state.presence!==false)?2.5:0;
+    /* ★ v2.5.2 出口软削波 —— 「噼啪」的真正源头在这里。
+     *
+     * 之前只有 push() 里那道软限幅，而它在**增益之前**：
+     *   μ-law 解码 → 软限幅(0.96) → gain(=音量×增益) → 高通 → presence → 扬声器
+     * μ-law 解码出来的峰值本来就贴着满刻度（±0.98），软限幅几乎削不到东西；
+     * 再乘上 音量×增益，最后还要过一道 +2.5 dB 的 presence 提升，
+     * 出口随随便便就冲到 1.05~2.1，在 destination 处被**硬削波**。
+     * 硬削波是方波那一套谐波，听感正是「噼啪」—— 音量越大越明显。
+     * 录音走的是软限幅之前的原始 PCM，所以录音反而是干净的。
+     *
+     * 先试过 DynamicsCompressor 当限幅器，实测**不管用**：它有 2 ms 起始时间，
+     * 单样本瞬态根本抓不住，1× 增益下出口仍有 1.05 的峰、2× 下 1.21。
+     * 压缩器是调响度的，不是防削波的，这里换成 WaveShaper 做真软削波：
+     *   · 先用 1/3 预增益把信号压进 WaveShaper 的 [-1,1] 定义域
+     *   · 曲线在 |x|≤0.7 处是**完全直通**（正常语音一点不动）
+     *   · 0.7 以上走 tanh 平滑饱和，渐近到 0.98（留 2% 余量，绝不贴天花板）
+     *   · oversample 必须是 'none'：实测 2×/4× 的重采样滤波器会在饱和转折处
+     *     振铃过冲，出口反而冲到 1.17~1.23，等于白做。'none' 下峰值严格 ≤1.0。
+     *     这里不会因此产生混叠 —— DMR 内容只在 4 kHz 以下，tanh 的 7 次以内
+     *     谐波都落在 24 kHz 奈奎斯特之内，折不回来。
+     * 结果是出口峰值硬性 ≤1.0，用户把音量和增益推到多大都不会再削波。 */
+    const pre=this.ctx.createGain();
+    pre.gain.value=1/3;
+    const ws=this.ctx.createWaveShaper();
+    {
+      const NS=4096, cur=new Float32Array(NS), T=0.7, CEIL=0.98, K=3;
+      for(let i=0;i<NS;i++){
+        const u=(i/(NS-1))*2-1, x=u*K, a=Math.abs(x), sg=x<0?-1:1;
+        cur[i]=a<=T ? x : sg*(T+(CEIL-T)*Math.tanh((a-T)/(CEIL-T)));
+      }
+      ws.curve=cur;
+    }
+    ws.oversample='none';
+    this.gain.connect(hp); hp.connect(pk); pk.connect(pre); pre.connect(ws);
+    ws.connect(this.ctx.destination);
+    this.hp=hp; this.pk=pk; this.pre=pre; this.ws=ws;  /* 留引用：测试和以后调音色都要用到 */
     this.ready=true; return true;
   },
   resume(){ if(!this.init())return; if(this.ctx.state==='suspended')this.ctx.resume(); },
@@ -19316,6 +19357,14 @@ const Audio_ = {
     catch(e){ this.gain.gain.value=v; }
   },
   setVol(v){ this.applyGain(); },
+  /* 窄带增强开关。用斜坡而不是直接赋值，否则切换那一下会「啪」一声 ——
+     正好就是我们在查的那个声音，别自己制造一个。 */
+  setPresence(on){
+    this.presence=!!on;
+    if(!this.pk||!this.ctx)return;
+    try{ this.pk.gain.setTargetAtTime(this.presence?2.5:0,this.ctx.currentTime,0.03); }
+    catch(e){ this.pk.gain.value=this.presence?2.5:0; }
+  },
   /* ★ 必须走 gain 斜坡，光在 play() 里 return 挡不住已经 start 出去的 buffer ——
      发射那一刻还能听到上一句的尾巴，听起来就是「自己的声音和自己的声音对冲」。
      8ms 淡出，够快又不炸音。 */
@@ -19367,7 +19416,15 @@ const Audio_ = {
        就是一段空洞，听感正是「说着说着顿一下」。
        这里按「最近 5 秒欠载了几次」加深缓冲：欠得越多说明抖动比缓冲大。
        上限 300ms，不会无限往后堆延迟。 */
-    if(this.nextTime<now+0.02||this.nextTime>now+0.8){
+    /* ★ v2.5.2 队列过深时**丢帧**，不再把时间线往回拨。
+       以前 nextTime>now+0.8 会重设成 now+0.15 —— 可那 0.8 秒的 buffer
+       早就 start 出去了、撤不回来，新帧等于插到它们中间，两段音频叠着放。
+       网络抖一下补发一串帧就会触发一次，听感正是「噼啪」外加一层糊。
+       现在太深就直接丢掉这一帧：队列照常往前放、自己排空，
+       一个样本都不重叠。45ms 的延迟上限对讲够用了。 */
+    const ahead=this.nextTime-now;
+    if(ahead>0.45)return;
+    if(ahead<0.02){
       const ua=this.underAt||(this.underAt=[]);
       ua.push(now);
       while(ua.length&&now-ua[0]>5)ua.shift();
@@ -19385,10 +19442,12 @@ const Audio_ = {
   push(f){
     if(!f||!f.length)return;
     const n=f.length;
-    /* 队列已经断了（网络抖了一下 / 上一帧早放完了）→ 这一帧淡入，别留咔哒 */
+    /* 队列已经断了（网络抖了一下 / 上一帧早放完了）→ 这一帧淡入，别留咔哒。
+       ★ v2.5.2 只判「接不上」，不再把「队列过深」也算成断流 ——
+       过深是丢帧（见 play()），音频本身是连着的，淡入反而挖一个 3ms 的坑。 */
     if(this.ctx){
       const now=this.ctx.currentTime;
-      if(this.nextTime&&(this.nextTime<now+0.02||this.nextTime>now+0.8))this.broken=true;
+      if(this.nextTime&&this.nextTime<now+0.02)this.broken=true;
     }
     if(this.broken){
       const F=Math.min(24,n>>2);
@@ -19417,7 +19476,8 @@ const Audio_ = {
    *
    * 时间线必须连续：nextTime 本来就等于「最后一个已排 buffer 的结束时刻」，
    * 保留它，新帧自然接在旧 buffer 后面，一个样本都不重叠。
-   * 积压保护交给 play() 里 now+0.8 那个判断，不会无限延迟。
+   * 积压保护交给 play() 里 ahead>0.45 那个判断（超了就丢帧，不往回拨），
+   * 不会无限延迟，也不会重叠。
    *
    * 真正要「立刻没声」的地方（用户静音 / 关收听）走的是增益，不是这里 ——
    * 增益压到 0，buffer 照放也听不见。 */
@@ -19581,7 +19641,7 @@ const state = {
      μ-law 解码出来的语音峰值本来就接近满刻度，再乘 2 几乎每个峰值都会
      撞上软限幅被压平 —— 听感就是「喇叭发炸」，而录音（不经过这道增益）
      却是清晰的。1× 才是「不改变信号」的那一档，要更响再自己往上调。 */
-  audioOn:true, volume:0.8, gain:1, theme:'auto',
+  audioOn:true, volume:0.8, gain:1, presence:true, theme:'auto',
   awakeOn:true, scanResume:true,
   /* 通联（对讲页）的接收参数 —— 独立于「收听」页那套，因为走的是另一条链路 */
   rxOn:true, rxVol:1, rxJit:240,
@@ -24204,7 +24264,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.22';
+const PAGE_VER='2026.11.23';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
@@ -24288,6 +24348,7 @@ function renderSet(){
   const sg=q('segGain');
   if(sg)[...sg.children].forEach(b=>b.classList.toggle('on',Number(b.dataset.val)===Number(state.gain)));
   const a=q('setAwake');       if(a)a.checked=!!state.awakeOn;
+  const pr=q('setPresence');   if(pr)pr.checked=state.presence!==false;
   const r=q('setRecOn');       if(r)r.checked=!!state.recOn;
   const sp=q('setSimple');     if(sp)sp.checked=!!state.simple;
   const ac=q('setAutoConn');   if(ac)ac.checked=!!state.autoConn;
@@ -24348,6 +24409,11 @@ $('#segGain').addEventListener('click',e=>{
   toast('音量增强已设为 '+state.gain+'×');
 });
 /* --- 开关 --- */
+$('#setPresence').addEventListener('change',e=>{
+  state.presence=!!e.target.checked; store.set('presence',state.presence);
+  Audio_.setPresence(state.presence);
+  toast(state.presence?'已开启窄带增强':'已关闭窄带增强（声音会闷一点）');
+});
 $('#setAwake').addEventListener('change',e=>{
   state.awakeOn=!!e.target.checked; store.set('awakeOn',state.awakeOn); syncAwake();
   toast(state.awakeOn?'收听时保持屏幕常亮':'已关闭屏幕常亮');
@@ -24955,6 +25021,9 @@ function boot(){
     store.set('gainFix252',1);
   }
   state.gain=Number(store.get('gain',1))||1;
+  /* 窄带增强：默认开。关掉的人下次进来还得是关的 —— 这是排查「喇叭噼啪」
+     时唯一能自己动手的开关，不能每次都被重置回去。 */
+  state.presence=store.get('presence',true)!==false;
   state.awakeOn=store.get('awakeOn',true)!==false;
   state.scanResume=store.get('scanResume',true)!==false;
   /* 通联的接收参数 */

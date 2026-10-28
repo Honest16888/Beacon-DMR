@@ -111,6 +111,10 @@ if assets:
     print('  ---- v2.5.1 ----')
     for k in ['np-row np-r1', 'state.rxDb', 'underAt', '2026.11.21']:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
+    print('  ---- v2.5.2 ----')
+    for k in ['createWaveShaper', "ws.oversample='none'", 'CEIL=0.98',
+              'setPresence', 'gainFix252', 'ahead>0.45', '2026.11.23']:
+        print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
 else:
     print('  !! 没找到 index.html')
 
