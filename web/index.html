@@ -83,52 +83,85 @@ input[type=range]{-webkit-appearance:none;appearance:none;width:92px;height:4px;
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:var(--accent);cursor:pointer;border:2px solid var(--panel)}
 
 /* ---------- 正在通话 ---------- */
-.nowbar{display:flex;align-items:center;gap:16px;padding:10px 16px;background:var(--panel);
-  border-bottom:1px solid var(--border);min-height:62px;flex-wrap:wrap}
+/* ★ v2.5.1 视觉重做。
+ *
+ * 原来接收中是「整块 90° 红渐变铺满 + 红色大呼号 + 红色录制胶囊」，
+ * 三个大红块挤在一起，远看像整屏报警：呼号被底色压住、话组块是浅蓝
+ * 插在红底上、电平读数和计时又散在两头，看不出谁主谁次。
+ *
+ * 现在的层级：
+ *   ① 左侧一道 3px 实红 = 状态（收 / 发），不占视觉面积
+ *   ② 呼号是唯一的主角，红色只给它
+ *   ③ 话组、电平、计时、录音全部退成「描边 + 次要灰」
+ * 底色只留一层 6% 的极淡红，够看出在收，又不跟呼号抢。 */
+.nowbar{display:flex;align-items:center;gap:12px;padding:11px 16px 11px 13px;
+  background:var(--panel);border-bottom:1px solid var(--border);
+  border-left:3px solid transparent;min-height:0;flex-wrap:wrap;
+  transition:border-color .15s,background .15s}
 html[data-theme="dark"] .nowbar{background:var(--panel2)}
-.nowbar.live{background:linear-gradient(90deg,var(--tx2),transparent 62%);border-bottom-color:color-mix(in srgb,var(--tx) 35%,var(--border))}
-/* 发射中：左边压一道实红，和「接收中」一眼分开 —— 自己正在说话，
-   这时候最需要的是「确认我确实发出去了」，不能和听别人长得一样。 */
-.nowbar.txing{border-left:3px solid var(--tx);padding-left:13px}
+.nowbar.live{border-left-color:var(--tx);
+  background:linear-gradient(90deg,color-mix(in srgb,var(--tx) 6%,var(--panel)) 0%,var(--panel) 40%)}
+html[data-theme="dark"] .nowbar.live{
+  background:linear-gradient(90deg,color-mix(in srgb,var(--tx) 14%,var(--panel2)) 0%,var(--panel2) 40%)}
+/* 发射中：竖条闪一下 + 呼号红，和接收区分靠的是「竖条在动」而不是换色块 */
+.nowbar.txing{border-left-color:var(--tx)}
 .nowbar.txing .lamp{background:var(--tx);box-shadow:0 0 0 3px color-mix(in srgb,var(--tx) 22%,transparent)}
 .nowbar.txing .np-call{color:var(--tx)}
 .np-idle{color:var(--dim);font-size:12.5px;display:flex;align-items:center;gap:8px}
-.np-main{display:flex;align-items:center;gap:14px;min-width:0;flex:1}
-.np-meta{display:flex;flex-direction:column;gap:1px;min-width:0}
-.np-call{font-family:var(--mono);font-size:21px;font-weight:700;letter-spacing:.5px;line-height:1.1}
+.np-main{display:flex;align-items:center;gap:11px;min-width:0;flex:1;flex-wrap:wrap}
+/* 桌面端两行容器「消失」，子元素直接参与 .np-main 的 flex 排布 —— 还是一行 */
+.np-row{display:contents}
+.np-r1,.np-r2{min-width:0}
+.np-meta{display:flex;flex-direction:column;gap:2px;min-width:0}
+.np-call{font-family:var(--mono);font-size:18px;font-weight:700;letter-spacing:.3px;line-height:1.15}
 .np-call.hot{color:var(--tx)}
 .np-call[data-click]{cursor:pointer}
 .np-call[data-click]:hover{text-decoration:underline dotted}
-.np-name{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:250px}
-.np-tg{display:flex;align-items:center;gap:7px;padding:5px 11px;background:var(--accent2);border-radius:7px;font-size:12.5px}
-.np-tg b{font-family:var(--mono);color:var(--accent);font-weight:700}
-/* 个呼：整块换成红色调，和组呼一眼分开 —— 有人点名找你，不该和普通组呼长得一样 */
-.np-tg.priv{background:var(--tx2)}
+.np-name{font-size:11.5px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:250px}
+/* 话组：描边胶囊，不再用浅蓝实底 —— 那个蓝在红底上太跳，像另一个系统的东西 */
+.np-tg{display:flex;align-items:center;gap:6px;padding:4px 10px;
+  border:1px solid var(--border);border-radius:8px;font-size:12px;
+  background:color-mix(in srgb,var(--panel2) 70%,transparent);min-width:0}
+.np-tg b{font-family:var(--mono);color:var(--text);font-weight:700;letter-spacing:.2px}
+#npTgLbl{color:var(--muted);font-size:11px}
+#npTgName{color:var(--muted);max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 个呼：只有这一块允许变红 —— 有人点名找你，该比普通组呼更显眼 */
+.np-tg.priv{background:color-mix(in srgb,var(--tx) 7%,var(--panel));
+  border-color:color-mix(in srgb,var(--tx) 38%,var(--border))}
 .np-tg.priv b{color:var(--tx)}
-.np-reply{flex:none;padding:5px 12px;border-radius:7px;font-size:12px;font-weight:700;cursor:pointer;
+.np-reply{flex:none;padding:4px 11px;border-radius:8px;font-size:11.5px;font-weight:700;cursor:pointer;
   font-family:inherit;white-space:nowrap;
-  background:var(--tx2);border:1px solid #f6c9cb;color:#b3282d;transition:filter .12s}
+  background:color-mix(in srgb,var(--tx) 7%,var(--panel));
+  border:1px solid color-mix(in srgb,var(--tx) 32%,var(--border));
+  color:var(--tx);transition:filter .12s}
 .np-reply:hover{filter:brightness(.96)}
 .np-reply:active{transform:translateY(1px)}
-html[data-theme="dark"] .np-reply{background:#2b1416;border-color:#4a2024;color:#f87171}
-html[data-theme="dark"] .np-tg.priv{background:#2b1416}
-.np-sep{width:1px;height:34px;background:var(--border)}
-.vu{display:flex;align-items:flex-end;gap:2px;height:30px;width:104px;flex:none}
+html[data-theme="dark"] .np-reply{background:color-mix(in srgb,var(--tx) 16%,var(--panel2));
+  border-color:color-mix(in srgb,var(--tx) 42%,var(--border))}
+/* 分隔线全部撤掉：靠 gap 和字号已经分得开，多一条竖线只是噪音 */
+.np-sep{display:none}
+.vu{display:flex;align-items:flex-end;gap:2px;height:22px;width:64px;flex:none}
 .vu i{flex:1;background:var(--border);border-radius:1.5px;transition:height .07s linear,background .07s linear}
 /* 接收音频电平读数。等宽数字 + tabular-nums，避免 −8.4 → −10.2 时整行抖动 */
-.np-db{font-family:var(--mono);font-size:12.5px;font-weight:600;line-height:1;flex:none;
-  min-width:64px;text-align:right;color:var(--muted);font-variant-numeric:tabular-nums;
+.np-db{font-family:var(--mono);font-size:11.5px;font-weight:600;line-height:1;flex:none;
+  min-width:56px;text-align:right;color:var(--dim);font-variant-numeric:tabular-nums;
   transition:color .12s linear,opacity .12s linear}
 .np-db[data-lv="low"]{color:var(--muted)}
 .np-db[data-lv="ok"]{color:var(--ok)}
 .np-db[data-lv="hot"]{color:var(--tx)}
-.np-db[data-lv="idle"]{color:var(--muted);opacity:.5}
-.np-time{font-family:var(--mono);font-size:15px;color:var(--muted);min-width:52px}
-.recbtn{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;padding:5px 10px;border-radius:7px;
-  border:1px solid var(--border);background:var(--panel);color:var(--muted);transition:.15s}
+.np-db[data-lv="idle"]{color:var(--dim);opacity:.55}
+.np-time{font-family:var(--mono);font-size:12.5px;color:var(--dim);min-width:42px;text-align:right;
+  font-variant-numeric:tabular-nums}
+/* 录音：默认只是一枚素描边小按钮；录制中改「描边 + 闪烁红点」。
+   以前录制中是整块红底白字 —— 呼号已经是红的，两个大红块互相抢注意力，
+   一眼看过去反而不知道哪个是「谁在说话」。 */
+.recbtn{display:flex;align-items:center;gap:6px;font-size:11px;font-weight:600;
+  padding:4px 9px;border-radius:8px;border:1px solid var(--border);
+  background:transparent;color:var(--muted);transition:.15s;flex:none;cursor:pointer}
 .recbtn:hover{border-color:var(--tx);color:var(--tx)}
-.recbtn.rec{background:var(--tx);border-color:var(--tx);color:#fff}
-.recdot{width:8px;height:8px;border-radius:50%;background:currentColor}
+.recbtn.rec{background:color-mix(in srgb,var(--tx) 7%,transparent);
+  border-color:color-mix(in srgb,var(--tx) 45%,var(--border));color:var(--tx)}
+.recdot{width:7px;height:7px;border-radius:50%;background:currentColor}
 .recbtn.rec .recdot{animation:blink .9s infinite}
 @keyframes blink{50%{opacity:.25}}
 
@@ -488,18 +521,25 @@ canvas{display:block;width:100%}
   .mini{width:32px;height:32px;font-size:13px;border-radius:8px}
   .acts{gap:5px}
   /* 正在通话折成两行 */
-  .nowbar{padding:8px 10px;min-height:0;gap:8px}
-  .np-main{flex-wrap:wrap;gap:7px 10px}
-  #npLamp{order:0}
-  .np-meta{order:1;flex:1 1 120px}
-  .np-call{font-size:19px}
-  .np-name{max-width:none;font-size:11.5px}
-  #btnRec{order:2}
-  .np-tg{order:3;padding:4px 9px;font-size:12px}
-  /* 折行后 dB 读数跟着波形排，缩一点但别隐藏 —— 它就是要「随时看得到」 */
-  .np-db{order:5;font-size:11.5px;min-width:56px}
-  .vu{order:4;width:72px;height:24px}
-  .np-time{order:5;margin-left:auto;min-width:44px;font-size:14px}
+  /* 手机端切成两行：第一行「谁在说 + 电平 + 计时」，第二行「发到哪个组 + 录音」。
+     原来靠 order + flex-wrap 挤，呼号一长就挤成三四行，话组名和 dB 读数
+     各飘一处，扫一眼读不出关系。 */
+  .nowbar{padding:9px 11px 9px 9px;gap:8px}
+  .np-main{flex-direction:column;align-items:stretch;gap:6px}
+  .np-row{display:flex;align-items:center;gap:8px;min-width:0}
+  .np-call{font-size:17px}
+  .np-name{max-width:none;font-size:11px}
+  /* 波形保留（用户明确要），缩窄但不隐藏；dB 和计时靠右 */
+  .vu{width:50px;height:20px;flex:none;align-self:flex-start;margin-top:1px}
+  .np-db{margin-left:auto;font-size:11.5px;min-width:0}
+  .np-time{min-width:0;font-size:12.5px;text-align:right}
+  /* chip 吃掉剩余宽度，组名才有地方显示；录音钮靠右 */
+  .np-r2 .np-tg{flex:1 1 auto;min-width:0;padding:3px 8px;font-size:11.5px}
+  #npTgName{flex:0 1 auto;min-width:0;max-width:150px}
+  /* 状态点跟着呼号那一行走，不要在两行中间飘着 */
+  .np-r1 .lamp{align-self:flex-start;margin-top:6px}
+  #btnRec{padding:3px 8px;font-size:10.5px;margin-left:auto}
+  .np-reply{padding:4px 10px;font-size:11px}
   .np-main .np-sep{display:none}
   /* 三栏改为分栏切换，一次只显示一栏 */
   .grid{grid-template-columns:1fr;padding:0 8px 8px;gap:8px}
@@ -546,8 +586,10 @@ canvas{display:block;width:100%}
   .kvline>span{min-width:74px}
 }
 @media(max-width:420px){
-  /* 语音波纹原先在窄屏被直接隐藏，这里改为缩小显示，保证顶部「呼号 + 波形」完整可见 */
-  .vu{order:4;width:56px;height:22px}
+  /* 语音波纹：窄屏只缩尺寸。
+     这里原来带 order:4，把它排到 dB 和计时后面 —— 结果「谁在说」和
+     「有多响」中间隔着两段数字，波形跑到行尾像个装饰。位置交给 DOM 顺序。 */
+  .vu{width:50px;height:20px}
   .rank .r-l{font-size:11px}
   .log-c{min-width:62px}
   .log-t{min-width:38px}
@@ -1115,21 +1157,26 @@ body.dragging .dghint{display:block}
 <div class="nowbar" id="nowbar">
   <div class="np-idle" id="npIdle"><span style="font-size:15px">🎧</span>暂无通话 · 从「实时活动」或「话组库」添加话组开始收听</div>
   <div class="np-main" id="npMain" style="display:none">
-    <span class="lamp on" id="npLamp"></span>
-    <div class="np-meta">
-      <span class="np-call" id="npCall">—</span>
-      <span class="np-name" id="npName">—</span>
+    <!-- 两行容器：桌面端用 display:contents 让子元素平铺成一行，
+         手机端（@media）切成 flex 两行 —— 「谁在说」和「发到哪个组」
+         分开排，不再像原来那样靠 order + wrap 猜出来。 -->
+    <div class="np-row np-r1">
+      <span class="lamp on" id="npLamp"></span>
+      <div class="np-meta">
+        <span class="np-call" id="npCall">—</span>
+        <span class="np-name" id="npName">—</span>
+      </div>
+      <div class="vu" id="vu"></div>
+      <div class="np-db" id="npDb" data-lv="idle"
+           title="接收音频电平（dBFS）。DMRD 包不带 RSSI，所以这不是空口信号强度">—</div>
+      <div class="np-time" id="npTime">0.0s</div>
     </div>
-    <div class="np-sep"></div>
-    <div class="np-tg"><span id="npTgLbl">话组</span><b id="npTg">—</b><span id="npTgName" style="color:var(--muted)"></span></div>
-    <button class="np-reply" id="npReply" style="display:none"
-            title="把发射目标一键切到对方，按住 PTT 就能回">回复</button>
-    <div class="np-sep"></div>
-    <div class="vu" id="vu"></div>
-    <div class="np-db" id="npDb" data-lv="idle"
-         title="接收音频电平（dBFS）。DMRD 包不带 RSSI，所以这不是空口信号强度">—</div>
-    <div class="np-time" id="npTime">0.0s</div>
-    <button class="recbtn" id="btnRec" title="把本次通话录成 WAV 文件"><span class="recdot"></span>录音</button>
+    <div class="np-row np-r2">
+      <div class="np-tg"><span id="npTgLbl">话组</span><b id="npTg">—</b><span id="npTgName" style="color:var(--muted)"></span></div>
+      <button class="np-reply" id="npReply" style="display:none"
+              title="把发射目标一键切到对方，按住 PTT 就能回">回复</button>
+      <button class="recbtn" id="btnRec" title="把本次通话录成 WAV 文件"><span class="recdot"></span>录音</button>
+    </div>
   </div>
 </div>
 
@@ -19309,9 +19356,21 @@ const Audio_ = {
     /* 队列断了就把起点拉回现在，别让下一帧排到很远的未来。
        注意这里**不设 broken** —— 淡入已经由 push() 在排队前判过了，
        在这里再设一次会让「断流后的第二帧」也淡一遍（第一帧排进来时
-       nextTime 还是 0，必然命中这个分支）。 */
-    if(this.nextTime<now+0.02||this.nextTime>now+0.8)this.nextTime=now+0.12;
-    try{ src.start(this.nextTime); }catch(e){ this.nextTime=now+0.12; src.start(this.nextTime); }
+       nextTime 还是 0，必然命中这个分支）。
+       ★ v2.5.1 缓冲深度改成自适应。
+       固定 120ms 时，主线程偶尔卡一下（每 100ms 一次的界面刷新、GC、
+       系统调度、切后台）就会让这一帧的入队晚于播放进度 —— 队列一空
+       就是一段空洞，听感正是「说着说着顿一下」。
+       这里按「最近 5 秒欠载了几次」加深缓冲：欠得越多说明抖动比缓冲大。
+       上限 300ms，不会无限往后堆延迟。 */
+    if(this.nextTime<now+0.02||this.nextTime>now+0.8){
+      const ua=this.underAt||(this.underAt=[]);
+      ua.push(now);
+      while(ua.length&&now-ua[0]>5)ua.shift();
+      this.pad=Math.min(0.30,0.15+Math.max(0,ua.length-1)*0.03);
+      this.nextTime=now+this.pad;
+    }
+    try{ src.start(this.nextTime); }catch(e){ this.nextTime=now+0.15; src.start(this.nextTime); }
     this.nextTime+=buf.duration;
   },
   /* 收一帧 PCM：断流淡入 + 软限幅 + 排进播放队列。
@@ -19342,7 +19401,20 @@ const Audio_ = {
     }
     this.play(f);
   },
-  silence(){ this.nextTime=0; this.level=0; this.broken=true; }
+  /* ★ v2.5.1 不再把 nextTime 归零。
+   *
+   * WebAudio 的 buffer 一旦 start() 就撤不回来，最坏还要响 0.8 秒。
+   * 以前这里把 nextTime 归零，下一帧进 play() 就被判成「队列断了」，
+   * 于是从「现在 + 120ms」重新排 —— 可旧 buffer 还在响，两者叠在一起，
+   * 听感就是**两个声音重叠**（同一个人的话出现两遍，差一个短延迟）。
+   *
+   * 时间线必须连续：nextTime 本来就等于「最后一个已排 buffer 的结束时刻」，
+   * 保留它，新帧自然接在旧 buffer 后面，一个样本都不重叠。
+   * 积压保护交给 play() 里 now+0.8 那个判断，不会无限延迟。
+   *
+   * 真正要「立刻没声」的地方（用户静音 / 关收听）走的是增益，不是这里 ——
+   * 增益压到 0，buffer 照放也听不见。 */
+  silence(){ this.level=0; this.broken=true; }
 };
 
 /* 收听侧音频上下文看护。
@@ -21490,7 +21562,23 @@ function initVu(){
 }
 function renderVu(){
   if(!vuBars)return;
-  const lvl=state.current?Math.min(1,Audio_.level*3.2):0;
+  /* ★ v2.5.1 波形不能再只认 HOSE 的解码电平。
+   *
+   * Audio_.level 是 Audio_.decode() 顺手算的 —— 只有走 Hoseline 那条路
+   * 才会有值。手机装上 App、原生 MMDVM 接管接收之后，HOSE 整句不解码，
+   * Audio_.level 就一直是 0：dB 读数照常跳（原生在报 rxlevel），
+   * 波形却是一条平线。用户看到的就是「手机上面波形完全不显示了」。
+   *
+   * 原生侧本来就在报 dBFS，直接拿它换算，两条路都有波形。
+   * −50 dB 当底噪起点，−6 dB 当满格 —— 正常说话落在 −30 ~ −12，
+   * 正好占中间一大段，起伏看得出来。
+   */
+  let lvl=0;
+  /* 原生正在收 → 用原生报的 dBFS；否则用 HOSE 解码电平。
+     两边都按「此刻谁在出声」取，不混用，免得原生停了之后
+     还拿着它最后一帧的值画波形。 */
+  if(Q.rxing&&isFinite(state.rxDb))lvl=Math.max(0,Math.min(1,(state.rxDb+50)/44));
+  else if(state.current)lvl=Math.min(1,Audio_.level*3.2);
   for(let i=0;i<vuBars.length;i++){
     const th=(i+0.5)/vuBars.length, on=lvl>th*0.92;
     vuBars[i].style.height=on?(9+Math.round(Math.random()*13))+'px':'3px';
@@ -22360,7 +22448,13 @@ function txSetTarget(id, priv){
   if(pv)pv.value=priv?'1':'0';
   qSetTg(n);
   txMarkTarget();
-  rxReset();
+  /* ★ v2.5.1 这里以前调 rxReset()，是错的，已经删掉。
+   *
+   * rxReset 是「重连 / 换网」用的：它会把接收侧的坑位（RXG.tg）、
+   * 归属覆盖（RXG.attrTg）、交接静默期（muteUntil）一起清空。
+   * 点一下呼号就把这些清掉 → 正在播的那一句立刻失去归属，
+   * 别的组的帧被当成它的音频放出来，听感就是「点一下就叠了一层声音」。
+   * 切发射目标不该碰接收状态，一个字节都不该碰。 */
   const nm=priv?'个呼 '+n:(tgName(n)?n+' '+tgName(n):String(n));
   toast('发射目标 → '+nm);
 }
@@ -23867,6 +23961,11 @@ window.onDmrEvent=function(json){
       if(el){
         const db=Number(ev.db);
         if(isFinite(db)&&db>-110){
+          /* ★ v2.5.1 存一份给波形用。
+             波形原来只读 Audio_.level（HOSE 解码电平），原生接管接收后
+             那个值永远是 0，手机上波形就是一条平线。这里顺手记下来，
+             renderVu 优先用它。 */
+          state.rxDb=db;
           el.textContent=db.toFixed(1)+' dB';
           el.dataset.lv=db>-12?'hot':(db>-30?'ok':'low');
           if(Q.dbPeak==null||db>Q.dbPeak)Q.dbPeak=db;
@@ -24070,7 +24169,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.20';
+const PAGE_VER='2026.11.21';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';

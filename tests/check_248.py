@@ -268,12 +268,12 @@ ok('设置页有自动登录开关', 'id="setAutoConn"' in html)
 
 # ============================================================
 print('\n=== 10. 版本号 ===')
-ok("PAGE_VER 是 2026.11.20", "PAGE_VER='2026.11.20'" in html)
+ok("PAGE_VER 是 2026.11.21", "PAGE_VER='2026.11.21'" in html)
 gp = os.path.join(REPO, 'android', 'app', 'build.gradle')
 if os.path.exists(gp):
     g = read(gp)
-    ok('build.gradle versionName = 2.5.0', 'versionName "2.5.0"' in g)
-    ok('build.gradle versionCode = 26', re.search(r'versionCode\s+26', g) is not None)
+    ok('build.gradle versionName = 2.5.1', 'versionName "2.5.1"' in g)
+    ok('build.gradle versionCode = 27', re.search(r'versionCode\s+27', g) is not None)
 else:
     ok('能读到 android/app/build.gradle', False)
 
@@ -382,6 +382,29 @@ ok('CALL_START 同组接续也记上一句',
    'prev.srcId!==srcId||Date.now()-prev.start>1000' in html)
 ok('rxReset 清 heldCall', 'RXG.heldCall={};' in html)
 ok('rxReset 清 recCall', 'RXG.recCall=null;' in html)
+
+# ★ v2.5.1 波形 / 重叠 / 卡顿 / 顶部布局
+#
+# 波形在手机上一直是平线：Audio_.level 是 HOSE 解码时顺手算的，
+# 原生 MMDVM 接管接收后 HOSE 整句不解码，那个值恒为 0。
+ok('rxlevel 把 dB 存给波形', 'state.rxDb=db;' in html)
+ok('renderVu 优先用原生 dBFS', 'Q.rxing&&isFinite(state.rxDb)' in html)
+# 点呼号 / 点话组不能碰接收状态，否则正在播的那一句失去归属 → 叠一层声音
+i_tst = html.find('function txSetTarget(')
+seg_tst = html[i_tst:i_tst + 2000] if i_tst > 0 else ''
+ok('txSetTarget 不再调 rxReset', 'rxReset();' not in seg_tst)
+# silence 归零 nextTime 会让新帧和「已 start 撤不回」的旧 buffer 重叠
+i_sil = html.find('silence(){')
+seg_sil = html[i_sil:i_sil + 140] if i_sil > 0 else ''
+ok('silence 不重置 nextTime', 'this.nextTime=0' not in seg_sil)
+ok('播放队列有自适应缓冲', 'this.underAt' in html)
+# 顶部两行容器：桌面端 display:contents 保持一行，手机端切两行
+ok('顶部有 np-row 结构',
+   'class="np-row np-r1"' in html and 'class="np-row np-r2"' in html)
+ok('桌面端 np-row 用 display:contents', '.np-row{display:contents}' in html)
+# 窄屏那条 order:4 把波形挪到了行尾，已删
+ok('窄屏不再用 order 挪波形',
+   '.vu{order:4' not in html)
 
 print('\n' + '=' * 18 + f'  {passed} 通过 / {failed} 失败  ' + '=' * 18)
 raise SystemExit(1 if failed else 0)

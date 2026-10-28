@@ -106,7 +106,10 @@ if assets:
               'recTg']:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
     print('  ---- v2.5.0 ----')
-    for k in ['recCall', 'heldCall', 'selfRecGuard', 'logged=true', '2026.11.20']:
+    for k in ['recCall', 'heldCall', 'selfRecGuard', 'logged=true']:
+        print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
+    print('  ---- v2.5.1 ----')
+    for k in ['np-row np-r1', 'state.rxDb', 'underAt', '2026.11.21']:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
 else:
     print('  !! 没找到 index.html')

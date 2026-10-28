@@ -288,12 +288,18 @@ const g3 = await ev(`/* CALL_END 按 tg 精确删除，并把坑位交给还在�
 ok('CALL_END 按 tg 精确删除 46001', g3.a46001 === false, g3);
 ok('CALL_END 后坑位交给还在等的 91', g3.cur === 91, g3);
 
-const g4 = await ev(`/* 用户主动点某个组 = 立刻让路 */
+const g4 = await ev(`/* 用户主动点某个组 = 只切发射目标，**不碰接收状态**。
+   v2.5.1 之前这里会调 rxReset() 把坑位清掉，于是正在播的那一句
+   立刻失去归属，别的组的帧被当成它的音频放出来 —— 用户听到的是
+   「点一下呼号就叠了一层声音」。切发射目标不该影响正在收的那一句。 */
   rxReset(); state.current={srcId:4601001,tg:46001,alias:'',start:Date.now()};
   RXG.tg=46001; RXG.at=Date.now();
   txSetTarget(91);
-  return {locked:RXG.tg, tg:document.getElementById('txTg').value};`);
-ok('点话组后立刻释放占用', g4.locked === 0, g4);
+  return {locked:RXG.tg, tg:document.getElementById('txTg').value,
+          cur:state.current&&state.current.tg};`);
+ok('点话组后只切发射目标', g4.tg === '91', g4);
+ok('点话组不释放接收占用', g4.locked === 46001, g4);
+ok('点话组不改正在收的那一句', g4.cur === 46001, g4);
 
 const g5 = await ev(`/* 独听切换也要释放 */
   RXG.tg=46001; RXG.at=Date.now();
