@@ -19221,6 +19221,12 @@ const Audio_ = {
   /* 发射/接收时的临时静音闸。和 state.audioOn 是两件事：
      audioOn 是「用户想不想听」，muted 是「此刻必须闭嘴」。 */
   muted:false,
+  /* ★ v2.4.9 用户自己点的静音。以前这一层不存在 —— setPlay(false) 只改了
+     state.audioOn（拦住**新**帧）再 silence()（把 nextTime 归零），
+     但已经 schedule 进 WebAudio 队列的 buffer 撤不回来，最坏还能再响 0.8 秒。
+     用户听到的就是「点了静音还在响」。两个闸分开记，互不覆盖：
+     半双工闸由收发事件驱动，用户闸只由右上角那颗按钮驱动。 */
+  userMuted:false,
   /* 播放队列是否断开过。true 时下一帧要淡入 —— 见 push() */
   broken:true,
   init(){
@@ -19229,7 +19235,7 @@ const Audio_ = {
     if(!AC)return false;
     try{ this.ctx=new AC(); }catch(e){ return false; }
     this.gain=this.ctx.createGain();
-    this.gain.gain.value=state.volume*state.gain;
+    this.gain.gain.value=(this.muted||this.userMuted)?0:state.volume*state.gain;
     /* 接收音色链。DMR 是 8 kHz 窄带，μ-law 解出来直接播有两个毛病：
          ① 低频隆隆（编解码和线路噪声都堆在 100 Hz 以下），手机外放尤其糊；
          ② 2.5 kHz 往上掉得快，语音发闷、辅音听不清。
@@ -19244,16 +19250,29 @@ const Audio_ = {
     this.ready=true; return true;
   },
   resume(){ if(!this.init())return; if(this.ctx.state==='suspended')this.ctx.resume(); },
-  setVol(v){ if(this.gain)this.gain.gain.value=this.muted?0:v*state.gain; },
+  /* 增益只有一个出口：两个闸任一关掉就是 0，其余按音量算。
+     以前 setVol 直接写 .value、setMute 用 setTargetAtTime 斜坡，两条路
+     各写各的 —— 静音期间拖一下音量滑块就能把声音「拖」回来。 */
+  applyGain(){
+    if(!this.gain||!this.ctx)return;
+    const v=(this.muted||this.userMuted)?0:state.volume*state.gain;
+    try{ this.gain.gain.setTargetAtTime(v,this.ctx.currentTime,0.008); }
+    catch(e){ this.gain.gain.value=v; }
+  },
+  setVol(v){ this.applyGain(); },
   /* ★ 必须走 gain 斜坡，光在 play() 里 return 挡不住已经 start 出去的 buffer ——
      发射那一刻还能听到上一句的尾巴，听起来就是「自己的声音和自己的声音对冲」。
      8ms 淡出，够快又不炸音。 */
   setMute(on){
     this.muted=!!on;
-    if(!this.gain)return;
-    const v=on?0:state.volume*state.gain;
-    try{ this.gain.gain.setTargetAtTime(v,this.ctx.currentTime,0.008); }
-    catch(e){ this.gain.gain.value=v; }
+    this.applyGain();
+  },
+  /* 用户静音。除了把增益压到 0，还要把队列起点归零 ——
+     否则解除静音时会把静音期间积压的那一坨一口气放出来。 */
+  setUserMute(on){
+    this.userMuted=!!on;
+    if(on)this.silence();
+    this.applyGain();
   },
   decode(bytes){
     const n=bytes.length, f=new Float32Array(n);
@@ -19273,7 +19292,7 @@ const Audio_ = {
      * 这里每次 play 都确认一次，挂起就拉起来，成本可以忽略。 */
     if(!this.ready&&!this.init())return;
     /* 静音期间连 buffer 都不建：省 CPU，也免得恢复时把积压的旧语音一股脑放出来 */
-    if(this.muted){ this.nextTime=0; return; }
+    if(this.muted||this.userMuted){ this.nextTime=0; return; }
     if(this.ctx.state!=='running'){
       try{ this.ctx.resume(); }catch(e){}
     }
@@ -19927,8 +19946,50 @@ const RXG={
    * 代价：静音组说话期间，上一组的尾巴也会一起被丢掉 —— 两路在同一个流里，
    * 不带话组号就没法分开，这是协议本身的限制（见上面那段注释）。 */
   attrTg:0,
+  /* ★ v2.4.9 「这一段音频不播」的统一标记：记住是哪个组，以及什么时候立的。
+   *
+   * 以前这件事被拆成三处各写一遍（静音组靠 audioAllowed、自己回传没处理、
+   * 让位给原生靠 hdGate 中途压增益），结果就是同一句音频可能**先播了半句
+   * 才被掐掉**，接着另一条路从头再放一遍 —— 听感是「重叠 + 压制」，比重复还糟。
+   *
+   * 现在合成一条：CALL_START 一到就决定这一句归谁，不归 HOSE 就把 dropTg
+   * 立起来，整句从第一帧丢到 CALL_END，中间绝不切。dropAt 只是兜底
+   * （CALL_END 丢了也不至于永久挡住后面的组）。
+   */
+  dropTg:0,
+  dropAt:0,
+  DROP_MS:90000,
   LOST_MS:15000    // 占用的组这么久没声音 = CALL_END 丢了，兜底释放
 };
+/* 这一句该不该由 HOSE 播。
+ *
+ * 两条音频路径同时在放同一句话，是「听两遍」和「重叠压制」的总根源：
+ *   · Hoseline（WebSocket → WebAudio）：页面能控
+ *   · 原生 MMDVM 接收（DMRD → 声码器 → AudioTrack）：页面控不到
+ * 只要 MMDVM 连着、声码器就绪、接收开着，主站推给我们的同一句就会被
+ * 原生那边放一遍。所以**一句话只能归一条路**，从第一帧就定死。
+ *
+ * 归属规则（没有开关，全自动）：
+ *   1. 原生没在收（没连 / 声码器没就绪 / 接收关了 / 用户静音）→ HOSE 播。
+ *   2. 「只收当前话组」开着 → 原生只放 watchTg 那一路，
+ *      所以 HOSE 播「不是 watchTg」的组，watchTg 的让给原生。
+ *   3. 「只收当前话组」关着 → 原生什么组都放，HOSE 全部让位。
+ *      （宁可让 HOSE 全退，也不要两条路叠在一起 —— 叠起来是没法听的。）
+ */
+function nativeRxLive(){
+  return !!(TX.conn && TX.voc && state.rxOn && state.audioOn);
+}
+function hoseOwnsTg(tg){
+  if(!state.audioOn)return false;
+  if(!nativeRxLive())return true;          // 原生没在收，只能靠 HOSE
+  if(!state.rxOnlyWatchTg)return false;    // 原生全收 → HOSE 全让位
+  /* 个呼模式下原生侧门限是 0（不过滤，见 qRenderTg 里那段说明），
+     也就是什么都放 —— 这种时候没法按话组切分，HOSE 整体让位。 */
+  const pv=document.getElementById('txPriv');
+  if(pv&&pv.value==='1')return false;
+  const watch=qCurTg();                    // 原生侧只放这一路
+  return !(watch>0&&Number(tg)===watch);
+}
 /* 现在是否被别的组占着。返回占用的 tg，0 表示可以接。
    ★ 严格配对：只有「占用组的 CALL_END 到了」（rxRelease）或「它 15 秒没声音」
    才让位。原来靠 1.8 秒 hang 过期让位 —— 46001 说话中间换个气就被 91 抢走，
@@ -20738,20 +20799,35 @@ function handleSpotter(m){
   const type=m[0];
   if(type===T.CALL_START){
     const srcId=m[2], tg=m[3];
-    /* ★ v2.4.8 被静音的话组：照样记进「实时活动」（能看见它在呼叫），
-       但不占收听坑位、不播、不弹提示 —— 静音了就彻底安静，
-       否则每来一句都弹一次「有呼叫」，等于没静音。
-       ⚠ 这里**必须**把 RXG.attrTg 立起来：HOSE 的音频帧不带话组号，
-       不切 current 的话，它的声音会被当成「上一组说的」照常播出去。 */
-    if(state.rxMuteTg&&state.rxMuteTg.indexOf(Number(tg))>=0){
-      RXG.attrTg=Number(tg)||0;
+    /* ★ v2.4.9 一句话归哪条路，在 CALL_START 这一刻就定死，中途绝不改。
+     *
+     * 以前是「先让它播，等原生那边的 rx 事件到了再用 hdGate 压增益」——
+     * 压的那一下必然落在句子中间，于是听到的是「前半句 HOSE、卡一下、
+     * 后半句 MMDVM」，比重复一遍还难听。用户说的「重叠压制非常不好」就是它。
+     *
+     * 现在三种「不播」原因合成一个 dropTg，整句从第一帧丢到 CALL_END：
+     *   ① 用户把这一组静音了
+     *   ② 这句是我们自己发出去、从 HOSE 绕回来的（原生侧本来就 srcId==myId 丢弃）
+     *   ③ 这一组归原生 MMDVM 放（见 hoseOwnsTg）
+     * 三种都照样记进「实时活动」—— 能看见在呼叫，只是不出声。
+     */
+    const nTg=Number(tg)||0;
+    const selfId=parseInt((document.getElementById('txId')||{}).value,10)||0;
+    const muted=!!(state.rxMuteTg&&state.rxMuteTg.indexOf(nTg)>=0);
+    const self=!!(selfId&&Number(srcId)===selfId);
+    const yieldToNative=!hoseOwnsTg(nTg);
+    if(muted||self||yieldToNative){
+      /* ⚠ 必须把 attrTg 立起来：HOSE 的音频帧不带话组号，
+         不标记归属的话，这一段会被当成「上一组说的」照常播出去。 */
+      RXG.attrTg=nTg;
+      RXG.dropTg=nTg; RXG.dropAt=Date.now();
       state.active.set(tg,{ tg, srcId, alias:'', start:Date.now(), at:Date.now() });
       activeSweep();
       renderMine(); renderTab(); renderLive(true);
       return;
     }
-    /* 走到这里就是「没静音」的正常通话，把归属覆盖清掉 */
-    RXG.attrTg=0;
+    /* 走到这里就是「归 HOSE 播」的正常通话，把归属覆盖和丢弃标记清掉 */
+    RXG.attrTg=0; RXG.dropTg=0; RXG.dropAt=0;
     /* 别的组还在说 → 这一句让路。不切 current、不 silence，
        正在听的声音和界面上的呼号都不动。但 active 照样记下来，
        「实时活动」里能看到它在呼叫，想切过去点一下就行。 */
@@ -20807,15 +20883,22 @@ function handleSpotter(m){
     const c=state.current;
     if(!state.audioOn)return;
     if(Date.now()<RXG.muteUntil)return;   // 交接静默期：丢弃在途的旧帧
-    /* ★ 归属优先用 RXG.attrTg（被静音的话组正在说话时它才有值）。
+    /* ★ 归属优先用 RXG.attrTg（被静音/让位/自己回传的组正在说话时它才有值）。
        否则退回 state.current —— HOSE 的音频帧本身不带话组号。 */
     const atg=RXG.attrTg||(c?Number(c.tg):0);
-    /* 只在「知道这帧属于谁」时才拦。atg=0 说明既没有静音覆盖也没有 current
+    /* ★ v2.4.9 这一句已经判定「不归 HOSE 播」→ 整句丢，从第一帧丢到 CALL_END。
+       放在最前面，先于 audioAllowed / rxHold —— 那两条是「播的时候怎么排」，
+       这条是「压根不播」，语义更靠前。dropAt 兜底：CALL_END 丢了也不会永久挡。 */
+    if(RXG.dropTg&&atg===RXG.dropTg){
+      if(Date.now()-RXG.dropAt>RXG.DROP_MS){ RXG.dropTg=0; RXG.attrTg=0; }
+      else return;
+    }
+    /* 只在「知道这帧属于谁」时才拦。atg=0 说明既没有归属覆盖也没有 current
        （比如半路加入、CALL_START 丢了）—— 这种时候维持老行为，照播，
        否则会变成「偶尔整段没声音」这种更难查的毛病。 */
     if(atg&&!audioAllowed(atg))return;
     /* 别的组正占着坑位 → 这一帧丢掉，别和它在听的那句叠在一起。
-       静音组说话期间 c 是「上一组」，它已经不占坑位了，不能拿它去判让路。 */
+       让位组说话期间 c 是「上一组」，它已经不占坑位了，不能拿它去判让路。 */
     if(c&&!RXG.attrTg&&rxHold(c.tg))return;
     if(c&&!RXG.attrTg)rxTake(c.tg);
     const f=Audio_.decode(m[1]);
@@ -20827,7 +20910,9 @@ function handleSpotter(m){
        变僵尸；而 rxRelease() 又靠 active 判断「还有谁在等」，于是每次收尾
        都误判，把坑位白白让出去，下一个组随便就能接管。 */
     const endTg=Number(m[3])||0;
-    /* 被静音的那一组说完了 → 音频归属覆盖要撤掉，否则后面正常的组会被一直挡 */
+    /* 被丢弃的那一组说完了 → 归属覆盖和丢弃标记一起撤掉，
+       否则后面正常的组会被一直挡着。 */
+    if(endTg&&RXG.dropTg===endTg){ RXG.dropTg=0; RXG.dropAt=0; }
     if(endTg&&RXG.attrTg===endTg)RXG.attrTg=0;
     const cur=state.current;
     const tg=endTg||(cur?cur.tg:0);      // 老格式没带 tg 时退回 current
@@ -21345,7 +21430,21 @@ function renderAll(){
   renderNow(); renderTxIdent();
 }
 
+/* 长按拖动的运行状态。放在 renderMine 之前 —— renderMine 要读 DG.on 判断
+   「现在是不是正在拖」，而 const 有 TDZ，声明在后面会直接报错。 */
+const DG={on:false,row:null,timer:null,y0:0,x0:0,lastDrop:0,pending:false};
+
 function renderMine(){
+  /* ★ v2.4.9 拖动途中不许重绘。
+   *
+   * 「我的收听」这一列会被很多事件顺手重绘（收到呼叫、订阅变化、扫描轮转、
+   * 状态刷新……）。重绘就是整体重写 innerHTML —— 用户正按着拖着的那一行
+   * 会从 DOM 上脱落，DG.row.parentNode 变 null，dgMoveTo 直接 return，
+   * 整个手势静默作废：手指划过去了，松手发现顺序没变。
+   *
+   * 所以拖动期间只记一个「欠一次重绘」，等松手后再补。
+   * 拖动本身只改 DOM 顺序，不需要重绘配合。 */
+  if(DG.on){ DG.pending=true; return; }
   const list=$('#mineList'), subs=state.subscribed;
   $('#mineCount').textContent=subs.length;
   if(!subs.length){
@@ -21381,12 +21480,12 @@ function renderMine(){
      · 按住 420 ms 才进入拖动 —— 手指划过列表是滚动，不能误触发；
      · 进入拖动后按指针位置找目标行，插到它前半/后半；
      · 松手把 DOM 顺序读回来写进 state.subscribed。
-   只在「我的收听」的行上生效，行内 ✕ / 📡 / 🎯 / 🔊 那几颗小按钮不参与。 */
-const DG={on:false,row:null,timer:null,y0:0,x0:0,lastDrop:0};
+   只在「我的收听」的行上生效，行内 ✕ / 📡 / 🎯 / 🔊 那几颗小按钮不参与。
+   （DG 本身在 renderMine 之前声明 —— 那边要先读 DG.on 判断是否在拖。） */
 function dgCancel(){
   if(DG.timer){ clearTimeout(DG.timer); DG.timer=null; }
   if(DG.row)DG.row.classList.remove('lift');
-  DG.on=false; DG.row=null;
+  DG.on=false; DG.row=null; DG.pending=false;
   document.body.classList.remove('dragging');
 }
 function dgStart(row){
@@ -21398,7 +21497,14 @@ function dgStart(row){
 /* 把被拖的行挪到指针所在位置。用 elementFromPoint 之外的做法（遍历兄弟节点比
    中点）更稳：行高不一样、列表滚过一半时都不会算错。 */
 function dgMoveTo(y){
-  const row=DG.row; if(!row||!row.parentNode)return;
+  let row=DG.row; if(!row)return;
+  /* 兜底：万一还是脱了（重绘的时序没法完全保证），按 data-id 把现场那一行
+     找回来接着拖，别让手势白做。 */
+  if(!row.parentNode){
+    const live=document.querySelector('#mineList .row[data-id="'+row.dataset.id+'"]');
+    if(!live)return;
+    DG.row=live; row=live; row.classList.add('lift');
+  }
   const list=row.parentNode;
   const kids=[...list.children].filter(el=>el.classList&&el.classList.contains('row'));
   let before=null;
@@ -21900,16 +22006,33 @@ function renderPlayBtn(){
   b.classList.toggle('pri',!on);
   b.classList.toggle('on',on);
 }
-function setPlay(on){
+function setPlay(on, quiet){
+  on=!!on;
   state.audioOn=on;
   /* 记住用户的选择：默认是开的，但用户手动点了静音，下次进来就该是静音。
      不加这一句的话，每次冷启动都会把静音的用户重新打开，等于没记住。 */
-  store.set('audioOn',!!on);
-  if(on){ Audio_.resume(); ensureSpotter(); }
-  else { Audio_.silence(); }
+  store.set('audioOn',on);
+  /* ★ v2.4.9 静音必须同时掐两条路，缺一条就是「点了没反应」：
+       · Hoseline（WebAudio）：userMuted 走 8ms 斜坡，队列里已经排进去的
+         buffer 立刻没声。以前只拦新帧，最坏还能再响 0.8 秒。
+       · 原生 MMDVM 接收：声音是 AudioTrack 放的，页面根本管不到 ——
+         只要 MMDVM 连着且 rxOn 开着，点了静音照样出声。
+         用户报的「右上角静音用不了」基本就是这一条。
+     两条都关掉之后，audioOn 才是真的「一句话都不响」。 */
+  Audio_.setUserMute(!on);
+  if(on){
+    Audio_.resume();
+    ensureSpotter();
+  }else{
+    Audio_.silence();
+  }
+  rxApply();          /* 原生接收开关跟着走：rxOn && audioOn */
   renderPlayBtn();
   syncAwake();
   renderMine(); renderStatus(); renderHtSum();
+  /* 给一个明确回执。这颗钮在顶栏右上角，点了没有任何可见变化时
+     用户无法区分「没点到」和「点到了但没生效」。冷启动那次不弹。 */
+  if(!quiet)toast(on?'🔊 开始收听':'🔇 已静音 · 不会再出声');
 }
 /* 三个视图：收听 / 看板 / 设置。
  * 「对讲」那整页已经拆掉 —— 发射条现在直接长在收听页顶部，
@@ -22162,13 +22285,25 @@ function txMuteAll(on){
   renderHtSum();
 }
 function hdGate(){
-  txMuteAll(TX.txing||Q.rxing);
+  /* ★ v2.4.9 归属已经按句判过了（hoseOwnsTg），HOSE 正在播的这一句
+   * **一定**不归原生。这时再因为 Q.rxing 去压增益，就是纯粹的截断 ——
+   * 用户听到的「重叠压制」正是这一下：前半句 HOSE、卡一下、后半句 MMDVM。
+   * 所以分三种情况：
+   *   · 自己在发射   → 一律静音（免得听见自己绕网络回来）
+   *   · HOSE 正在播它自己那一句 → 不因为原生在收就掐掉
+   *   · 其它（原生在收、HOSE 没在播）→ 照旧静音兜底
+   */
+  const own=!!(state.current&&hoseOwnsTg(Number(state.current.tg)||0));
+  txMuteAll(TX.txing||(Q.rxing&&!own));
 }
 /* 接收参数下发到原生侧。原生那边很轻，改一次调一次即可 */
 function rxApply(){
   if(typeof Android==='undefined')return;
   try{
-    if(Android.dmrSetRxOn)Android.dmrSetRxOn(!!state.rxOn);
+    /* ★ v2.4.9 原生接收开关 = 用户在设置里开的 rxOn **且** 右上角没静音。
+       以前只发 rxOn，于是「只发不收」这个设置管不了顶栏那颗静音钮，
+       两处开关各说各话：顶栏显示已静音，MMDVM 收到的声音照样从喇叭出来。 */
+    if(Android.dmrSetRxOn)Android.dmrSetRxOn(!!(state.rxOn&&state.audioOn));
     if(Android.dmrSetRxVolume)Android.dmrSetRxVolume(Number(state.rxVol)||0);
     if(Android.dmrSetRxJitter)Android.dmrSetRxJitter(Number(state.rxJit)||0);
   }catch(e){}
@@ -23687,7 +23822,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.17';
+const PAGE_VER='2026.11.18';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
@@ -23977,18 +24112,23 @@ $('#mobNav').addEventListener('click',e=>{
   const b=e.target.closest('button[data-mcol]'); if(b)mobCol(Number(b.dataset.mcol));
 });
 
-/* ---------- 操作区手动折叠 ----------
-   收起网络切换 + 发射条，只留分栏条和这颗按钮，把屏幕让给下面的列表。
-   两条规则：
-   1) 点按钮手动切，状态存本地，下次进来还是收起的；
-   2) 往下翻过一段再滚回顶部时自动展开 —— 「滚上来」这个动作本身就说明
-      想调参数/切网络，不该再让用户点一次。
-   ⚠ 不能只判 scrollY<=12 就展开：用户在顶部刚点完「收起」，手指还没离屏，
-     轻微的回弹滚动就会把它又弹开，看着像按钮失灵。所以要求先真的往下走过
-     （htLeftTop=true）才允许自动展开。 */
-let htLeftTop=false, htFoldAt=0;
+/* ---------- 操作区折叠 ----------
+   收起网络切换 + 发射条，只留分栏条和那一行摘要，把屏幕让给下面的列表。
+   规则只有一条：**完全手动**。点折叠钮切，状态存本地，下次进来还是收起的。
+   ⚠ v2.4.8 有「往下滚过一段再滚回顶部就自动展开」，已经删掉 ——
+     想看列表第一条时手指一滑到顶，操作区「啪」地弹开，把刚滚到的位置
+     又顶走，比不展开烦得多。
+   ⚠ v2.4.9 中途试过「往下滚自动收起」，用户明确否掉：正常模式下不要
+     任何自动折叠。滚一下就把参数藏起来，反而找不到东西。
+     想收起点折叠钮，想展开点摘要条，都在拇指够得到的地方。
+   简洁模式是个例外：它启动时就是收起的（那是这个模式的定义，不是自动折叠），
+   同样不随滚动变化。 */
 function htFoldSet(on,persist){
   on=!!on;
+  /* ★ v2.4.9 运行时状态永远跟着走，persist 只决定要不要落盘。
+     以前 state.htCollapsed 只在 persist=true 时更新，自动折叠/展开之后
+     state 和 DOM 说的不是一回事，下一次滚动判断就会用错状态。 */
+  state.htCollapsed=on;
   const ht=document.querySelector('#viewListen .home-top');
   if(!ht)return;
   ht.classList.toggle('collapsed',on);
@@ -23999,12 +24139,11 @@ function htFoldSet(on,persist){
   }
   const t=document.getElementById('htFoldTxt');
   if(t)t.textContent=on?'展开操作区':'收起操作区';
-  if(persist){ state.htCollapsed=on; store.set('htCollapsed',on); }
+  if(persist)store.set('htCollapsed',on);
   renderHtSum();     /* 收起后那一行摘要要立刻顶上，不能等下一次收发才出现 */
   syncHomeTopH();
 }
 function htFoldToggle(){
-  htFoldAt=Date.now();
   htFoldSet(!state.htCollapsed,true);
 }
 $('#htFold').addEventListener('click',htFoldToggle);
@@ -24029,18 +24168,12 @@ $('#htFold').addEventListener('click',htFoldToggle);
     toast('发射目标已切到'+(isPriv?'个呼 ':'话组 ')+n);
   });
 })();
-window.addEventListener('scroll',()=>{
-  const y=window.scrollY||window.pageYOffset||0;
-  if(y>48)htLeftTop=true;
-  /* ★ v2.4.8 简洁模式：不自动展开。这个模式本来就是「别老弹出来挡列表」，
-     自动展开等于把它白关了。手动点折叠钮仍然可以展开。 */
-  if(state.simple)return;
-  /* 手动点完的 500ms 内不响应，避开点击时的抖动/回弹 */
-  if(y<=12 && state.htCollapsed && htLeftTop && Date.now()-htFoldAt>500){
-    htFoldSet(false,true);
-    htLeftTop=false;          /* 复位，下次还得再往下走一趟才触发 */
-  }
-},{passive:true});
+/* ★ v2.4.9 操作区不跟滚动联动。
+   v2.4.8 这里是「往下滚过 48px 再滚回顶部就自动展开」，v2.4.9 一度改成
+   「往下滚过 220px 自动收起」—— 两个方向都被用户否掉了。
+   滚动是浏览列表的动作，不该顺带改变布局：往下滑一下参数就没了，
+   或者滑回顶部整块弹开把位置顶走，都是「界面自己在动」，最难用。
+   现在只认手动：折叠钮 / 折叠后那一行摘要。 */
 
 /* ===================== 简洁模式（v2.4.8） =====================
    只做三件事，都靠 CSS 的 body.simple 完成：
@@ -24500,7 +24633,9 @@ function boot(){
      放在这里而不是最前面 —— setPlay 会顺手去连 HOSE，必须等网络选择
      和订阅列表都恢复完，否则连的是另一套服务器、订阅了个空表。
      上一次手动静音过的保持静音：那是用户的选择。 */
-  setPlay(store.get('audioOn',true)!==false);
+  /* 第二个参数 quiet：冷启动不弹「开始收听/已静音」——
+     进页面先被一条 toast 盖住不好看，而且这本来就是恢复上次的选择。 */
+  setPlay(store.get('audioOn',true)!==false, true);
   /* 发射条现在长在收听页里，进页面就要把它初始化好 ——
    * 身份回填 / 主站面板绑定 / 声码器加载全在 txEnter 里，它自己是幂等的。 */
   txEnter();

@@ -142,13 +142,17 @@ ok('有 state.simple 字段', 'simple:false' in html)
 ok('body.simple 隐藏看板入口', 'body.simple .viewtabs button[data-view="dash"]' in html)
 ok('body.simple 隐藏实时活动栏', 'body.simple .col-mid' in html)
 ok('有 applySimple()', 'function applySimple(' in html)
-i_scroll = html.find("window.addEventListener('scroll'")
-seg = html[i_scroll:i_scroll + 700] if i_scroll > 0 else ''
-i_ret = seg.find('if(state.simple)return')
-i_auto = seg.find('htFoldSet(false,true)')
-ok('简洁模式下滚回顶部不再自动展开',
-   0 <= i_ret < i_auto if i_auto > 0 else False,
-   f'return@{i_ret} autoExpand@{i_auto}')
+# ★ v2.4.9：操作区跟滚动彻底脱钩 —— 既不自动展开也不自动收起。
+# v2.4.8 断言的是「简洁模式下滚回顶部不再自动展开」，v2.4.9 把整段
+# scroll 监听删掉了（用户明确否掉两个方向的自动行为），所以改成
+# 断言「没有任何滚动驱动的折叠调用」。
+ok('没有任何滚动驱动的自动折叠/展开',
+   'htFoldSet(false,true)' not in html
+   and 'htFoldSet(true,false)' not in html
+   and 'htFoldToggle' not in html[html.find("window.addEventListener('scroll'"):][:400]
+   if "window.addEventListener('scroll'" in html else True)
+ok('简洁模式仍然默认收起操作区',
+   'if(state.simple)htFoldSet(true,true)' in html)
 ok('设置页有简洁模式开关', 'id="setSimple"' in html)
 
 # ============================================================
@@ -172,26 +176,46 @@ i_solo = seg.find('state.solo!=null')
 ok('静音判断排在独听之前', 0 <= i_mute < i_solo if i_solo > 0 else False,
    f'mute@{i_mute} solo@{i_solo}')
 ok('静音的话组不抢收听坑位（CALL_START 提前返回）',
-   html.find('rxMuteTg.indexOf(Number(tg))') > 0)
+   'const muted=!!(state.rxMuteTg' in html)
 ok('国内链路也做了同样的静音拦截', 'rxMuteTg.indexOf(tg)>=0' in html)
 ok('长按 420ms 才进入拖动', re.search(r'},\s*420\)', html) is not None)
 ok('有 dgStart / dgMoveTo / dgDrop',
    all(f'function {n}(' in html for n in ('dgStart', 'dgMoveTo', 'dgDrop')))
 ok('拖动后写回 state.subscribed', 'state.subscribed=order' in html)
 ok('长按后的 click 被拦掉（不会顺手设成发射目标）', 'DG.lastDrop<400' in html)
+# ★ v2.4.9 拖动途中不许重绘：重绘会整体重写 innerHTML，正在拖的那一行脱落，
+# 手势静默作废（用户划过去了，松手发现顺序没变）。
+i_rm = html.find('function renderMine(')
+seg_rm = html[i_rm:i_rm + 500] if i_rm > 0 else ''
+ok('renderMine 在拖动途中让路', 'if(DG.on){ DG.pending=true; return; }' in seg_rm)
+i_dg = html.find('function dgMoveTo(')
+seg_dg = html[i_dg:i_dg + 500] if i_dg > 0 else ''
+ok('dgMoveTo 能在行脱落时按 data-id 找回', 'row.dataset.id' in seg_dg)
+# DG 必须先于 renderMine 声明（const 有 TDZ），而且只能有一处
+ok('DG 只声明一次', html.count('const DG={') == 1)
+ok('DG 声明在 renderMine 之前',
+   0 < html.find('const DG={') < html.find('function renderMine('))
 
 print('\n=== 7b. 静音真的挡得住声音（HOSE 音频归属）===')
 # 第一版把静音写成「CALL_START 直接 return、不切 current」，
 # 于是静音组的音频被当成「上一组说的」照常播出来 —— 静音失效。
+# ★ v2.4.9：静音 / 自己回传 / 让位给原生，三种「不播」合并成一个 dropTg，
+# 在 CALL_START 一次判定，整句从第一帧丢到 CALL_END。
 ok('RXG 有 attrTg（音频归属覆盖）', 'attrTg:0' in html)
+ok('RXG 有 dropTg / dropAt（整句丢弃标记）',
+   'dropTg:0' in html and 'dropAt:0' in html)
 i_start = html.find('function handleSpotter(')
-i_mute = html.find('rxMuteTg.indexOf(Number(tg))', i_start)
-ok('静音分支在 CALL_START 里', i_mute > 0)
-seg = html[i_mute:i_mute + 700] if i_mute > 0 else ''
-ok('静音分支会立起 attrTg', 'RXG.attrTg=' in seg, seg[:120])
+i_mute = html.find('const muted=!!(state.rxMuteTg', i_start)
+ok('静音判定在 CALL_START 里', i_mute > 0)
+seg = html[i_mute:i_mute + 900] if i_mute > 0 else ''
+ok('静音分支会立起 attrTg', 'RXG.attrTg=nTg' in seg, seg[:120])
+ok('静音分支会立起 dropTg', 'RXG.dropTg=nTg' in seg)
+ok('自己的回传也走同一条丢弃路径', 'const self=!!(selfId' in seg)
+ok('让位给原生也走同一条丢弃路径', 'const yieldToNative=!hoseOwnsTg(nTg)' in seg)
 i_audio = html.find('type===T.CALL_AUDIO', i_start)
-seg2 = html[i_audio:i_audio + 1200] if i_audio > 0 else ''
+seg2 = html[i_audio:i_audio + 1400] if i_audio > 0 else ''
 ok('CALL_AUDIO 用 attrTg 判归属', 'RXG.attrTg||' in seg2 or 'RXG.attrTg ||' in seg2)
+ok('CALL_AUDIO 先判 dropTg 整句丢弃', 'atg===RXG.dropTg' in seg2)
 ok('归属未知时维持老行为（atg 为 0 不拦）', 'if(atg&&!audioAllowed(atg))' in seg2)
 i_end = html.find('type===T.CALL_END', i_start)
 seg3 = html[i_end:i_end + 800] if i_end > 0 else ''
@@ -239,14 +263,52 @@ ok('设置页有自动登录开关', 'id="setAutoConn"' in html)
 
 # ============================================================
 print('\n=== 10. 版本号 ===')
-ok("PAGE_VER 是 2026.11.17", "PAGE_VER='2026.11.17'" in html)
+ok("PAGE_VER 是 2026.11.18", "PAGE_VER='2026.11.18'" in html)
 gp = os.path.join(REPO, 'android', 'app', 'build.gradle')
 if os.path.exists(gp):
     g = read(gp)
-    ok('build.gradle versionName = 2.4.8', 'versionName "2.4.8"' in g)
-    ok('build.gradle versionCode = 23', re.search(r'versionCode\s+23', g) is not None)
+    ok('build.gradle versionName = 2.4.9', 'versionName "2.4.9"' in g)
+    ok('build.gradle versionCode = 24', re.search(r'versionCode\s+24', g) is not None)
 else:
     ok('能读到 android/app/build.gradle', False)
+
+# ============================================================
+print('\n=== 11. v2.4.9 收听/静音 + 单路归属 ===')
+# 静音必须同时掐两条路：Hoseline(WebAudio) 和原生 MMDVM 接收(AudioTrack)。
+# 只掐前者的话，MMDVM 连着时点了静音照样出声 —— 用户报的「右上角静音用不了」。
+ok('Audio_ 有独立的 userMuted（和半双工闸分开）', 'userMuted:false' in html)
+ok('Audio_ 有统一的 applyGain()', 'applyGain(){' in html)
+ok('applyGain 两个闸任一关掉就是 0',
+   '(this.muted||this.userMuted)?0:' in html)
+ok('有 setUserMute()', 'setUserMute(on){' in html)
+ok('setVol 走 applyGain（拖音量拖不回静音）',
+   'setVol(v){ this.applyGain(); }' in html)
+ok('play() 两个闸都判', 'if(this.muted||this.userMuted)' in html)
+i_sp = html.find('function setPlay(')
+seg = html[i_sp:i_sp + 1600] if i_sp > 0 else ''
+ok('setPlay 会设 userMuted', 'Audio_.setUserMute(!on)' in seg)
+ok('setPlay 会下发原生接收开关', 'rxApply()' in seg)
+ok('setPlay 给 toast 回执', "toast(on?'🔊 开始收听'" in seg)
+ok('冷启动那次不弹 toast', 'setPlay(store.get(\'audioOn\',true)!==false, true)' in html)
+ok('rxApply 用 rxOn && audioOn',
+   'Android.dmrSetRxOn(!!(state.rxOn&&state.audioOn))' in html)
+
+# 单路归属：一句话只能归一条路，从 CALL_START 定死，不在句子中间切
+ok('有 nativeRxLive()', 'function nativeRxLive(){' in html)
+ok('有 hoseOwnsTg()', 'function hoseOwnsTg(tg){' in html)
+seg = html[html.find('function hoseOwnsTg('):][:800]
+ok('原生没在收时 HOSE 才播', 'if(!nativeRxLive())return true;' in seg)
+ok('「只收当前话组」关掉时 HOSE 全让位', 'if(!state.rxOnlyWatchTg)return false;' in seg)
+ok('个呼模式（原生不过滤）HOSE 全让位', "if(pv&&pv.value==='1')return false;" in seg)
+ok('hoseOwnsTg 用 qCurTg() 对齐原生门限', 'const watch=qCurTg();' in seg)
+# 反向：不能再有「先播半句再压增益」的中途切换
+ok('CALL_START 里不再调 hdGate 中途压增益',
+   'hdGate()' not in html[html.find('function handleSpotter('):][:4000])
+i_hd = html.find('function hdGate(')
+seg_hd = html[i_hd:i_hd + 900] if i_hd > 0 else ''
+ok('hdGate 在 HOSE 播自己的句子时不掐断',
+   'hoseOwnsTg(Number(state.current.tg)||0)' in seg_hd)
+ok('hdGate 发射时一律静音', 'TX.txing||(Q.rxing&&!own)' in seg_hd)
 
 print('\n' + '=' * 18 + f'  {passed} 通过 / {failed} 失败  ' + '=' * 18)
 raise SystemExit(1 if failed else 0)

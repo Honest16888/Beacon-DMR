@@ -19,7 +19,7 @@ const CHROME = process.env.CHROME_PATH || (
       ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
       : '/usr/bin/google-chrome'
 );
-const PAGE = pathToFileURL(path.join(ROOT, 'web', 'dmr-listener.html')).href;
+const PAGE = pathToFileURL(path.join(ROOT, 'web', 'index.html')).href;
 const OUT = ROOT;
 const PROFILE = path.join(os.tmpdir(), 'beacon-dmr-cdp-' + Date.now());
 const PORT = 9334;
@@ -415,8 +415,8 @@ ok('折叠后高度明显变小', foldClick.h < foldBase.h - 80,
    { 展开: foldBase.h, 收起: foldClick.h });
 ok('折叠状态已存本地', foldClick.ls === true, foldClick.ls);
 
-/* 滚回顶部自动展开：先临时撑长页面滚下去，再滚回来。
-   注意点击后有 500ms 冷却，这里的等待要超过它。 */
+/* ★ v2.4.9：滚动不再驱动折叠。这里原来验「滚回顶部自动展开」，
+   用户明确否掉之后两个方向都删了 —— 现在滚下去、滚回来都必须保持原状。 */
 const foldAuto = await evalJs(
   'return (async function(){'
   +'var v=document.getElementById("viewListen");'
@@ -432,8 +432,8 @@ const foldAuto = await evalJs(
   +'sp.remove(); window.scrollTo(0,0);'
   +'state.htCollapsed=false; store.set("htCollapsed",false); htFoldSet(false,false);'
   +'return o; })()');
-ok('下滚保持收起、滚回顶部自动展开',
-   foldAuto.midCollapsed === true && foldAuto.topCollapsed === false, foldAuto);
+ok('下滚保持收起、滚回顶部也不自动展开',
+   foldAuto.midCollapsed === true && foldAuto.topCollapsed === true, foldAuto);
 ok('折叠态无横向溢出',
    await evalJs('htFoldSet(true,false);'
      +'var o=document.documentElement.scrollWidth-document.documentElement.clientWidth;'

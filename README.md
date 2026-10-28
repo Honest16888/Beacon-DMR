@@ -98,7 +98,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  web/dmr-listener.html          单文件前端（约 820 KB）   │
+│  web/index.html                 单文件前端（约 900 KB）   │
 │  布局 + 全部业务逻辑 + 内嵌台站数据，无构建步骤           │
 └───────────────┬─────────────────────────────────────────┘
                 │  @JavascriptInterface（JSON 事件回调）
@@ -156,7 +156,7 @@
 ```bash
 # 起个本地静态服务（比 file:// 干净，localStorage 行为一致）
 python -m http.server 8000
-# 打开 http://localhost:8000/web/dmr-listener.html
+# 打开 http://localhost:8000/web/index.html
 ```
 
 浏览器里能完整收听、录音、切换网络。**发射不可用**——麦克风采集和 MMDVM 协议

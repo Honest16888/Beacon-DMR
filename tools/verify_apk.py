@@ -98,7 +98,11 @@ if assets:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
     print('  ---- v2.4.8 ----')
     for k in ['hydrate()', 'setSimple', 'setAutoConn', 'tabFold', 'toggleMuteTg',
-              'CALLS_MAX=50', 'LEGAL_VER', 'legalModal', '2026.11.17']:
+              'CALLS_MAX=50', 'LEGAL_VER', 'legalModal']:
+        print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
+    print('  ---- v2.4.9 ----')
+    for k in ['userMuted', 'applyGain()', 'setUserMute', 'nativeRxLive', 'hoseOwnsTg',
+              'dropTg', 'state.rxOn&&state.audioOn', '2026.11.18']:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
 else:
     print('  !! 没找到 index.html')

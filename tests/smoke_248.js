@@ -124,22 +124,43 @@ ok('实时活动栏被藏起来', sm1.mid === 'none', sm1.mid);
 ok('操作区自动收起', sm1.collapsed === true, sm1);
 ok('设置存本地', String(sm1.saved) === 'true', sm1.saved);
 
-const sm2 = await ev(`/* 滚回顶部不自动展开：先造出「刚才往下滚过」的条件 */
-  htLeftTop=true; htFoldAt=0;
-  window.dispatchEvent(new Event('scroll'));
+const sm2 = await ev(`/* ★ v2.4.9：操作区跟滚动彻底脱钩。
+   以前这里验的是「简洁模式不自动展开 / 正常模式会自动展开」两个方向，
+   现在两个方向都没有了 —— 滚动是浏览列表的动作，不该顺带改布局。
+   这里把「滚到很深再滚回顶部」走一遍，两种模式都必须保持原状。 */
+  const ht=()=>document.querySelector('#viewListen .home-top').classList.contains('collapsed');
+  const still=ht();                                  // 简洁模式：收起
+  window.scrollTo(0,900); window.dispatchEvent(new Event('scroll'));
   await new Promise(r=>setTimeout(r,80));
-  const still=document.querySelector('#viewListen .home-top').classList.contains('collapsed');
-  /* 关掉简洁模式，同样的条件应该会展开 —— 证明上一条不是巧合 */
+  const deep=ht();
+  window.scrollTo(0,0); window.dispatchEvent(new Event('scroll'));
+  await new Promise(r=>setTimeout(r,80));
+  const back=ht();
+  /* 关掉简洁模式：同样滚一遍，也不许动 */
   const c=document.getElementById('setSimple'); c.checked=false;
   c.dispatchEvent(new Event('change',{bubbles:true}));
-  await new Promise(r=>setTimeout(r,120));
-  htFoldSet(true,true); htLeftTop=true; htFoldAt=0;
-  window.dispatchEvent(new Event('scroll'));
+  await new Promise(r=>setTimeout(r,150));
+  htFoldSet(false,true);                             // 先摆成展开
+  const before=ht();
+  window.scrollTo(0,900); window.dispatchEvent(new Event('scroll'));
   await new Promise(r=>setTimeout(r,80));
-  const opened=!document.querySelector('#viewListen .home-top').classList.contains('collapsed');
-  return {still, opened};`);
-ok('简洁模式下滚回顶部仍保持收起', sm2.still === true, sm2);
-ok('关掉简洁模式后同样的条件会展开（对照）', sm2.opened === true, sm2);
+  const deep2=ht();
+  window.scrollTo(0,0); window.dispatchEvent(new Event('scroll'));
+  await new Promise(r=>setTimeout(r,80));
+  const back2=ht();
+  /* 手动那颗钮仍然要好使 */
+  htFoldSet(false,true); document.getElementById('htFold').click();
+  const manual=ht();
+  document.getElementById('htFold').click();
+  const manual2=ht();
+  window.scrollTo(0,0);
+  return {still, deep, back, before, deep2, back2, manual, manual2};`);
+ok('简洁模式：滚到深处不展开', sm2.deep === true, sm2);
+ok('简洁模式：滚回顶部也不展开', sm2.back === true, sm2);
+ok('正常模式：摆成展开后滚到深处不自动收起', sm2.deep2 === false, sm2);
+ok('正常模式：滚回顶部不会自己弹开', sm2.back2 === false, sm2);
+ok('手动点折叠钮能收起', sm2.manual === true, sm2);
+ok('再点一下能展开', sm2.manual2 === false, sm2);
 
 console.log('\n=== 4. 话组单独静音 ===');
 const mu1 = await ev(`if(!state.subscribed.length)addTg(91,true);
@@ -242,25 +263,36 @@ ok('同时把它从订阅里摘掉', mu5.eff.includes(91) === false, mu5.eff);
 
 console.log('\n=== 6. 长按拖动排序 ===');
 const dg1 = await ev(`if(state.subscribed.length<3){ addTg(2621,true); addTg(91,true); }
-  state.subscribed=[91,2621,91+0];
   state.subscribed=[91,2621,3100];
   store.set('subscribed',state.subscribed);
-  renderMine(); await new Promise(r=>setTimeout(r,100));
-  const before=[...document.querySelectorAll('#mineList .row[data-id]')].map(r=>Number(r.dataset.id));
-  const rows=[...document.querySelectorAll('#mineList .row[data-id]')];
-  const first=rows[0], last=rows[rows.length-1];
-  const r0=first.getBoundingClientRect(), rl=last.getBoundingClientRect();
+  renderMine(); await new Promise(r=>setTimeout(r,120));
+  const q=()=>[...document.querySelectorAll('#mineList .row[data-id]')];
+  const before=q().map(r=>Number(r.dataset.id));
+  const first=q()[0];
+  /* 先把最后一行滚进视野再动手 —— 三行都在屏外时 rect 是虚的，
+     按虚坐标算出来的落点会落在第一行和第二行之间，等于没拖动。 */
+  q()[q().length-1].scrollIntoView({block:'center'});
+  await new Promise(r=>setTimeout(r,150));
+  const r0=first.getBoundingClientRect();
   const opt={bubbles:true, button:0, clientX:r0.left+40, clientY:r0.top+10};
   first.dispatchEvent(new PointerEvent('pointerdown', opt));
   await new Promise(r=>setTimeout(r,520));                 // 等过长按 420ms
   const lifted=first.classList.contains('lift');
+  /* ★ 一次跳到目标位置会偶发不生效：真实拖动是连续多帧的，dgMoveTo 也按
+     「当前兄弟的中点」逐次判断。这里补成 6 步，每步重新量一次最后一行的
+     位置，布局有一点点位移也不会算错。 */
   const list=document.getElementById('mineList');
-  list.dispatchEvent(new PointerEvent('pointermove',
-    {bubbles:true, clientX:r0.left+40, clientY:rl.top+rl.height-2}));
-  await new Promise(r=>setTimeout(r,60));
+  for(let i=1;i<=6;i++){
+    const rows=q(), last=rows[rows.length-1];
+    const rl=last.getBoundingClientRect();
+    const y=r0.top+10+((rl.top+rl.height-2)-(r0.top+10))*i/6;
+    list.dispatchEvent(new PointerEvent('pointermove',
+      {bubbles:true, clientX:r0.left+40, clientY:y}));
+    await new Promise(r=>setTimeout(r,30));
+  }
   list.dispatchEvent(new PointerEvent('pointerup', {bubbles:true}));
-  await new Promise(r=>setTimeout(r,180));
-  const after=[...document.querySelectorAll('#mineList .row[data-id]')].map(r=>Number(r.dataset.id));
+  await new Promise(r=>setTimeout(r,220));
+  const after=q().map(r=>Number(r.dataset.id));
   return {before, lifted, after, saved:localStorage.getItem('dmr.subscribed')};`);
 ok('准备了三行', dg1.before?.length === 3, dg1.before);
 ok('长按后那一行被抬起', dg1.lifted === true, dg1);
@@ -321,7 +353,138 @@ const cl2 = await ev(`/* logCall 里也要裁：塞满再记一通 */
 ok('logCall 之后仍是 50 条', cl2.n === 50, cl2);
 ok('新记录在最前', cl2.first === 'BH6RGQ', cl2.first);
 
-console.log('\n=== 9. 运行时错误 ===');
+console.log('\n=== 9. v2.4.9 右上角收听/静音 ===');
+/* 用户报「右上角收听和静音用不了」。查下来是两个洞：
+   ① setPlay(false) 只拦新帧，已经排进 WebAudio 队列的 buffer 撤不回来；
+   ② 原生 MMDVM 接收走 AudioTrack，页面压根没管 —— 点了静音照样出声。
+   下面把两条都按住。 */
+const p1 = await ev(`const b=document.getElementById('btnPlay');
+  const g0=Audio_.ctx?Audio_.ctx.state:'none';
+  setPlay(false,true);
+  const off={on:state.audioOn, um:Audio_.userMuted, txt:b.textContent,
+             saved:localStorage.getItem('dmr.audioOn')};
+  setPlay(true,true);
+  const on={on:state.audioOn, um:Audio_.userMuted, txt:b.textContent};
+  return {g0,off,on};`);
+ok('静音后 audioOn=false', p1.off.on === false, p1.off);
+ok('静音后 Audio_.userMuted=true', p1.off.um === true, p1.off);
+ok('静音后按钮文字变「听」', /听/.test(p1.off.txt || '') && !/静音/.test(p1.off.txt || ''), p1.off.txt);
+ok('静音写进本地存储', String(p1.off.saved) === 'false', p1.off.saved);
+ok('恢复后 userMuted=false', p1.on.um === false, p1.on);
+ok('恢复后按钮文字变「静音」', /静音/.test(p1.on.txt || ''), p1.on.txt);
+
+const p2 = await ev(`/* 静音期间拖音量滑块不能把声音「拖」回来 */
+  setPlay(false,true);
+  applyVolume(120);
+  /* 增益是 8ms 斜坡（setTargetAtTime），等它落下来再读 ——
+     直接读会读到斜坡中间的值，不是「被滑块写回」 */
+  await new Promise(r=>setTimeout(r,120));
+  const g=Audio_.gain?Audio_.gain.gain.value:null;
+  const mut=Audio_.userMuted;
+  applyVolume(80);
+  setPlay(true,true);
+  return {g, mut};`);
+ok('静音时拖音量滑块不改变静音状态', p2.mut === true, p2);
+ok('静音时增益被压在 0（不是被滑块写回）', p2.g === null || p2.g < 0.02, p2.g);
+
+const p3 = await ev(`/* 静音时连 buffer 都不建：静音期间来的帧不进播放队列 */
+  setPlay(false,true);
+  const before=Audio_.nextTime;
+  const f=new Float32Array(160).fill(0.1);
+  Audio_.push(f);
+  const after=Audio_.nextTime;
+  setPlay(true,true);
+  return {before,after};`);
+ok('静音期间 push 不排播放队列', p3.after === 0, p3);
+
+console.log('\n=== 10. v2.4.9 一句话只归一条路 ===');
+/* 两条路径同时放同一句 = 「听两遍」；先放半句再压增益 = 「重叠压制」。
+   现在归属在 CALL_START 一次定死，整句从第一帧丢到 CALL_END。 */
+const o1 = await ev(`rxReset(); state.current=null; state.active.clear();
+  state.audioOn=true; Audio_.setUserMute(false);
+  state.rxOnlyWatchTg=true; TX.conn=true; TX.voc=true;
+  document.getElementById('txTg').value='91';
+  return {live:nativeRxLive(), owns91:hoseOwnsTg(91), owns46001:hoseOwnsTg(46001)};`);
+ok('MMDVM 连着时 nativeRxLive() 为真', o1.live === true, o1);
+ok('原生在看 91 → HOSE 让出 91', o1.owns91 === false, o1);
+ok('原生不看 46001 → HOSE 仍然播 46001', o1.owns46001 === true, o1);
+
+const o2 = await ev(`/* 让位的话组：整句丢弃，不占坑位、不切 current */
+  state.current=null; state.active.clear(); rxReset();
+  Audio_.silence();          // nextTime 归零：断言读的是「这一句有没有排进队列」
+  handleSpotter([T.CALL_START, 0, 9100001, 91]);
+  const afterStart={cur:state.current?state.current.tg:null, drop:RXG.dropTg, attr:RXG.attrTg};
+  const n0=Audio_.nextTime;
+  for(let i=0;i<5;i++) handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
+  const afterAudio={next:Audio_.nextTime, slot:RXG.tg};
+  handleSpotter([T.CALL_END, 0, 9100001, 91]);
+  return {afterStart, afterAudio, dropAfterEnd:RXG.dropTg, attrAfterEnd:RXG.attrTg};`);
+ok('让位的话组不切 current', o2.afterStart.cur === null, o2.afterStart);
+ok('让位的话组立起 dropTg', o2.afterStart.drop === 91, o2.afterStart);
+ok('让位的话组音频一帧都不播', o2.afterAudio.next === 0, o2.afterAudio);
+ok('让位的话组不占收听坑位', o2.afterAudio.slot === 0, o2.afterAudio);
+ok('CALL_END 撤掉 dropTg', o2.dropAfterEnd === 0, o2);
+ok('CALL_END 撤掉 attrTg', o2.attrAfterEnd === 0, o2);
+
+const o3 = await ev(`/* 自己的回传：HOSE 上出现自己的 DMR ID → 整句丢弃 */
+  document.getElementById('txId').value='4601234';
+  TX.conn=false; TX.voc=false;          // 排除「让位给原生」的干扰
+  state.current=null; state.active.clear(); rxReset();
+  Audio_.silence();
+  handleSpotter([T.CALL_START, 0, 4601234, 91]);
+  const cur=state.current?state.current.tg:null, drop=RXG.dropTg;
+  const n0=Audio_.nextTime;
+  handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
+  const next=Audio_.nextTime;
+  handleSpotter([T.CALL_END, 0, 4601234, 91]);
+  return {cur, drop, next};`);
+ok('自己的回传不切 current', o3.cur === null, o3);
+ok('自己的回传立起 dropTg', o3.drop === 91, o3);
+ok('自己的回传不播', o3.next === 0, o3);
+
+const o4 = await ev(`/* 关掉「只收当前话组」→ 原生什么都放 → HOSE 全让位 */
+  TX.conn=true; TX.voc=true; state.rxOnlyWatchTg=false;
+  const owns=hoseOwnsTg(46001);
+  state.rxOnlyWatchTg=true;
+  return {owns};`);
+ok('「只收当前话组」关掉时 HOSE 全让位', o4.owns === false, o4);
+
+const o5 = await ev(`/* 原生没在收（用户静音）→ 只能靠 HOSE */
+  TX.conn=true; TX.voc=true; state.rxOnlyWatchTg=true;
+  setPlay(false,true);
+  const owns=hoseOwnsTg(46001);
+  setPlay(true,true);
+  return {owns};`);
+ok('静音时 HOSE 也不播', o5.owns === false, o5);
+
+const o6 = await ev(`/* hdGate：HOSE 正在播它自己那一句时，原生在收也不许中途掐断 ——
+   那一下就是「重叠压制」（前半句 HOSE、卡一下、后半句 MMDVM）。 */
+  TX.conn=true; TX.voc=true; state.rxOnlyWatchTg=true;
+  document.getElementById('txTg').value='91';
+  document.getElementById('txId').value='4601234';
+  state.subscribed=[46001,91]; state.current=null; state.active.clear(); rxReset();
+  Audio_.setMute(false);
+  handleSpotter([T.CALL_START,0,4601001,46001]);      // HOSE 自己播的那一路
+  Q.rxing=true; hdGate();
+  const ownMuted=Audio_.muted;                        // 期望 false：不掐
+  Q.rxing=false; hdGate();
+  /* 反过来：HOSE 没在播时，原生在收仍然要静音兜底 */
+  state.current=null; rxReset();
+  Q.rxing=true; hdGate();
+  const otherMuted=Audio_.muted;                      // 期望 true：兜底
+  /* 发射时无论谁在播都要静音 */
+  Q.rxing=false; state.current={srcId:4601001,tg:46001,alias:'',start:Date.now()};
+  TX.txing=true; hdGate();
+  const txMuted=Audio_.muted;                         // 期望 true
+  TX.txing=false; hdGate(); Audio_.setMute(false);
+  state.current=null; rxReset();
+  return {ownMuted, otherMuted, txMuted};`);
+ok('HOSE 播自己那句时不被原生掐断', o6.ownMuted === false, o6);
+ok('HOSE 没在播时原生在收仍然静音兜底', o6.otherMuted === true, o6);
+ok('发射时一律静音', o6.txMuted === true, o6);
+await ev(`TX.conn=false; TX.voc=false; state.rxOnlyWatchTg=true; return 1;`);
+
+console.log('\n=== 11. 运行时错误 ===');
 ok('页面没有未捕获异常 / console.error', errors.length === 0, errors.slice(0, 3));
 
 console.log('\n' + '='.repeat(18) + `  ${pass} 通过 / ${fail} 失败  ` + '='.repeat(18));

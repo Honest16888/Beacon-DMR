@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 从 radioid.net 全量用户库中抽取中国（含中国香港等地区）DMR 台站数据，
-直接注入 dmr-listener.html 的 <script id="cnData"> 块，产出真正的单文件应用。
+直接注入 web/index.html 的 <script id="cnData"> 块，产出真正的单文件应用。
 
 为什么要内嵌而不是外挂：
   - 外挂 dmr-cn.js 需要两个文件放一起，一旦只拷走 HTML 就会静默失去中国数据；
@@ -14,7 +14,7 @@
   radioid.net 数据最全但同样不返回 CORS 头。因此只能构建期抽取。
 
 用法（在仓库根目录执行）：
-    python tools/gen_cn_db.py [--csv _tmp/user.csv] [--html web/dmr-listener.html]
+    python tools/gen_cn_db.py [--csv _tmp/user.csv] [--html web/index.html]
 若本地没有 CSV，脚本会自动下载（约 17MB）。
 """
 import argparse
@@ -82,7 +82,7 @@ def build_payload(csv_path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--csv", default=os.path.join(ROOT, "_tmp", "user.csv"))
-    ap.add_argument("--html", default=os.path.join(ROOT, "web", "dmr-listener.html"))
+    ap.add_argument("--html", default=os.path.join(ROOT, "web", "index.html"))
     a = ap.parse_args()
 
     if not os.path.exists(a.csv):

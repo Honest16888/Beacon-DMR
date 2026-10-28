@@ -188,17 +188,22 @@ const f4 = await ev(`const w=document.documentElement.scrollWidth, c=document.do
   return {w,c,over:w>c+1};`);
 ok('折叠态无横向溢出', f4.over === false, f4);
 
-console.log('\n=== 5. 滚回顶部自动展开 ===');
-const f5 = await ev(`const before={y:Math.round(window.scrollY),leftTop:htLeftTop,
-    sinceClick:Date.now()-htFoldAt,collapsed:state.htCollapsed};
+console.log('\n=== 5. 滚动不影响折叠状态（v2.4.9 起不自动折叠也不自动展开）===');
+const f5 = await ev(`/* ★ v2.4.8 这里是「滚回顶部自动展开」，v2.4.9 按用户要求删掉了：
+   滚动是浏览列表的动作，不该顺带改布局。
+   现在从深处滚回顶部，必须保持原状（收起），摘要条也继续显示。 */
+  state.htCollapsed=true; htFoldSet(true,false);
+  window.scrollTo(0,600); await new Promise(r=>setTimeout(r,200));
+  const deep=state.htCollapsed;
   window.scrollTo(0,0);
   await new Promise(r=>setTimeout(r,700));
   const ht=document.querySelector('#viewListen .home-top');
-  return {before,collapsed:ht.classList.contains('collapsed'),stateCollapsed:state.htCollapsed,
-    y:Math.round(window.scrollY),leftTop:htLeftTop,
+  return {deep, collapsed:ht.classList.contains('collapsed'), stateCollapsed:state.htCollapsed,
+    y:Math.round(window.scrollY),
     sumShown:getComputedStyle(document.getElementById('htSum')).display!=='none'};`);
-ok('滚回顶部自动展开', f5.collapsed === false, f5);
-ok('展开后摘要条隐藏', f5.sumShown === false, f5);
+ok('滚到深处不会自动收起/展开', f5.deep === true, f5);
+ok('滚回顶部也不会自动展开', f5.collapsed === true && f5.stateCollapsed === true, f5);
+ok('折叠态摘要条仍然显示', f5.sumShown === true, f5);
 await ev(`const sp=document.getElementById('__sp'); if(sp)sp.remove(); return 1;`);
 
 // 截图：折叠态
@@ -244,6 +249,10 @@ ok('正常电平不被软限幅改动', q4.same === true, q4);
 
 console.log('\n=== 7. 多话组互斥（46001 在说时 91 插进来）===');
 const g1 = await ev(`try{ spotterClose(); }catch(e){}
+  /* ★ v2.4.9 起一句话归哪条路是「按句判定」的：MMDVM 连着且在看这个话组时，
+     HOSE 会主动让位（否则两条路放同一句 = 重叠压制）。
+     这一节测的是 HOSE 自己的互斥逻辑，所以先把原生链路关掉。 */
+  TX.conn=false; TX.voc=false;
   state.subscribed=[46001,91]; state.solo=null;
   rxReset(); state.current=null; state.active.clear(); Audio_.silence();
   handleSpotter([T.CALL_START, 0, 4601001, 46001]);
