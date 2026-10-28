@@ -113,7 +113,11 @@ if assets:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
     print('  ---- v2.5.2 ----')
     for k in ['createWaveShaper', "ws.oversample='none'", 'CEIL=0.98',
-              'setPresence', 'gainFix252', 'ahead>0.45', '2026.11.23']:
+              'setPresence', 'gainFix252', 'ahead>0.45']:
+        print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
+    print('  ---- v2.5.3 ----')
+    for k in ['sampleRate:8000', 'initSink', 'AudioWorkletNode',
+              'data:text/javascript;utf8,', 'this.last*=0.995', '2026.11.24']:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
 else:
     print('  !! 没找到 index.html')

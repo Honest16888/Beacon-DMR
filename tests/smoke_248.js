@@ -545,7 +545,7 @@ const o5b = await ev(`/* 松手兜底：有些网络只回音频、不回 CALL_E
   handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
   const before={recTg:RXG.recTg, calls:state.calls.length};
   selfRecGuard();                       /* 模拟松手 */
-  await new Promise(r=>setTimeout(r,2800));
+  await new Promise(r=>setTimeout(r,3200));
   return {before, recTg:RXG.recTg, calls:state.calls.length,
           lastRx:state.lastRx?state.lastRx.tg:null};`);
 ok('松手兜底前还在录、还没记', o5b.before.recTg === 91 && o5b.before.calls === 0, o5b);
@@ -562,7 +562,7 @@ const o5c = await ev(`/* CALL_END 先到 → 兜底不该再记一遍 */
   handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
   handleSpotter([T.CALL_END, 0, 4601234, 91]);   /* 真实的 CALL_END 先到 */
   selfRecGuard();
-  await new Promise(r=>setTimeout(r,2800));
+  await new Promise(r=>setTimeout(r,3200));
   return {calls:state.calls.length};`);
 ok('CALL_END 先到时不重复记录', o5c.calls === 1, o5c);
 

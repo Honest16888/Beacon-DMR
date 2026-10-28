@@ -19295,7 +19295,27 @@ const Audio_ = {
     if(this.ctx)return true;
     const AC=window.AudioContext||window.webkitAudioContext;
     if(!AC)return false;
-    try{ this.ctx=new AC(); }catch(e){ return false; }
+    /* ★ v2.5.3 AudioContext 直接建在 8000 Hz —— 这是「噼啪」的真正根因。
+     *
+     * 官方 Hoseline 网页播放器（hose.brandmeister.network）第一行就是
+     *   this.audio = new AudioContext({sampleRate: 8000})
+     * 然后用 AudioWorklet 的环形缓冲往外送。
+     *
+     * 我们之前是「48 kHz 上下文 + 每 20 ms 一个 8 kHz 的 AudioBuffer」。
+     * 问题在于：**每个 buffer 都要单独重采样一次**。重采样器看不到
+     * buffer 边界之外，每一帧的首尾都会留下插值毛刺，20 ms 一次，
+     * 也就是 50 Hz 的规律性咔哒 —— 听感正是「噼里啪啦」。
+     * 而且逐帧 start(nextTime) 的排期一旦被主线程抖动打断，
+     * 队列一空就是一段空洞，又是另一种咔哒。
+     *
+     * 建在 8 kHz 之后，喂进去的 buffer 就是上下文原生采样率，**不重采样**；
+     * 整条链的输出由浏览器一次性连续重采样到硬件速率，中间没有断点。
+     * 这是官方播放器好听的第一个原因。
+     *
+     * 若设备不支持指定采样率（老 WebView），退回默认速率 + 逐帧排期，
+     * 也就是 v2.5.2 的老路，不会比现在更差。 */
+    try{ this.ctx=new AC({sampleRate:8000}); this.rate8000=this.ctx.sampleRate===8000; }
+    catch(e){ try{ this.ctx=new AC(); }catch(e2){ return false; } this.rate8000=false; }
     this.gain=this.ctx.createGain();
     this.gain.gain.value=(this.muted||this.userMuted)?0:state.volume*state.gain;
     /* 接收音色链。DMR 是 8 kHz 窄带，μ-law 解出来直接播有两个毛病：
@@ -19344,7 +19364,90 @@ const Audio_ = {
     this.gain.connect(hp); hp.connect(pk); pk.connect(pre); pre.connect(ws);
     ws.connect(this.ctx.destination);
     this.hp=hp; this.pk=pk; this.pre=pre; this.ws=ws;  /* 留引用：测试和以后调音色都要用到 */
+    /* 环形缓冲输出是首选路径；建好之前先把帧攒着，别让第一句话卡一下 */
+    this.sinkPending=true;
+    this.initSink();
     this.ready=true; return true;
+  },
+  /* ★ v2.5.3 环形缓冲输出 —— 官方播放器好听的第二个原因。
+   *
+   * 逐帧 createBufferSource + start(nextTime) 有两个躲不掉的问题：
+   *   ① 主线程一卡（每 100 ms 的界面刷新、GC、切后台），这一帧就排晚了，
+   *      队列出现空洞 → 咔哒；
+   *   ② 每帧一个独立的 AudioBufferSourceNode，节点调度本身有开销和抖动。
+   * 官方用的是 AudioWorklet + 环形缓冲：音频线程自己按需取样本，
+   * 主线程只负责往环里塞，两边解耦，主线程再卡也不影响出声。
+   *
+   * 环大小 32768 个样本（8 kHz 下 4 秒）。欠载时把最后一个样本
+   * 指数淡到 0，而不是直接输出 0 —— 硬跳到零本身就是一个咔哒。 */
+  initSink(){
+    const c=this.ctx;
+    /* ★ 环形缓冲只在「上下文真的是 8000 Hz」时才能用。
+       环里存的是 8 kHz 样本，worklet 每个渲染量子按 ctx.sampleRate 取走 ——
+       若设备忽略了 sampleRate:8000（老 WebView 会这样），上下文实际是
+       48 kHz，同一条流就会被以 6 倍速播出去。宁可退回逐帧排期，
+       也不能出一个「说话像快进」的版本。 */
+    if(!this.rate8000){ this.sinkPending=false; return; }
+    if(!c||!c.audioWorklet||this.sink||this.sinkTried)return;
+    this.sinkTried=true;
+    const SRC=[
+      'class DmrSink extends AudioWorkletProcessor{',
+      'constructor(){super();',
+      ' this.cap=32768; this.buf=new Float32Array(this.cap);',
+      ' this.head=0; this.tail=0; this.flow=0; this.last=0;',
+      ' this.under=0; this.calls=0;',
+      ' this.port.onmessage=(e)=>{ const m=e.data; if(!m)return;',
+      '  if(m.action==="play"){ const a=m.data;',
+      '   for(let i=0;i<a.length;i++){ this.buf[this.head]=a[i]/32768; this.head=(this.head+1)%this.cap; }',
+      '   this.flow+=a.length;',
+      '   if(this.flow>this.cap){ const ov=this.flow-this.cap; this.flow-=ov; this.tail=(this.tail+ov)%this.cap; }',
+      '  } else if(m.action==="reset"){ this.head=0; this.tail=0; this.flow=0; this.last=0; this.under=0; }',
+      ' };',
+      '}',
+      'process(inputs,outputs){',
+      ' const out=outputs[0][0];',
+      ' for(let i=0;i<out.length;i++){',
+      '  if(this.flow>0){ this.last=this.buf[this.tail]; out[i]=this.last;',
+      '   this.tail=(this.tail+1)%this.cap; this.flow--; }',
+      '  else { this.last*=0.995; out[i]=this.last; this.under++; }',
+      ' }',
+      ' if((++this.calls&127)===0) this.port.postMessage({action:"stat",under:this.under});',
+      ' return true;',
+      '}',
+      '}',
+      'registerProcessor("dmr-sink",DmrSink);'
+    ].join('\n');
+    this.sinkSrc=SRC;   /* 留一份给测试：离线渲染同一个 processor 验证样本级正确 */
+    const fail=()=>{
+      this.sinkPending=false;
+      const p=this.pending||[]; this.pending=[];
+      for(let i=0;i<p.length;i++)this.play(p[i]);
+    };
+    try{
+      /* ★ 必须用 data URL，不能用 blob URL。
+         页面是从 file:///android_asset/ 载入的，blob 的源是 null，
+         audioWorklet.addModule 会直接抛
+         「AbortError: Failed to load worklet module script: blob:null/…」。
+         官方 Hoseline 播放器用的也是 data URL —— 正是为了绕开这个。 */
+      const url='data:text/javascript;utf8,'+encodeURIComponent(SRC);
+      c.audioWorklet.addModule(url).then(()=>{
+        if(this.sink)return;
+        const n=new AudioWorkletNode(c,'dmr-sink',
+          {numberOfInputs:0,numberOfOutputs:1,outputChannelCount:[1]});
+        n.port.onmessage=(e)=>{ const m=e.data; if(m&&m.action==='stat')this.underSamples=m.under; };
+        n.connect(this.gain);
+        this.sink=n; this.sinkPending=false;
+        /* 攒下来的那几帧一次倒进去，第一句话不丢头 */
+        const p=this.pending||[]; this.pending=[];
+        for(let i=0;i<p.length;i++)this.send(p[i]);
+      }).catch(fail);
+    }catch(e){ fail(); }
+  },
+  /* 往环形缓冲塞一帧。worklet 收 Int16，比 Float32 省一半传输量 */
+  send(f){
+    const n=f.length, i16=new Int16Array(n);
+    for(let i=0;i<n;i++){ const s=f[i]; i16[i]= s<0 ? s*0x8000 : s*0x7fff; }
+    try{ this.sink.port.postMessage({action:'play',data:i16},[i16.buffer]); }catch(e){}
   },
   resume(){ if(!this.init())return; if(this.ctx.state==='suspended')this.ctx.resume(); },
   /* 增益只有一个出口：两个闸任一关掉就是 0，其余按音量算。
@@ -19441,6 +19544,10 @@ const Audio_ = {
      现在只在真正接不上时（断流恢复、切话组、静音解除）才淡入。 */
   push(f){
     if(!f||!f.length)return;
+    if(!this.ready&&!this.init())return;
+    /* 静音期间连塞都不塞。走环形缓冲时尤其要拦住 ——
+       否则积压的旧语音会在解除静音那一刻一口气放出来（环有 4 秒容量）。 */
+    if(this.muted||this.userMuted)return;
     const n=f.length;
     /* 队列已经断了（网络抖了一下 / 上一帧早放完了）→ 这一帧淡入，别留咔哒。
        ★ v2.5.2 只判「接不上」，不再把「队列过深」也算成断流 ——
@@ -19465,6 +19572,15 @@ const Audio_ = {
       if(x>0.96)f[i]=0.96+0.04*(1-Math.exp(-(x-0.96)/0.04));
       else if(x<-0.96)f[i]=-0.96-0.04*(1-Math.exp(-(-x-0.96)/0.04));
     }
+    /* ★ v2.5.3 优先走环形缓冲。
+       走环形缓冲时不存在「帧边界」，所以上面那段淡入判断也就没意义了 ——
+       它只在退回到逐帧排期时才需要。 */
+    if(this.sink){ this.send(f); return; }
+    if(this.sinkPending){
+      this.pending=this.pending||[];
+      if(this.pending.length<50)this.pending.push(f);
+      return;
+    }
     this.play(f);
   },
   /* ★ v2.5.1 不再把 nextTime 归零。
@@ -19480,8 +19596,14 @@ const Audio_ = {
    * 不会无限延迟，也不会重叠。
    *
    * 真正要「立刻没声」的地方（用户静音 / 关收听）走的是增益，不是这里 ——
-   * 增益压到 0，buffer 照放也听不见。 */
-  silence(){ this.level=0; this.broken=true; }
+   * 增益压到 0，buffer 照放也听不见。
+   *
+   * ★ v2.5.3 走环形缓冲时，这里还要把环清空 —— 环形缓冲只有一条流，
+   * 「清空」就是真正的「立刻停」，不存在两个 buffer 叠在一起的问题。 */
+  silence(){
+    this.level=0; this.broken=true;
+    if(this.sink){ try{ this.sink.port.postMessage({action:'reset'}); }catch(e){} }
+  }
 };
 
 /* 收听侧音频上下文看护。
@@ -24264,7 +24386,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.23';
+const PAGE_VER='2026.11.24';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';

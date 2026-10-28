@@ -268,12 +268,12 @@ ok('设置页有自动登录开关', 'id="setAutoConn"' in html)
 
 # ============================================================
 print('\n=== 10. 版本号 ===')
-ok("PAGE_VER 是 2026.11.23", "PAGE_VER='2026.11.23'" in html)
+ok("PAGE_VER 是 2026.11.24", "PAGE_VER='2026.11.24'" in html)
 gp = os.path.join(REPO, 'android', 'app', 'build.gradle')
 if os.path.exists(gp):
     g = read(gp)
-    ok('build.gradle versionName = 2.5.2', 'versionName "2.5.2"' in g)
-    ok('build.gradle versionCode = 28', re.search(r'versionCode\s+28', g) is not None)
+    ok('build.gradle versionName = 2.5.3', 'versionName "2.5.3"' in g)
+    ok('build.gradle versionCode = 29', re.search(r'versionCode\s+29', g) is not None)
 else:
     ok('能读到 android/app/build.gradle', False)
 
@@ -459,6 +459,23 @@ ok('设置里有窄带增强开关', 'id="setPresence"' in html)
 ok('默认开、关过的人记得住', "store.get('presence',true)!==false" in html)
 ok('切换走斜坡而不是硬赋值', 'this.pk.gain.setTargetAtTime' in html)
 ok('init 时按开关决定 EQ 增益', 'pk.gain.value=(state.presence!==false)?2.5:0;' in html)
+
+# ★ v2.5.3 噼啪的根因：48k 上下文里逐帧塞 8k buffer，每帧重采样一次
+#
+# 官方 Hoseline 播放器的做法是 new AudioContext({sampleRate:8000}) + AudioWorklet
+# 环形缓冲，整条链只在出口做一次连续重采样。照做之后逐帧的插值毛刺消失。
+ok('AudioContext 建在 8000 Hz', "new AC({sampleRate:8000})" in html)
+ok('记录是否真的 8000（不是就退回老路）', 'this.rate8000=this.ctx.sampleRate===8000' in html)
+ok('有 AudioWorklet 环形缓冲', 'initSink()' in html and 'AudioWorkletNode' in html)
+ok('环形缓冲只在 8k 上下文启用（否则会 6 倍速）',
+   'if(!this.rate8000){ this.sinkPending=false; return; }' in html)
+ok('worklet 用 data URL 加载（file:// 下 blob 会被拒）',
+   "data:text/javascript;utf8," in html)
+ok('环形缓冲优先、逐帧排期兜底', 'if(this.sink){ this.send(f); return; }' in html)
+ok('建好之前先攒帧，第一句不丢头', 'if(this.pending.length<50)this.pending.push(f);' in html)
+ok('欠载时淡出而不是硬跳到 0', 'this.last*=0.995' in html)
+ok('静音时清空环', "postMessage({action:'reset'})" in html)
+ok('静音期间不往环里塞', 'if(this.muted||this.userMuted)return;' in html)
 
 print('\n' + '=' * 18 + f'  {passed} 通过 / {failed} 失败  ' + '=' * 18)
 raise SystemExit(1 if failed else 0)
