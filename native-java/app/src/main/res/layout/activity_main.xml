@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  主页 = 收听。Phase 0 只做这一屏，但结构按最终形态摆好：
-    顶栏 / 正在收听 / 音量 / 话组列表
-  看板与设置后面各自成一屏，用底部标签切换（这里先留出位置）。
+  壳：顶栏 + 三页 + 底栏。
 
-  ⚠ 全部用系统控件，不用 androidx：本工程零依赖，见 app/build.gradle。
+  三页一次性全部 inflate（不用 Fragment），切页就是 setVisibility ——
+  零依赖工程里最省事的做法，而且看板/设置的控件始终存在，
+  切回来不用重建、不会丢滚动位置。
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:background="@color/bg"
+    android:background="?attr/cBg"
     android:fitsSystemWindows="true">
 
     <!-- ============ 顶栏 ============ -->
@@ -21,8 +21,8 @@
         android:gravity="center_vertical"
         android:paddingStart="16dp"
         android:paddingEnd="12dp"
-        android:paddingTop="12dp"
-        android:paddingBottom="10dp">
+        android:paddingTop="10dp"
+        android:paddingBottom="8dp">
 
         <LinearLayout
             android:layout_width="0dp"
@@ -34,7 +34,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="@string/title"
-                android:textColor="@color/text"
+                android:textColor="?attr/cText"
                 android:textSize="17sp"
                 android:textStyle="bold" />
 
@@ -49,8 +49,7 @@
                     android:id="@+id/dot"
                     android:layout_width="7dp"
                     android:layout_height="7dp"
-                    android:background="@drawable/dot"
-                    android:backgroundTint="@color/dim" />
+                    android:background="@drawable/dot" />
 
                 <TextView
                     android:id="@+id/stateText"
@@ -58,7 +57,23 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="6dp"
                     android:text="@string/state_idle"
-                    android:textColor="@color/muted"
+                    android:textColor="?attr/cMuted"
+                    android:textSize="11.5sp" />
+
+                <View
+                    android:id="@+id/dotLive"
+                    android:layout_width="7dp"
+                    android:layout_height="7dp"
+                    android:layout_marginStart="10dp"
+                    android:background="@drawable/dot" />
+
+                <TextView
+                    android:id="@+id/liveState"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:text="活动 —"
+                    android:textColor="?attr/cMuted"
                     android:textSize="11.5sp" />
             </LinearLayout>
         </LinearLayout>
@@ -75,177 +90,50 @@
             android:textAllCaps="false" />
     </LinearLayout>
 
-    <!-- ============ 正在收听 ============ -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="12dp"
-        android:layout_marginEnd="12dp"
-        android:orientation="vertical"
-        android:background="@drawable/bg_card"
-        android:padding="14dp">
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <TextView
-                android:id="@+id/npTg"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/idle_tg"
-                android:textColor="@color/text"
-                android:textSize="19sp"
-                android:textStyle="bold"
-                android:singleLine="true"
-                android:ellipsize="end" />
-
-            <TextView
-                android:id="@+id/npTime"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text=""
-                android:textColor="@color/dim"
-                android:textSize="12sp"
-                android:fontFamily="monospace" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/npCaller"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:text="@string/idle_caller"
-            android:textColor="@color/muted"
-            android:textSize="12.5sp"
-            android:singleLine="true"
-            android:ellipsize="end" />
-
-        <net.beacon.dmr.ui.WaveView
-            android:id="@+id/wave"
-            android:layout_width="match_parent"
-            android:layout_height="64dp"
-            android:layout_marginTop="8dp" />
-    </LinearLayout>
-
-    <!-- ============ 音量 ============ -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingTop="12dp"
-        android:paddingBottom="6dp">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/volume"
-            android:textColor="@color/muted"
-            android:textSize="12sp" />
-
-        <SeekBar
-            android:id="@+id/seekVol"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="10dp"
-            android:max="150"
-            android:progress="100" />
-
-        <TextView
-            android:id="@+id/volPct"
-            android:layout_width="42dp"
-            android:layout_height="wrap_content"
-            android:gravity="end"
-            android:text="100%"
-            android:textColor="@color/muted"
-            android:textSize="11.5sp"
-            android:fontFamily="monospace" />
-    </LinearLayout>
-
-    <!-- ============ 话组搜索 / 添加 ============ -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:paddingTop="8dp">
-
-        <EditText
-            android:id="@+id/search"
-            android:layout_width="0dp"
-            android:layout_height="42dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_card"
-            android:paddingStart="12dp"
-            android:paddingEnd="12dp"
-            android:hint="搜索话组号 / 名称"
-            android:textColorHint="@color/dim"
-            android:textColor="@color/text"
-            android:textSize="13sp"
-            android:inputType="text"
-            android:imeOptions="actionSearch"
-            android:singleLine="true" />
-
-        <Button
-            android:id="@+id/btnAdd"
-            android:layout_width="48dp"
-            android:layout_height="42dp"
-            android:layout_marginStart="8dp"
-            android:minWidth="0dp"
-            android:padding="0dp"
-            android:text="＋"
-            android:textSize="18sp"
-            android:textAllCaps="false" />
-    </LinearLayout>
-
-    <!-- ============ 过滤 / 计数 ============ -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingTop="4dp"
-        android:paddingBottom="2dp">
-
-        <CheckBox
-            android:id="@+id/ckOnlySub"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minHeight="0dp"
-            android:minWidth="0dp"
-            android:text="只看已订阅"
-            android:textSize="12sp"
-            android:textColor="@color/muted" />
-
-        <TextView
-            android:id="@+id/tgCount"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:gravity="end"
-            android:text=""
-            android:textColor="@color/dim"
-            android:textSize="11sp"
-            android:fontFamily="monospace" />
-    </LinearLayout>
-
-    <ListView
-        android:id="@+id/tgList"
+    <!-- ============ 三页 ============ -->
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1"
-        android:divider="@null"
-        android:dividerHeight="0dp"
-        android:scrollbars="vertical" />
+        android:layout_weight="1">
+
+        <include
+            android:id="@+id/pageListen"
+            layout="@layout/page_listen" />
+
+        <include
+            android:id="@+id/pageDash"
+            layout="@layout/page_dash" />
+
+        <include
+            android:id="@+id/pageSettings"
+            layout="@layout/page_settings" />
+    </FrameLayout>
+
+    <!-- ============ 底栏 ============ -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="?attr/cBorder" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:background="?attr/cPanel">
+
+        <Button
+            android:id="@+id/tabListen"
+            style="@style/TabButton"
+            android:text="🎧 主页" />
+
+        <Button
+            android:id="@+id/tabDash"
+            style="@style/TabButton"
+            android:text="📊 看板" />
+
+        <Button
+            android:id="@+id/tabSettings"
+            style="@style/TabButton"
+            android:text="⚙️ 设置" />
+    </LinearLayout>
 </LinearLayout>

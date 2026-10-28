@@ -1,0 +1,422 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  设置。按「外观 / 收听与音频 / 扫描 / 关于」四张卡片排。
+
+  发收与主站那些（声码器、DMR ID、密码、端口）**不在这里** ——
+  它们属于 Phase 3，纯 Java 版还没有收发链路，现在摆出来只会让人填了没反应。
+
+  分段控件（主题、音量增强）的按钮由 SettingsPage 用代码建，
+  因为「选中态」要同时改背景和文字色，写在 XML 里要两套 selector，
+  代码里一个方法更清楚。
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:scrollbars="vertical"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="22dp">
+
+        <!-- ==================== 外观 ==================== -->
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                style="@style/CardTitle"
+                android:text="🎨 外观" />
+
+            <TextView
+                style="@style/SetLabel"
+                android:text="主题" />
+
+            <TextView
+                style="@style/SetHint"
+                android:text="跟随系统，或固定用浅色 / 深色" />
+
+            <LinearLayout
+                android:id="@+id/segTheme"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal"
+                android:background="@drawable/bg_inner"
+                android:padding="3dp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:text="简洁模式" />
+
+                    <TextView
+                        style="@style/SetHint"
+                        android:text="只留「守听 + 按住说话」。藏起看板标签和实时活动，手机上一屏能多看好几行" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/swSimple"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ==================== 收听与音频 ==================== -->
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                style="@style/CardTitle"
+                android:text="🔊 收听与音频" />
+
+            <TextView
+                style="@style/SetLabel"
+                android:text="音量" />
+
+            <TextView
+                style="@style/SetHint"
+                android:text="与主页那根音量条是同一个值，改哪边都一样" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <SeekBar
+                    android:id="@+id/seekSetVol"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="150"
+                    android:progress="100" />
+
+                <TextView
+                    android:id="@+id/setVolVal"
+                    style="@style/Mono"
+                    android:layout_width="42dp"
+                    android:gravity="end"
+                    android:text="100%" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <TextView
+                style="@style/SetLabel"
+                android:text="音量增强" />
+
+            <TextView
+                style="@style/SetHint"
+                android:text="1× 不改变信号，是默认值；往上会把本来就接近满刻度的语音推过软限幅，声音变「炸」" />
+
+            <LinearLayout
+                android:id="@+id/segGain"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal"
+                android:background="@drawable/bg_inner"
+                android:padding="3dp" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:text="窄带增强（2.6 kHz）" />
+
+                    <TextView
+                        style="@style/SetHint"
+                        android:text="把语音的清晰度提一点。DMR 只有 8 kHz 带宽，辅音本来偏闷；但如果手机喇叭听着「噼啪」「发刺」，先关掉它对比一下 —— 这一档会在 2.6 kHz 抬高 2.5 dB，小喇叭最容易被这一点推破音。" />
+
+                    <TextView
+                        style="@style/SetHint"
+                        android:text="注：v2.5.5 里这一档默认是开的，这里默认关 —— 当前音频链路刚被验收过，不想默认改变音色。"
+                        android:textColor="?attr/cWarn" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/swPresence"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <TextView
+                style="@style/SetLabel"
+                android:text="音频自检" />
+
+            <TextView
+                style="@style/SetHint"
+                android:text="收不到声音时先看这一行。环=on 才是正常路径；闸=让位 表示这一句交给了别的链路。报问题时把这一行发过来，比描述准得多。" />
+
+            <TextView
+                android:id="@+id/audioDiag"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="7dp"
+                android:background="@drawable/bg_inner"
+                android:padding="9dp"
+                android:text="—"
+                android:textColor="?attr/cMuted"
+                android:textSize="11sp"
+                android:fontFamily="monospace"
+                android:lineSpacingMultiplier="1.6" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:text="收听时保持屏幕常亮" />
+
+                    <TextView
+                        style="@style/SetHint"
+                        android:text="收音期间不熄屏；关掉可省电" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/swAwake"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:text="自动录音" />
+
+                    <TextView
+                        style="@style/SetHint"
+                        android:text="每通通话自动存成 WAV。录音功能本身还在做（Phase 4），现在打开只记开关，不会生成文件" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/swRec"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ==================== 扫描 ==================== -->
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                style="@style/CardTitle"
+                android:text="📻 扫描" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:text="扫描" />
+
+                    <TextView
+                        style="@style/SetHint"
+                        android:text="不用预先指定话组，自动跟着实时活动里最热闹的几个组走" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/swScan"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <TextView
+                style="@style/SetLabel"
+                android:text="自动跟进数量" />
+
+            <TextView
+                style="@style/SetHint"
+                android:text="「自动跟进」同时锁定的最活跃话组个数，越多越容易漏听" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <SeekBar
+                    android:id="@+id/seekAutoN"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="19"
+                    android:progress="7" />
+
+                <TextView
+                    android:id="@+id/setAutoNVal"
+                    style="@style/Mono"
+                    android:layout_width="30dp"
+                    android:gravity="end"
+                    android:text="8" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:text="启动时恢复扫描" />
+
+                    <TextView
+                        style="@style/SetHint"
+                        android:text="下次打开 App 自动接着上次的扫描状态继续" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/swScanResume"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- ==================== 关于 ==================== -->
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                style="@style/CardTitle"
+                android:text="ℹ️ 关于" />
+
+            <TextView
+                android:id="@+id/aboutText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:textColor="?attr/cMuted"
+                android:textSize="11.5sp"
+                android:lineSpacingMultiplier="1.7" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text="话组表：内置 47 条 + 在线 api.brandmeister.network（约 1845 条）\n实时活动：wss://api.brandmeister.network/lh\n音频：wss://hose.brandmeister.network（HOSE）"
+                android:textColor="?attr/cDim"
+                android:textSize="11sp"
+                android:lineSpacingMultiplier="1.7" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

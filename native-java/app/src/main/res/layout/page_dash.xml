@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  看板。数据全部来自实时活动流（Last Heard），窗口 30 分钟。
+
+  顺序是「先看结论、再看细节」：统计卡 → 走势 → 实时活动 → 四个排行榜 →
+  通话构成 → 通联记录。手机上要滚很久，但每一块都能单独看。
+-->
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:scrollbars="vertical"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="18dp">
+
+        <!-- ============ 统计卡（3 行 × 2 列，代码填充） ============ -->
+        <LinearLayout
+            android:id="@+id/statCards"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <!-- ============ 通联量走势 ============ -->
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                style="@style/CardTitle"
+                android:text="📈 通联量走势" />
+
+            <net.beacon.dmr.ui.LineChartView
+                android:id="@+id/chartTl"
+                android:layout_width="match_parent"
+                android:layout_height="150dp" />
+
+            <TextView
+                android:id="@+id/tlStat"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:text=""
+                android:textColor="?attr/cDim"
+                android:textSize="11sp"
+                android:fontFamily="monospace" />
+        </LinearLayout>
+
+        <!-- ============ 实时活动 ============ -->
+        <LinearLayout style="@style/Card">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="📡 实时活动"
+                    android:textColor="?attr/cText"
+                    android:textSize="13.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/liveCount"
+                    style="@style/Mono"
+                    android:text="0" />
+            </LinearLayout>
+
+            <EditText
+                android:id="@+id/liveSearch"
+                android:layout_width="match_parent"
+                android:layout_height="38dp"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/bg_inner"
+                android:paddingStart="10dp"
+                android:paddingEnd="10dp"
+                android:hint="筛选：呼号 / 话组号 / 名称"
+                android:textColorHint="?attr/cDim"
+                android:textColor="?attr/cText"
+                android:textSize="12.5sp"
+                android:inputType="text"
+                android:singleLine="true" />
+
+            <LinearLayout
+                android:id="@+id/liveList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/liveEmpty"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingTop="14dp"
+                android:paddingBottom="14dp"
+                android:gravity="center"
+                android:text="等待实时活动…"
+                android:textColor="?attr/cDim"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- ============ 活跃话组 ============ -->
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                style="@style/CardTitle"
+                android:text="🏆 活跃话组 Top 10 · 最近 30 分钟" />
+
+            <LinearLayout
+                android:id="@+id/rankTg"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </LinearLayout>
+
+        <!-- ============ 国家/地区分布 ============ -->
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                style="@style/CardTitle"
+                android:text="🌍 话组国家/地区分布 · 最近 30 分钟" />
+
+            <LinearLayout
+                android:id="@+id/rankCountry"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </LinearLayout>
+
+        <!-- ============ 发信方主站分布 ============ -->
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                style="@style/CardTitle"
+                android:text="📻 发信方主站分布 · 最近 30 分钟" />
+
+            <LinearLayout
+                android:id="@+id/rankMaster"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </LinearLayout>
+
+        <!-- ============ 活跃电台 ============ -->
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                style="@style/CardTitle"
+                android:text="🎙 活跃电台 Top 10 · 按发起通联次数" />
+
+            <LinearLayout
+                android:id="@+id/rankCall"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+        </LinearLayout>
+
+        <!-- ============ 通话构成 ============ -->
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                style="@style/CardTitle"
+                android:text="⚙️ 通话构成" />
+
+            <LinearLayout
+                android:id="@+id/mixPanel"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical" />
+
+            <TextView
+                android:id="@+id/mixFoot"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:text=""
+                android:textColor="?attr/cDim"
+                android:textSize="11sp"
+                android:lineSpacingMultiplier="1.7" />
+        </LinearLayout>
+
+        <!-- ============ 通联记录 ============ -->
+        <LinearLayout style="@style/Card">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <TextView
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="🗒 通联记录"
+                    android:textColor="?attr/cText"
+                    android:textSize="13.5sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/logCount"
+                    style="@style/Mono"
+                    android:text="0" />
+            </LinearLayout>
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="2dp"
+                android:text="最近 50 条 / 保留 24 小时 · 只记本机收到的活动流"
+                android:textColor="?attr/cDim"
+                android:textSize="10.5sp" />
+
+            <LinearLayout
+                android:id="@+id/logList"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="vertical" />
+        </LinearLayout>
+    </LinearLayout>
+</ScrollView>

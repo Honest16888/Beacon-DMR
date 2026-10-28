@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  语义色板。
+
+  ★ 为什么不用 @color/bg 直引，而要绕一层主题属性：
+  「设置 → 外观 → 主题」要能强制浅色 / 强制深色，而 values-night 的
+  -night 限定符只认系统的深色开关。想让用户自己选，颜色就必须挂在
+  Theme 上 —— setTheme() 换一套 Theme，所有 ?attr/cXxx 跟着换。
+  用 androidx 的 AppCompatDelegate 是另一条路，但本工程零依赖，
+  框架自带的这一套已经够用。
+
+  代码里取值见 core/Palette.java。
+-->
+<resources>
+    <!-- 页面底色 -->
+    <attr name="cBg" format="color" />
+    <!-- 卡片 / 面板底 -->
+    <attr name="cPanel" format="color" />
+    <!-- 卡片内的次级底（输入框、未选中分段） -->
+    <attr name="cPanel2" format="color" />
+    <attr name="cBorder" format="color" />
+    <!-- 正文 -->
+    <attr name="cText" format="color" />
+    <!-- 次要文字 -->
+    <attr name="cMuted" format="color" />
+    <!-- 最弱的标注 / 单位 -->
+    <attr name="cDim" format="color" />
+    <!-- 主色（按钮、折线、波形） -->
+    <attr name="cAccent" format="color" />
+    <!-- 主色的浅底（选中态） -->
+    <attr name="cAccentWeak" format="color" />
+    <attr name="cOk" format="color" />
+    <attr name="cWarn" format="color" />
+    <attr name="cBad" format="color" />
+</resources>

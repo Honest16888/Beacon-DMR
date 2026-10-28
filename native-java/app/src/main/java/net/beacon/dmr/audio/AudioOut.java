@@ -26,6 +26,10 @@ import java.util.ArrayDeque;
  * <p>抖动缓冲：先用 {@link #PRE_ROLL} 帧垫底再开始写，网络抖一下不会断音；
  * 队列超过 {@link #MAX_QUEUE} 帧就丢最旧的 —— 宁可丢 20 ms，也不要让延迟
  * 越积越大（对讲最怕延迟）。
+ *
+ * <p>音量 / 增强 / 窄带增强都交给 {@link AudioChain}，写线程只管「取出帧、
+ * 过一遍链路、写进 AudioTrack」。参数从主线程设，链路内部按样本斜坡过去，
+ * 拖滑块不会「啪」一声。
  */
 public final class AudioOut {
 
@@ -46,7 +50,9 @@ public final class AudioOut {
     private final ArrayDeque<short[]> queue = new ArrayDeque<>();
     private final Object lock = new Object();
 
-    private volatile float gain = 1f;
+    /** 增益 / 滤波链。只在写线程上 process，参数是 volatile。 */
+    private final AudioChain chain = new AudioChain();
+
     private volatile boolean muted = false;
     private volatile int jitterFrames = PRE_ROLL;
 
@@ -93,6 +99,9 @@ public final class AudioOut {
 
         running = true;
         synchronized (lock) { queue.clear(); }
+        /* 参数直接到位，不做斜坡：第一帧就该是用户设定的音量，
+         * 否则每次重连都从 100% 爬过去，头半秒明显偏轻。 */
+        chain.snap();
         track.play();
 
         writer = new Thread(this::loop, "audio-writer");
@@ -136,17 +145,20 @@ public final class AudioOut {
     /** 丢掉已排队的帧。切话组、静音、断流恢复时用。 */
     public void flush() {
         synchronized (lock) { queue.clear(); lock.notifyAll(); }
+        /* 滤波器里还留着上一段的尾巴，一起清掉，否则恢复瞬间会带出一个低频「噗」。 */
+        chain.reset();
         AudioTrack t = track;
         if (t != null) { try { t.pause(); t.flush(); t.play(); } catch (Exception ignore) {} }
     }
 
-    public void setGain(float g) {
-        if (g < 0) g = 0;
-        if (g > 3) g = 3;
-        gain = g;
-    }
+    /** 收听音量 0~150（100 = 原始电平）。 */
+    public void setVolume(int pct) { chain.setVolume(pct); }
 
-    public float getGain() { return gain; }
+    /** 音量增强 1 / 2 / 3。 */
+    public void setBoost(int g) { chain.setGain(g); }
+
+    /** 窄带增强（2.6 kHz +2.5 dB）。 */
+    public void setPresence(boolean on) { chain.setPresence(on); }
 
     public void setMuted(boolean on) {
         muted = on;
@@ -158,6 +170,7 @@ public final class AudioOut {
     public long getDroppedFrames() { return dropped; }
     public long getWrittenFrames() { return written; }
     public int getQueuedFrames() { synchronized (lock) { return queue.size(); } }
+    public boolean isRunning() { return running && track != null; }
 
     /* ==================== 写线程 ==================== */
 
@@ -183,7 +196,6 @@ public final class AudioOut {
             }
         }
 
-        short[] out = new short[MuLaw.FRAME * 4];
         while (running) {
             short[] frame;
             synchronized (lock) {
@@ -194,21 +206,16 @@ public final class AudioOut {
                 frame = queue.pollFirst();
             }
             if (frame == null) continue;
-            if (frame.length > out.length) out = new short[frame.length];
-            float g = muted ? 0f : gain;
-            for (int i = 0; i < frame.length; i++) {
-                int v = (int) (frame[i] * g);
-                /* 出口硬夹。AudioTrack 收到超出 ±32767 的值会直接爆音，
-                 * 而这里的增益是用户可调的（0..3），必须夹。 */
-                if (v > 32767) v = 32767; else if (v < -32768) v = -32768;
-                out[i] = (short) v;
-            }
+            /* 音量 / 增强 / 高通 / presence / 软削波全在 chain 里，原地改写。
+             * 这里不再自己乘增益、也不再硬夹 —— 链路出口已经保证 |y| ≤ 0.98，
+             * 硬夹只会把「本来不该被削的样本」削平（那正是旧版本发炸的成因）。 */
+            chain.process(frame, frame.length);
             AudioTrack t = track;
             if (t == null) return;
             try {
                 int off = 0;
                 while (off < frame.length && running) {
-                    int n = t.write(out, off, frame.length - off);
+                    int n = t.write(frame, off, frame.length - off);
                     if (n <= 0) break;          // 写失败（音频焦点被抢）→ 丢掉这一帧
                     off += n;
                 }

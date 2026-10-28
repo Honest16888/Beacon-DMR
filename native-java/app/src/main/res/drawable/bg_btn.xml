@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 主按钮（「开始收听」这类）：实心主色 + 白字 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="?attr/cAccent" />
+    <corners android:radius="10dp" />
+</shape>

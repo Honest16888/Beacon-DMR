@@ -3,24 +3,58 @@
 #
 #   bash native-java/tests/run.sh
 #
-# 分两组：
-#   1) MsgPack / μ-law —— 完全无 Android 依赖，直接编
-#   2) 话组表合并 —— 只测纯函数 merge()，但要靠 android.jar 才编得过
-#      （TalkgroupRepo 里有 Context 参数）。找不到 android.jar 就跳过这一组。
+# 分两大组：
+#   1) 完全不依赖 Android 的类（直接编、直接跑）
+#        CoreSelfTest    MsgPack / μ-law
+#        GeoTest         话组号 → 国家/地区
+#        AudioChainTest  增益 / 窄带增强 / 软削波
+#        StatsTest       看板统计口径
+#   2) 话组表合并（要靠 android.jar 才编得过，因为 TalkgroupRepo 里有 Context）。
+#      找不到 android.jar 就跳过这一组，不算失败。
 #
-# 这些错了的表现是「连上了但没声音」「列表里全是英文名」，在手机上排查极贵。
+# 这些错了的表现是「连上了但没声音」「列表里全是英文名」「看板数字对不上」，
+# 在手机上排查极贵 —— 所以全部钉在桌面上。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CORE="$ROOT/app/src/main/java/net/beacon/dmr/core"
+JAVA_DIR="$ROOT/app/src/main/java/net/beacon/dmr"
+CORE="$JAVA_DIR/core"
 OUT="$(mktemp -d)"
 trap 'rm -rf "$OUT"' EXIT
 
+# ★ classpath 分隔符必须是 ';' —— Windows 上的 java.exe 只认分号。
+# 写成 "$OUT:$ANDROID_JAR" 的话它会把整串当成**一个**路径，于是报
+# "找不到或无法加载主类"（ClassNotFoundException），看起来像编译没产出
+# class，其实编译一直是好的。用 cygpath 转成纯 Windows 路径再拼。
+cp_join() {
+  if command -v cygpath >/dev/null 2>&1; then
+    local out=""
+    for p in "$@"; do
+      [ -n "$out" ] && out="$out;"
+      out="$out$(cygpath -w "$p")"
+    done
+    printf '%s' "$out"
+  else
+    local IFS=';'
+    printf '%s' "$*"
+  fi
+}
+
+echo "==> 1/2 不依赖 Android 的纯逻辑"
 javac -encoding UTF-8 -d "$OUT" \
   "$CORE/MsgPack.java" \
   "$CORE/MuLaw.java" \
-  "$ROOT/tests/CoreSelfTest.java"
-java -Dfile.encoding=UTF-8 -cp "$OUT" CoreSelfTest
+  "$CORE/Geo.java" \
+  "$JAVA_DIR/audio/AudioChain.java" \
+  "$JAVA_DIR/live/LiveStore.java" \
+  "$ROOT/tests/CoreSelfTest.java" \
+  "$ROOT/tests/GeoTest.java" \
+  "$ROOT/tests/AudioChainTest.java" \
+  "$ROOT/tests/StatsTest.java"
+
+for t in CoreSelfTest GeoTest AudioChainTest StatsTest; do
+  java -Dfile.encoding=UTF-8 -cp "$(cp_join "$OUT")" "$t"
+done
 
 # ---- android.jar（只为编译，不执行任何需要 Context 的代码）----
 ANDROID_JAR=""
@@ -37,6 +71,8 @@ if [ -z "$ANDROID_JAR" ]; then
   exit 0
 fi
 
+echo
+echo "==> 2/2 话组表合并（借 android.jar 编译）"
 OUT2="$(mktemp -d)"
 trap 'rm -rf "$OUT" "$OUT2"' EXIT
 javac -encoding UTF-8 -cp "$ANDROID_JAR" -d "$OUT2" \
@@ -44,14 +80,4 @@ javac -encoding UTF-8 -cp "$ANDROID_JAR" -d "$OUT2" \
   "$CORE/TalkgroupRepo.java" \
   "$ROOT/tests/TgMergeTest.java"
 
-# ★ classpath 分隔符必须是 ';' —— Windows 上的 java.exe 只认分号。
-# 写成 "$OUT2:$ANDROID_JAR" 的话它会把整串当成**一个**路径，
-# 于是报 "找不到或无法加载主类 TgMergeTest"（ClassNotFoundException），
-# 看起来像编译没产出 class，其实编译是好的。用 cygpath 转成纯 Windows 路径，
-# 免得 Git Bash 再把 C:/... 和 \ 混着塞进去。
-if command -v cygpath >/dev/null 2>&1; then
-  CP2="$(cygpath -w "$OUT2");$(cygpath -w "$ANDROID_JAR")"
-else
-  CP2="$OUT2;$ANDROID_JAR"
-fi
-java -Dfile.encoding=UTF-8 -cp "$CP2" TgMergeTest
+java -Dfile.encoding=UTF-8 -cp "$(cp_join "$OUT2" "$ANDROID_JAR")" TgMergeTest

@@ -37,7 +37,7 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:textColor="@color/text"
+                android:textColor="?attr/cText"
                 android:textSize="14sp"
                 android:singleLine="true"
                 android:ellipsize="end" />
@@ -47,7 +47,7 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="8dp"
-                android:textColor="@color/dim"
+                android:textColor="?attr/cDim"
                 android:textSize="11.5sp"
                 android:fontFamily="monospace" />
         </LinearLayout>
@@ -56,7 +56,7 @@
             android:id="@+id/desc"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:textColor="@color/dim"
+            android:textColor="?attr/cDim"
             android:textSize="11sp"
             android:singleLine="true"
             android:ellipsize="end" />

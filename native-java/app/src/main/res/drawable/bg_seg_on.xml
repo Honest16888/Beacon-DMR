@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 分段控件里「选中」那一颗。文字颜色在代码里一起改（Palette.accent）。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="?attr/cAccentWeak" />
+    <corners android:radius="8dp" />
+</shape>

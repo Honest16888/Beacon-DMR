@@ -1,8 +1,6 @@
 package net.beacon.dmr;
 
 import android.app.Activity;
-import android.content.Context;
-import android.content.SharedPreferences;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -23,36 +21,49 @@ import android.widget.Toast;
 
 import net.beacon.dmr.audio.AudioOut;
 import net.beacon.dmr.core.MuLaw;
+import net.beacon.dmr.core.Palette;
+import net.beacon.dmr.core.Prefs;
 import net.beacon.dmr.core.TalkgroupRepo;
 import net.beacon.dmr.core.Talkgroups;
 import net.beacon.dmr.hose.HoseClient;
+import net.beacon.dmr.live.LhClient;
+import net.beacon.dmr.live.LiveStore;
+import net.beacon.dmr.live.MasterRepo;
+import net.beacon.dmr.ui.DashPage;
+import net.beacon.dmr.ui.SettingsPage;
+import net.beacon.dmr.ui.Ui;
 import net.beacon.dmr.ui.WaveView;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
 /**
- * 主页 —— 收听。
+ * 三页壳：主页（收听） / 看板 / 设置。
  *
- * <p>音频链路：{@code HOSE WebSocket → MessagePack → μ-law 查表 → AudioTrack}，
- * 一条直线，中间没有 WebAudio、没有自动播放策略、没有帧边界重采样。
- *
- * <p>话组表三级来源见 {@link TalkgroupRepo}：内置 47 条立刻可用，
- * 缓存顶上次拉的 1800 多条，在线表在后台补齐。
+ * <p>两条链路各管一摊，互不干扰：
+ * <ul>
+ *   <li>{@link HoseClient} —— HOSE 收听，只推我订阅的那几个话组，出声</li>
+ *   <li>{@link LhClient} —— Last Heard 实时活动，全球所有通联，<b>不出声</b>，
+ *       只喂看板</li>
+ * </ul>
+ * 把两件事分开是刻意的：看板要的是「全球在发生什么」，收听要的是「我要听哪几个组」。
+ * WebView 版里这两条链路还互相影响过（原生接收让位那一段），纯 Java 版不存在这个问题。
  */
-public final class MainActivity extends Activity implements HoseClient.Listener {
+public final class MainActivity extends Activity
+        implements HoseClient.Listener, LhClient.Listener {
 
-    private static final String PREFS = "dmr";
-    private static final String KEY_VOL = "volume";
-    private static final String KEY_MUTE = "muted";
+    /* ==================== 界面 ==================== */
+    private Palette pal;
 
-    private final Handler ui = new Handler(Looper.getMainLooper());
+    private View pageListen, pageDash, pageSettings;
+    private Button tabListen, tabDash, tabSettings;
 
-    private TextView stateText, npTg, npCaller, npTime, volPct, tgCount;
-    private View dot;
+    private TextView stateText, npTg, npCaller, npTime, volPct, tgCount, liveState;
+    private View dot, dotLive;
     private WaveView wave;
     private Button btnMute, btnAdd;
     private SeekBar seekVol;
@@ -60,18 +71,25 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
     private CheckBox ckOnlySub;
     private ListView tgList;
 
-    /** 全表（自定义 + 内置 + 缓存/在线）。 */
+    private DashPage dashPage;
+    private SettingsPage settingsPage;
+
+    /* ==================== 数据 ==================== */
+    private final Handler ui = new Handler(Looper.getMainLooper());
+
     private final List<Talkgroups.Tg> allTgs = new ArrayList<>();
-    /** 当前显示的子集（搜索 + 只看订阅过滤之后）。 */
     private final List<Talkgroups.Tg> shown = new ArrayList<>();
-    /** 话组表现在是哪一级来源：0=内置 1=缓存 2=在线。显示在计数后面，方便判断表全不全。 */
-    private int tgSource = 0;
     private final Set<Integer> subs = new LinkedHashSet<>();
     private final Set<Integer> custom = new LinkedHashSet<>();
-    private TgAdapter adapter;
+    private final LiveStore live = new LiveStore();
 
+    private TgAdapter adapter;
     private HoseClient hose;
     private AudioOut audio;
+    private LhClient lh;
+
+    private String view = "listen";
+    private int tgSource = TalkgroupRepo.SRC_BUILTIN;
 
     private int curTg = 0;
     private int curSrc = 0;
@@ -79,34 +97,163 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
     private String curName = "";
     private long curStart = 0;
 
-    private boolean muted = false;
+    private boolean muted;
     private PowerManager.WakeLock wakeLock;
+
+    /** 上次发给 HOSE 的订阅数组。用来判「要不要重发」。 */
+    private int[] sentSubs = new int[0];
+    private int tickCount = 0;
 
     /* ==================== 生命周期 ==================== */
 
     @Override
     protected void onCreate(Bundle b) {
+        /* ★ 必须在 super.onCreate 之前：窗口底色在 setContentView 那一刻就定了，
+         * 晚一步会先闪一下旧主题。 */
+        Palette.apply(this);
         super.onCreate(b);
         setContentView(R.layout.activity_main);
+        pal = Palette.of(this);
+
+        view = Prefs.view(this);
+        muted = Prefs.muted(this);
+
+        bindViews();
+        bindListenPage();
+        bindTabs();
+
+        dashPage = new DashPage(this, pageDash, live, pal, this::addTgFromDash);
+        dashPage.setTgName(id -> nameOf((int) id));
+        settingsPage = new SettingsPage(this, pageSettings, pal, settingsCb);
+        settingsPage.syncThemeSeg();
+
+        applySimpleMode(Prefs.simple(this));
+        setView(view);
+
+        subs.addAll(Talkgroups.loadSubs(this));
+        custom.addAll(Talkgroups.loadCustom(this));
+
+        audio = new AudioOut();
+        audio.setLevelListener(rms -> ui.post(() -> wave.push(rms)));
+        audio.setVolume(Prefs.volume(this));
+        audio.setBoost(Prefs.gain(this));
+        audio.setPresence(Prefs.presence(this));
+        audio.setMuted(muted);
+        if (!audio.start()) stateText.setText("音频输出初始化失败");
+
+        TalkgroupRepo.load(this, (all, source) -> ui.post(() -> applyTgs(all, source)));
+        MasterRepo.load(this, () -> ui.post(() -> { /* 主站表到了，下次刷看板就会用上 */ }));
+
+        hose = new HoseClient(this);
+        hose.start(effectiveSubs());
+        sentSubs = effectiveSubs();
+
+        lh = new LhClient(this);
+        lh.start();
+
+        showLastCrashIfAny();
+        ui.postDelayed(tick, 500);
+    }
+
+    /**
+     * 上次启动崩过就把堆栈弹出来。
+     *
+     * <p>alpha 阶段没有模拟器，第一次真机运行就是用户那台手机。
+     * 万一启动即崩，用户能说的只有「打不开」—— 有了这一屏，
+     * 截个图就能定位。看完点「知道了」即删除，不会每次都弹。
+     */
+    private void showLastCrashIfAny() {
+        final String trace = App.lastCrash(this);
+        if (trace == null || trace.isEmpty()) return;
+        try {
+            android.widget.ScrollView sv = new android.widget.ScrollView(this);
+            TextView tv = new TextView(this);
+            tv.setText(trace);
+            tv.setTextSize(10f);
+            tv.setTextIsSelectable(true);
+            tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+            tv.setTextColor(pal.text);
+            int p = Ui.dpI(this, 12);
+            tv.setPadding(p, p, p, p);
+            sv.addView(tv);
+            new android.app.AlertDialog.Builder(this)
+                    .setTitle("上次运行崩溃了")
+                    .setView(sv)
+                    .setPositiveButton("知道了", (d, w) -> App.clearCrash(this))
+                    .setCancelable(false)
+                    .show();
+        } catch (Exception e) {
+            App.clearCrash(this);
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        /* AudioTrack 可能在上一次 onPause / 音频焦点丢失时被系统释放，
+         * 回来时重新起一次。不起的话表现就是「切出去再回来就没声音」。 */
+        if (audio != null && !audio.isRunning()) audio.start();
+        syncAwake();
+    }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        /* 关掉「保持常亮」的用户不该被这个 App 一直按住 WakeLock。 */
+        if (!Prefs.awake(this)) releaseWake();
+    }
+
+    @Override
+    protected void onDestroy() {
+        ui.removeCallbacksAndMessages(null);
+        if (hose != null) hose.stop();
+        if (lh != null) lh.stop();
+        if (audio != null) audio.stop();
+        releaseWake();
+        super.onDestroy();
+    }
+
+    /* ==================== 绑定 ==================== */
+
+    private void bindViews() {
+        pageListen = findViewById(R.id.pageListen);
+        pageDash = findViewById(R.id.pageDash);
+        pageSettings = findViewById(R.id.pageSettings);
+
+        tabListen = findViewById(R.id.tabListen);
+        tabDash = findViewById(R.id.tabDash);
+        tabSettings = findViewById(R.id.tabSettings);
 
         stateText = findViewById(R.id.stateText);
+        liveState = findViewById(R.id.liveState);
+        dot = findViewById(R.id.dot);
+        dotLive = findViewById(R.id.dotLive);
+
         npTg = findViewById(R.id.npTg);
         npCaller = findViewById(R.id.npCaller);
         npTime = findViewById(R.id.npTime);
-        volPct = findViewById(R.id.volPct);
-        dot = findViewById(R.id.dot);
         wave = findViewById(R.id.wave);
+        wave.setBarColor(pal.accent);
+
+        volPct = findViewById(R.id.volPct);
+        seekVol = findViewById(R.id.seekVol);
         btnMute = findViewById(R.id.btnMute);
         btnAdd = findViewById(R.id.btnAdd);
-        seekVol = findViewById(R.id.seekVol);
         search = findViewById(R.id.search);
         ckOnlySub = findViewById(R.id.ckOnlySub);
         tgCount = findViewById(R.id.tgCount);
         tgList = findViewById(R.id.tgList);
 
-        subs.addAll(Talkgroups.loadSubs(this));
-        custom.addAll(Talkgroups.loadCustom(this));
+        Ui.tintSeek(seekVol, pal);
+    }
 
+    private void bindTabs() {
+        tabListen.setOnClickListener(v -> setView("listen"));
+        tabDash.setOnClickListener(v -> setView("dash"));
+        tabSettings.setOnClickListener(v -> setView("settings"));
+    }
+
+    private void bindListenPage() {
         adapter = new TgAdapter();
         tgList.setAdapter(adapter);
         tgList.setOnItemClickListener((p, v, pos, id) -> {
@@ -118,72 +265,64 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
             @Override public void onTextChanged(CharSequence s, int a, int c, int d) { }
             @Override public void afterTextChanged(Editable e) { rebuildShown(); }
         });
-        ckOnlySub.setOnCheckedChangeListener((v, checked) -> rebuildShown());
+        ckOnlySub.setOnCheckedChangeListener((v, on) -> rebuildShown());
         btnAdd.setOnClickListener(v -> addTyped());
 
-        SharedPreferences sp = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        int vol = sp.getInt(KEY_VOL, 100);
-        muted = sp.getBoolean(KEY_MUTE, false);
-        seekVol.setProgress(vol);
-        applyVolume(vol, false);
+        seekVol.setProgress(Prefs.volume(this));
+        volPct.setText(Prefs.volume(this) + "%");
         seekVol.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar sb, int v, boolean fromUser) { applyVolume(v, true); }
+            @Override public void onProgressChanged(SeekBar sb, int v, boolean fromUser) {
+                volPct.setText(v + "%");
+                if (!fromUser) return;
+                Prefs.setVolume(MainActivity.this, v);
+                if (audio != null) audio.setVolume(v);
+                if (settingsPage != null) settingsPage.setVolume(v);
+            }
             @Override public void onStartTrackingTouch(SeekBar sb) { }
             @Override public void onStopTrackingTouch(SeekBar sb) { }
         });
 
         btnMute.setOnClickListener(v -> setMuted(!muted));
         renderMute();
-
-        audio = new AudioOut();
-        audio.setLevelListener(rms -> ui.post(() -> wave.push(rms)));
-        if (!audio.start()) stateText.setText("音频输出初始化失败");
-        audio.setMuted(muted);
-
-        /* 先给一份「自定义 + 内置 + 缓存」，等在线表到了再刷一次。 */
-        TalkgroupRepo.load(this, (all, source) -> ui.post(() -> applyTgs(all, source)));
-
-        hose = new HoseClient(this);
-        hose.start(Talkgroups.toArray(subs));
-
-        ui.postDelayed(tick, 500);
     }
 
-    private final Runnable tick = new Runnable() {
-        @Override public void run() {
-            if (curStart > 0) {
-                long s = (System.currentTimeMillis() - curStart) / 1000;
-                npTime.setText(String.format(Locale.US, "%d:%02d", s / 60, s % 60));
-            } else {
-                npTime.setText("");
-            }
-            wave.decay();
-            ui.postDelayed(this, 500);
-        }
-    };
+    /* ==================== 页面切换 ==================== */
 
-    @Override
-    protected void onDestroy() {
-        ui.removeCallbacksAndMessages(null);
-        if (hose != null) hose.stop();
-        if (audio != null) audio.stop();
-        releaseWake();
-        super.onDestroy();
+    private void setView(String v) {
+        if ("dash".equals(v) && Prefs.simple(this)) v = "listen";
+        view = v;
+        pageListen.setVisibility("listen".equals(v) ? View.VISIBLE : View.GONE);
+        pageDash.setVisibility("dash".equals(v) ? View.VISIBLE : View.GONE);
+        pageSettings.setVisibility("settings".equals(v) ? View.VISIBLE : View.GONE);
+        paintTab(tabListen, "listen".equals(v));
+        paintTab(tabDash, "dash".equals(v));
+        paintTab(tabSettings, "settings".equals(v));
+        Prefs.setView(this, v);
+        if ("dash".equals(v) && dashPage != null) dashPage.refresh();
+    }
+
+    private void paintTab(Button b, boolean on) {
+        b.setTextColor(on ? pal.accent : pal.muted);
+        b.getPaint().setFakeBoldText(on);
+        b.invalidate();
+    }
+
+    /** 简洁模式：藏起看板标签。 */
+    private void applySimpleMode(boolean on) {
+        tabDash.setVisibility(on ? View.GONE : View.VISIBLE);
+        if (on && "dash".equals(view)) setView("listen");
     }
 
     /* ==================== 话组表 ==================== */
 
     private void applyTgs(List<Talkgroups.Tg> all, int source) {
         if (source == TalkgroupRepo.SRC_FAIL) {
-            /* 在线表没拉到：列表保持原样（内置 + 缓存已经在了），只提示一句。
-             * 千万别在这里重建 allTgs —— 会把用户刚手动加的组和滚动位置一起冲掉。 */
             Toast.makeText(this, "在线话组表没拉到（网络），先用已有的 "
                     + allTgs.size() + " 个", Toast.LENGTH_LONG).show();
             return;
         }
         tgSource = source;
         allTgs.clear();
-        /* 自定义组永远排最前面 —— 那是用户自己填的，肯定最关心。 */
         Set<Integer> have = new LinkedHashSet<>();
         for (int id : custom) {
             allTgs.add(new Talkgroups.Tg(id, "TG " + id, "手动添加"));
@@ -198,6 +337,11 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
         if (source == TalkgroupRepo.SRC_ONLINE) {
             Toast.makeText(this, "话组表已更新：" + allTgs.size() + " 个", Toast.LENGTH_SHORT).show();
         }
+    }
+
+    private String nameOf(int id) {
+        for (Talkgroups.Tg t : allTgs) if (t.id == id) return t.name;
+        return null;
     }
 
     private void rebuildShown() {
@@ -217,8 +361,6 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
         }
         adapter.notifyDataSetChanged();
         if (tgCount != null) {
-            /* 来源标注很重要：显示「内置 47」说明在线表没拉到（网络问题），
-             * 显示「在线 1873」才是全表。用户报「组不全」时先看这里。 */
             String src = tgSource == TalkgroupRepo.SRC_ONLINE ? "在线"
                     : tgSource == TalkgroupRepo.SRC_CACHE ? "缓存" : "内置";
             tgCount.setText(String.format(Locale.US, "%d / %d · 订阅 %d · %s",
@@ -226,7 +368,6 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
         }
     }
 
-    /** 「＋」按钮：把搜索框里的数字直接加成订阅（在线表里没有的组也能加）。 */
     private void addTyped() {
         String raw = search.getText().toString().trim();
         if (!raw.matches("\\d{1,7}")) {
@@ -236,8 +377,7 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
         int id = Integer.parseInt(raw);
         if (id <= 0) { Toast.makeText(this, "话组号不合法", Toast.LENGTH_SHORT).show(); return; }
 
-        boolean known = false;
-        for (Talkgroups.Tg t : allTgs) if (t.id == id) { known = true; break; }
+        boolean known = nameOf(id) != null;
         if (!known) {
             custom.add(id);
             Talkgroups.saveCustom(this, custom);
@@ -245,9 +385,9 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
         }
         subs.add(id);
         Talkgroups.saveSubs(this, subs);
-        if (hose != null) hose.setSubscriptions(Talkgroups.toArray(subs));
         search.setText("");
         rebuildShown();
+        syncSubs();
         Toast.makeText(this, "已订阅 TG " + id, Toast.LENGTH_SHORT).show();
     }
 
@@ -255,31 +395,68 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
         if (subs.contains(id)) subs.remove(id); else subs.add(id);
         Talkgroups.saveSubs(this, subs);
         rebuildShown();
-        if (hose != null) hose.setSubscriptions(Talkgroups.toArray(subs));
+        syncSubs();
         if (subs.isEmpty() && curStart == 0 && !muted) {
             npCaller.setText("没有订阅任何话组 —— 勾选下面任意一项开始收听");
         }
     }
 
-    /* ==================== 音量 / 静音 ==================== */
-
-    private void applyVolume(int progress, boolean persist) {
-        float gain = progress / 100f;
-        if (audio != null) audio.setGain(gain);
-        volPct.setText(progress + "%");
-        if (persist) {
-            getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .edit().putInt(KEY_VOL, progress).apply();
+    /** 从看板的实时活动里点一条 → 把那个话组加进收听。 */
+    private void addTgFromDash(long tg, String name) {
+        int id = (int) tg;
+        if (id <= 0) return;
+        if (subs.contains(id)) {
+            Toast.makeText(this, "TG " + id + " 已经在收听列表里", Toast.LENGTH_SHORT).show();
+            return;
         }
+        subs.add(id);
+        Talkgroups.saveSubs(this, subs);
+        rebuildShown();
+        syncSubs();
+        Toast.makeText(this, "已加入收听：" + id + " " + name, Toast.LENGTH_SHORT).show();
     }
+
+    /* ==================== 订阅同步 / 扫描 ==================== */
+
+    /** 生效的订阅 = 手动订阅 + （扫描开着时）自动跟进的那几个。 */
+    private int[] effectiveSubs() {
+        LinkedHashSet<Integer> s = new LinkedHashSet<>(subs);
+        if (Prefs.scanOn(this) && Prefs.scanAuto(this)) s.addAll(autoPick());
+        int[] a = new int[s.size()];
+        int i = 0;
+        for (int v : s) a[i++] = v;
+        Arrays.sort(a);                 // 排序后比较才稳定，不然每秒都可能重发
+        return a;
+    }
+
+    /** 自动跟进：此刻最活跃的 N 个话组（按最近有声音优先）。 */
+    private List<Integer> autoPick() {
+        int n = Prefs.autoN(this);
+        LinkedHashSet<Integer> out = new LinkedHashSet<>();
+        for (LiveStore.Session s : live.activeList()) {
+            if (s.tg <= 90) continue;              // 和 WebView 版一致：9 / 91 以下不进自动跟进
+            out.add((int) s.tg);
+            if (out.size() >= n) break;
+        }
+        return new ArrayList<>(out);
+    }
+
+    private void syncSubs() {
+        int[] now = effectiveSubs();
+        if (Arrays.equals(now, sentSubs)) return;
+        sentSubs = now;
+        if (hose != null) hose.setSubscriptions(now);
+        renderLiveState();
+    }
+
+    /* ==================== 音量 / 静音 ==================== */
 
     private void setMuted(boolean on) {
         muted = on;
+        Prefs.setMuted(this, on);
         if (audio != null) audio.setMuted(on);
         if (on) wave.reset();
         renderMute();
-        getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit().putBoolean(KEY_MUTE, on).apply();
     }
 
     private void renderMute() {
@@ -299,13 +476,13 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
         stateText.setText(detail == null ? "" : detail);
         int color;
         switch (s) {
-            case OPEN: color = getColor(R.color.ok); break;
+            case OPEN: color = pal.ok; break;
             case CONNECTING:
-            case RETRY: color = getColor(R.color.warn); break;
-            default: color = getColor(R.color.dim); break;
+            case RETRY: color = pal.warn; break;
+            default: color = pal.dim; break;
         }
         dot.setBackgroundTintList(android.content.res.ColorStateList.valueOf(color));
-        if (s == HoseClient.State.OPEN) acquireWake();
+        if (s == HoseClient.State.OPEN) syncAwake();
     }
 
     @Override
@@ -317,7 +494,7 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
         curStart = System.currentTimeMillis();
         wave.reset();
         renderNow();
-        acquireWake();
+        syncAwake();
     }
 
     @Override
@@ -364,8 +541,7 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
             npCaller.setText(R.string.idle_caller);
             return;
         }
-        String name = null;
-        for (Talkgroups.Tg t : allTgs) if (t.id == curTg) { name = t.name; break; }
+        String name = nameOf(curTg);
         npTg.setText((name == null ? "TG " + curTg : name) + " · " + curTg);
         StringBuilder sb = new StringBuilder();
         if (!curCall.isEmpty()) sb.append(curCall);
@@ -378,7 +554,120 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
         npCaller.setText(sb.toString());
     }
 
+    /* ==================== LhClient.Listener ==================== */
+
+    @Override
+    public void onState(LhClient.State s, String detail) {
+        int color;
+        switch (s) {
+            case OPEN: color = pal.ok; break;
+            case CONNECTING:
+            case RETRY: color = pal.warn; break;
+            default: color = pal.dim; break;
+        }
+        dotLive.setBackgroundTintList(android.content.res.ColorStateList.valueOf(color));
+        renderLiveState();
+    }
+
+    @Override
+    public void onEvent(LiveStore.Event e) {
+        /* ★ 这条回调在 WebSocket 读线程上，每秒十几条。这里只做一件事：
+         * 丢进 LiveStore。绝对不要碰 View，也不要 post 到主线程 ——
+         * 每秒 post 十几次 Runnable 会把主线程队列塞满，滑动直接卡。 */
+        live.onEvent(e);
+    }
+
+    private void renderLiveState() {
+        if (liveState == null) return;
+        liveState.setText(String.format(Locale.US, "活动 %d · 收听 %d 组",
+                live.activeCount(), sentSubs.length));
+    }
+
+    /* ==================== tick ==================== */
+
+    private final Runnable tick = new Runnable() {
+        @Override public void run() {
+            tickCount++;
+            if (curStart > 0) {
+                long s = (System.currentTimeMillis() - curStart) / 1000;
+                npTime.setText(String.format(Locale.US, "%d:%02d", s / 60, s % 60));
+            } else {
+                npTime.setText("");
+            }
+            wave.decay();
+
+            /* 1 秒：看板（只在可见时刷）+ 实时活动的过期清理 */
+            if (tickCount % 2 == 0) {
+                live.prune();
+                if ("dash".equals(view) && dashPage != null) dashPage.refresh();
+                renderLiveState();
+            }
+
+            /* 3 秒：重算一次生效订阅（扫描会自动跟进新冒出来的活跃组） */
+            if (tickCount % 6 == 0 && Prefs.scanOn(MainActivity.this)) syncSubs();
+
+            /* 4 秒：音频自检读数 */
+            if (tickCount % 8 == 0) updateAudioDiag();
+
+            ui.postDelayed(this, 500);
+        }
+    };
+
+    private void updateAudioDiag() {
+        if (settingsPage == null || audio == null) return;
+        settingsPage.setAudioDiag(String.format(Locale.US,
+                "环=%s · 8kHz · 队列=%d · 丢帧=%d · 音量=%d%% · 增强=%d× · 窄带=%s",
+                audio.isRunning() ? "on" : "off",
+                audio.getQueuedFrames(),
+                audio.getDroppedFrames(),
+                Prefs.volume(this),
+                Prefs.gain(this),
+                Prefs.presence(this) ? "开" : "关"));
+    }
+
+    /* ==================== 设置回调 ==================== */
+
+    private final SettingsPage.Listener settingsCb = new SettingsPage.Listener() {
+        @Override public void onThemeChanged(int mode) {
+            /* 换肤只能整页重建：主题属性在 inflate 时就绑死了。
+             * 重建会重连两条 WebSocket，但换主题是低频操作，可以接受。 */
+            recreate();
+        }
+
+        @Override public void onVolumeChanged(int pct) {
+            seekVol.setProgress(pct);
+            volPct.setText(pct + "%");
+            if (audio != null) audio.setVolume(pct);
+        }
+
+        @Override public void onBoostChanged(int gain) {
+            if (audio != null) audio.setBoost(gain);
+            updateAudioDiag();
+        }
+
+        @Override public void onPresenceChanged(boolean on) {
+            if (audio != null) audio.setPresence(on);
+            updateAudioDiag();
+        }
+
+        @Override public void onAwakeChanged(boolean on) { syncAwake(); }
+
+        @Override public void onSimpleChanged(boolean on) { applySimpleMode(on); }
+
+        @Override public void onScanChanged() {
+            syncSubs();
+            Toast.makeText(MainActivity.this,
+                    Prefs.scanOn(MainActivity.this) ? "扫描已开启" : "扫描已关闭",
+                    Toast.LENGTH_SHORT).show();
+        }
+    };
+
     /* ==================== WakeLock ==================== */
+
+    private void syncAwake() {
+        if (!Prefs.awake(this)) { releaseWake(); return; }
+        acquireWake();
+    }
 
     private void acquireWake() {
         if (wakeLock != null && wakeLock.isHeld()) return;
@@ -418,9 +707,11 @@ public final class MainActivity extends Activity implements HoseClient.Listener 
             boolean on = subs.contains(t.id);
             ck.setChecked(on);
             name.setText(t.name);
-            name.setTextColor(MainActivity.this.getColor(on ? R.color.text : R.color.muted));
+            name.setTextColor(on ? pal.text : pal.muted);
             id.setText(String.valueOf(t.id));
+            id.setTextColor(pal.dim);
             desc.setText(t.desc);
+            desc.setTextColor(pal.dim);
             desc.setVisibility(t.desc.isEmpty() ? View.GONE : View.VISIBLE);
             return v;
         }

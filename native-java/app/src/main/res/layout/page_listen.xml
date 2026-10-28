@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  主页 = 收听。
+
+  顶栏和底栏在 activity_main.xml 里，这一页只负责中间那块：
+    正在收听（谁在说 / 说给哪个组 / 波形） → 音量 → 话组搜索 → 话组列表
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical">
+
+    <!-- ============ 正在收听 ============ -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="12dp"
+        android:layout_marginEnd="12dp"
+        android:layout_marginTop="4dp"
+        android:orientation="vertical"
+        android:background="@drawable/bg_card"
+        android:padding="14dp">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical">
+
+            <TextView
+                android:id="@+id/npTg"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="@string/idle_tg"
+                android:textColor="?attr/cText"
+                android:textSize="19sp"
+                android:textStyle="bold"
+                android:singleLine="true"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/npTime"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text=""
+                android:textColor="?attr/cDim"
+                android:textSize="12sp"
+                android:fontFamily="monospace" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/npCaller"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="2dp"
+            android:text="@string/idle_caller"
+            android:textColor="?attr/cMuted"
+            android:textSize="12.5sp"
+            android:singleLine="true"
+            android:ellipsize="end" />
+
+        <net.beacon.dmr.ui.WaveView
+            android:id="@+id/wave"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:layout_marginTop="8dp" />
+    </LinearLayout>
+
+    <!-- ============ 音量 ============ -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="10dp"
+        android:paddingBottom="2dp">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/volume"
+            android:textColor="?attr/cMuted"
+            android:textSize="12sp" />
+
+        <SeekBar
+            android:id="@+id/seekVol"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginStart="10dp"
+            android:max="150"
+            android:progress="100" />
+
+        <TextView
+            android:id="@+id/volPct"
+            android:layout_width="42dp"
+            android:layout_height="wrap_content"
+            android:gravity="end"
+            android:text="100%"
+            android:textColor="?attr/cMuted"
+            android:textSize="11.5sp"
+            android:fontFamily="monospace" />
+    </LinearLayout>
+
+    <!-- ============ 话组搜索 / 添加 ============ -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="6dp">
+
+        <EditText
+            android:id="@+id/search"
+            android:layout_width="0dp"
+            android:layout_height="42dp"
+            android:layout_weight="1"
+            android:background="@drawable/bg_inner"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:hint="搜索话组号 / 名称"
+            android:textColorHint="?attr/cDim"
+            android:textColor="?attr/cText"
+            android:textSize="13sp"
+            android:inputType="text"
+            android:imeOptions="actionSearch"
+            android:singleLine="true" />
+
+        <Button
+            android:id="@+id/btnAdd"
+            android:layout_width="48dp"
+            android:layout_height="42dp"
+            android:layout_marginStart="8dp"
+            android:minWidth="0dp"
+            android:padding="0dp"
+            android:text="＋"
+            android:textSize="18sp"
+            android:textAllCaps="false" />
+    </LinearLayout>
+
+    <!-- ============ 过滤 / 计数 ============ -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="16dp"
+        android:paddingEnd="16dp"
+        android:paddingTop="2dp"
+        android:paddingBottom="2dp">
+
+        <CheckBox
+            android:id="@+id/ckOnlySub"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:minHeight="0dp"
+            android:minWidth="0dp"
+            android:text="只看已订阅"
+            android:textSize="12sp"
+            android:textColor="?attr/cMuted" />
+
+        <TextView
+            android:id="@+id/tgCount"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:gravity="end"
+            android:text=""
+            android:textColor="?attr/cDim"
+            android:textSize="11sp"
+            android:fontFamily="monospace" />
+    </LinearLayout>
+
+    <ListView
+        android:id="@+id/tgList"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:divider="@null"
+        android:dividerHeight="0dp"
+        android:scrollbars="vertical" />
+</LinearLayout>
