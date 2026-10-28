@@ -19360,10 +19360,21 @@ const Audio_ = {
        所以串一个高通 + 一个窄带提升。参数都取得很保守 ——
        这是对讲，不是音乐，过度「美化」会让声音失真、辨识度反而下降。 */
     const hp=this.ctx.createBiquadFilter();
-    hp.type='highpass'; hp.frequency.value=180; hp.Q.value=0.7;
+    /* ★ v2.5.6 截止频率从 180 Hz 降到 80 Hz。
+     *
+     * 180 Hz 砍掉的不只是「隆隆声」，还有男声基频（85~180 Hz）的整个下半段 ——
+     * 听感是「薄」「没有底气」，和官方播放器的差别很明显。
+     * 80 Hz 足够滤掉编解码和线路噪声堆起来的低频，又不动人声基频。 */
+    hp.type='highpass'; hp.frequency.value=80; hp.Q.value=0.7;
     const pk=this.ctx.createBiquadFilter();
     pk.type='peaking'; pk.frequency.value=2600; pk.Q.value=0.9;
-    pk.gain.value=(state.presence!==false)?2.5:0;
+    /* ★ v2.5.6 窄带增强改成默认**关**。
+     *
+     * 2.6 kHz +2.5 dB 会让辅音更清楚，但同时把手机小喇叭最容易破音的那一段
+     * 顶上去 —— 和官方网页一比就是「我们的声音更亮更刺」。
+     * 官方播放器不做任何音色处理，要一致就得默认关掉；
+     * 想要更清楚的用户可以在「设置 → 收听与音频 → 窄带增强」自己打开。 */
+    pk.gain.value=(state.presence===true)?2.5:0;
     /* ★ v2.5.2 出口软削波 —— 「噼啪」的真正源头在这里。
      *
      * 之前只有 push() 里那道软限幅，而它在**增益之前**：
@@ -19389,7 +19400,19 @@ const Audio_ = {
     pre.gain.value=1/3;
     const ws=this.ctx.createWaveShaper();
     {
-      const NS=4096, cur=new Float32Array(NS), T=0.7, CEIL=0.98, K=3;
+      /* ★ v2.5.6 阈值从 0.70 提到 0.90。
+       *
+       * 0.70 太低：μ-law 解码出来的语音峰值本来就贴着满刻度（±0.98），
+       * 再乘 0.8 的音量就是 0.78 —— **正常说话的每个峰值都在 0.70 以上**，
+       * 全被这级压了一遍。这是「音质赶不上官方网页」最主要的一处：
+       * 官方播放器没有这一级，是原样解码直出。
+       *
+       * 提到 0.90 之后：
+       *   · 音量 80%（默认）峰值 0.78 → 完全直通，一点都不动；
+       *   · 音量 100% 峰值 0.98 → 只在最尖的那几个样本上压，动态基本保住；
+       *   · 音量推到 150% + 增益 3× → 照旧兜住，不会硬削波「噼啪」。
+       * CEIL 从 0.98 改成 1.0，让「刚好到顶」的信号不被提前压。 */
+      const NS=4096, cur=new Float32Array(NS), T=0.90, CEIL=1.0, K=3;
       for(let i=0;i<NS;i++){
         const u=(i/(NS-1))*2-1, x=u*K, a=Math.abs(x), sg=x<0?-1:1;
         cur[i]=a<=T ? x : sg*(T+(CEIL-T)*Math.tanh((a-T)/(CEIL-T)));
@@ -19703,6 +19726,30 @@ function audioGuard(){
     const live=!!(Audio_.lastAt&&Date.now()-Audio_.lastAt<4000);
     if(live&&!TX.txing&&!(state.rxOn&&Q.rxing))Audio_.setMute(false);
   }
+
+  /* ★ v2.5.6 CALL_END 兜底收尾 —— 修「录音和通话记录都有概率漏一句」。
+   *
+   * HOSE 的 CALL_END 是**单发、不重传**。丢一个包，那一句就永远收不了尾：
+   *   · 录音一直挂着，等下一句的 CALL_START 把它顶掉（顶掉就丢）；
+   *   · logCall 永远不执行 → 通联记录里没有这一条；
+   *   · 「上一通」停在上一句，就绪行的「回 xxx」也过期。
+   * 三处显示同时不对，而用户能看到的只是「有时候少一句」。
+   *
+   * 判据：state.current 还在，但已经 2.5 秒没有任何音频帧进来。
+   * DMR 一句话中间换气也就几百毫秒，2.5 秒足够区分「换气」和「结束了」。
+   * 用 Audio_.lastAt（decode() 每帧都刷新）而不是自己计时 —— 那是唯一
+   * 能证明「数据还在流」的东西。 */
+  if(state.current&&Audio_.lastAt&&Date.now()-Audio_.lastAt>2500
+     &&!TX.txing&&!Q.rxing){
+    const stale=state.current;
+    state.current=null;
+    if(state.recActive)Rec.finish();
+    logCall(stale);
+    Audio_.silence();
+    if(stale.tg)state.active.delete(stale.tg);
+    rxRelease(stale.tg);
+    renderNow(); renderLive(true); renderHtSum();
+  }
 }
 
 /* 冷启动「轻触开始收听」提示条。
@@ -19748,6 +19795,16 @@ const Rec = {
   MAX: 8000*60*12,
   begin(call){
     if(!state.recOn||!call)return;
+    /* ★ v2.5.6 还在录上一句，先把它收尾，**不要直接清空 chunks**。
+     *
+     * 原来这里是无条件 this.chunks=[]。两句挨得近的时候（上一句的
+     * CALL_END 还在路上、下一句的 CALL_START 先到），上一句已经录下的
+     * 几百毫秒到几秒直接被扔掉 —— 而且不报错、不留痕迹。
+     * 用户报的「录音有概率捕捉不到」有一半是这个。
+     *
+     * 另一半是 CALL_END 丢了之后一直挂着等下一句顶掉，那由 audioGuard
+     * 里的超时兜底处理。 */
+    if(state.recActive&&this.chunks&&this.chunks.length)this.finish();
     this.chunks=[]; this.len=0; this.call=call;
     state.recActive=true; renderRecBtn();
   },
@@ -21501,8 +21558,21 @@ function logCall(c){
   store.set('calls',state.calls);
   /* 留一份「刚才是谁说的」：对方一松手 state.current 就被清空，
      界面上立刻变成「暂无通话」，回话时根本想不起跟谁通联。
-     不持久化 —— 跨会话的「上一通」没有意义，反而误导。 */
-  state.lastRx={ srcId:c.srcId, tg:c.tg, call:a.call, name:a.name, at:Date.now(), priv };
+     不持久化 —— 跨会话的「上一通」没有意义，反而误导。
+
+     ★ 只让「后开口」的那一句覆盖它，不是「后结束」的那一句。
+
+     原因：自己的 CALL_END 经常比对方晚到。典型顺序是
+       我说完 → 松手（CALL_END 在网络上还在走）→ 对方接着说 → 对方说完
+       → 我的 CALL_END 这才到。无条件覆盖的话「上一通」最后落在我自己身上，
+     用户的原话是「另外一个友台发完言之后，上一通始终显示我自己」。
+
+     用 c.start（这一句**开始说**的时刻）比较才是对的：
+     谁后开口，谁才是「上一通」。 */
+  if(!state.lastRx||!c.start||c.start>=(state.lastRx.start||0)){
+    state.lastRx={ srcId:c.srcId, tg:c.tg, call:a.call, name:a.name,
+                   at:Date.now(), start:c.start||Date.now(), priv };
+  }
   renderLog(); renderHtSum(); txSync();
 }
 function resolveAlias(c){
@@ -21887,8 +21957,17 @@ function renderVu(){
   /* ★ 两条路统一到 dBFS 再映射，波形高度才一致 ——
      以前 HOSE 用 level*3.2、原生用 dB 区间，同一句话在两条路上
      画出来的高度差一倍多，看着像两套刻度。 */
+  /* ★ 发射优先。
+   *
+   * 原来只有两条路：原生在收（state.rxDb）、HOSE 在播（Audio_.level）。
+   * 自己发射时两条都不成立 —— 自己那一句绕回来会被 dropTg 丢掉、根本
+   * 不进 Audio_，原生也不在收 —— 于是 db=NaN、波形一条平线。
+   * 而计时器 renderNowTimer() 早就加了 TX.txing 分支，波形这边漏了。
+   *
+   * 发射时看自己的电平才是对的：那是「我现在说话有多响」。 */
   let db=NaN;
-  if(Q.rxing&&isFinite(state.rxDb))db=state.rxDb;
+  if(TX.txing&&isFinite(TX.levelDb))db=TX.levelDb;
+  else if(Q.rxing&&isFinite(state.rxDb))db=state.rxDb;
   else if(state.current&&Audio_.level>0.0005)db=20*Math.log10(Audio_.level);
 
   let lvl=0;
@@ -22698,6 +22777,15 @@ function goTx(){
 const TX={conn:false,voc:false,txing:false,pttHeld:false,resumeAfter:false,booted:false,lastReport:'',state:'IDLE',stateDetail:'',progNode:null,
   /* 本次发射的起始时刻（ms）。0 = 没在发。给顶部「已经说了几秒」用 */
   startAt:0,
+  /* ★ 本次发射的最近电平（dBFS），由原生 level 事件写进来。
+   *
+   * 之前这个值只写进了设置页的 #txLevelDb 读数，波形那边根本拿不到 ——
+   * 于是国际 BM 下自己说话时顶部波形是一条平线（国内能动，因为
+   * 国内收听走 WS，Audio_.level 有值）。
+   *
+   * 用户原话：「国际 BM 的时候我自己说话顶部的呼号旁边的波形图无变化，
+   * 但是在国内 DMR 的时候波形图能起来」。 */
+  levelDb:NaN,
   /* 「最近听到」的现场名单：[{srcId,dstId,at}]。不持久化，见 rxHeardPush */
   heard:[],
   /* 「最近话组」的现场名单：[dstId]。同样不持久化，见 rxTgPush */
@@ -24265,6 +24353,9 @@ window.onDmrEvent=function(json){
            界面必须同步清空，否则会短暂显示上一通的峰值，让人以为一开口就这么响。 */
         const d=txEl('txLevelDb');
         if(d){ d.textContent='—'; d.classList.remove('on'); d.classList.add('off'); }
+        /* 波形也跟着清 —— 否则按下 PTT 的头一两帧会显示上一通的电平，
+         * 看着像「一开口就这么响」。 */
+        TX.levelDb=NaN;
         /* ★ 每次发射前补下发一次增益。
            原生侧只在内存里存这个值，冷启动就是 0 dB —— 万一页面加载时
            那次下发因为桥还没就绪被吞了，这里能补上，不会出现
@@ -24354,8 +24445,10 @@ window.onDmrEvent=function(json){
          拖增益滑块时这里会跟着动，正好用来确认「抬了多少还剩多少余量」。
          超过 −6 dBFS 就已经贴着满量程，再往上只会被软限幅压平。 */
       const d=txEl('txLevelDb');
+      const db=Number(ev.db);
+      /* 存进 TX 给波形用 —— 这里原来只喂了设置页那个读数。 */
+      if(isFinite(db)&&db>-110)TX.levelDb=db;
       if(d){
-        const db=Number(ev.db);
         if(isFinite(db)&&db>-110){
           d.textContent=db.toFixed(1)+' dB';
           d.classList.add('on'); d.classList.remove('off');
@@ -24634,7 +24727,7 @@ function renderSet(){
   const sg=q('segGain');
   if(sg)[...sg.children].forEach(b=>b.classList.toggle('on',Number(b.dataset.val)===Number(state.gain)));
   const a=q('setAwake');       if(a)a.checked=!!state.awakeOn;
-  const pr=q('setPresence');   if(pr)pr.checked=state.presence!==false;
+  const pr=q('setPresence');   if(pr)pr.checked=state.presence===true;
   const r=q('setRecOn');       if(r)r.checked=!!state.recOn;
   const sp=q('setSimple');     if(sp)sp.checked=!!state.simple;
   const ac=q('setAutoConn');   if(ac)ac.checked=!!state.autoConn;
@@ -25336,7 +25429,7 @@ function boot(){
   state.gain=Number(store.get('gain',1))||1;
   /* 窄带增强：默认开。关掉的人下次进来还得是关的 —— 这是排查「喇叭噼啪」
      时唯一能自己动手的开关，不能每次都被重置回去。 */
-  state.presence=store.get('presence',true)!==false;
+  state.presence=store.get('presence',false)===true;
   state.awakeOn=store.get('awakeOn',true)!==false;
   state.scanResume=store.get('scanResume',true)!==false;
   /* 通联的接收参数 */
