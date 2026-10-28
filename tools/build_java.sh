@@ -44,13 +44,28 @@ fi
 echo "==> 纯逻辑自检"
 bash "$PROJ/tests/run.sh" | tail -3
 
-# ★ JNI 符号一致性：Java 的 native 声明必须和 .so 的 .dynsym 对得上。
-# 这一步放在编译之前 —— 对不上的话编出来的包一按 PTT 就 UnsatisfiedLinkError，
-# 而那个报错信息（"is the library loaded?"）会把人往「.so 没打进包」上带，
-# 实际是包名改过、符号名还是旧的。查一次比在真机上猜一轮便宜得多。
-echo "==> JNI 符号一致性"
-python3 "$TOOLS/check_jni.py" --root "$PROJ/../native-java/app/src/main" --quiet 2>/dev/null \
-  || python "$TOOLS/check_jni.py" --root "$PROJ/../native-java/app/src/main" --quiet
+# ★ 两道静态检查，都在编译之前跑。
+#
+#   1) JNI 符号一致性：Java 的 native 声明必须和 .so 的 .dynsym 对得上。
+#      对不上的话编出来的包一按 PTT 就 UnsatisfiedLinkError，而那个报错信息
+#      （"is the library loaded?"）会把人往「.so 没打进包」上带，实际是包名改过、
+#      符号名还是旧的。查一次比在真机上猜一轮便宜得多。
+#
+#   2) 布局 ⇄ 代码：findViewById 拿不到控件不会编译报错，只会在运行时返回 null，
+#      往下走一步就是 NPE，用户看到「应用已停止」。本工程没有 emulator，
+#      这一步是唯一能在桌面上拦住它的地方。
+if command -v python3 >/dev/null 2>&1; then PY=python3
+elif command -v python >/dev/null 2>&1; then PY=python
+else PY=""; fi
+
+if [ -n "$PY" ]; then
+  echo "==> JNI 符号一致性"
+  "$PY" "$TOOLS/check_jni.py" --root "$PROJ/app/src/main" --quiet
+  echo "==> 布局 ⇄ 代码一致性"
+  "$PY" "$TOOLS/check_layout.py" --root "$PROJ/app/src/main" --quiet
+else
+  echo "!! 没有 python，跳过静态检查（JNI 符号 / 布局一致性）" >&2
+fi
 
 echo "==> 构建 $VARIANT"
 ( cd "$PROJ" && ./gradlew --no-daemon ":app:assemble${VARIANT^}" )

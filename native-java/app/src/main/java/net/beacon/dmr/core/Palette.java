@@ -18,14 +18,17 @@ import net.beacon.dmr.R;
  */
 public final class Palette {
 
-    public final int bg, panel, panel2, border, text, muted, dim, accent, accentWeak, ok, warn, bad;
+    public final int bg, panel, panel2, border, border2, text, muted, dim, accent, accentWeak,
+            ok, warn, bad, tx, tx2;
 
-    private Palette(int bg, int panel, int panel2, int border, int text, int muted, int dim,
-                    int accent, int accentWeak, int ok, int warn, int bad) {
+    private Palette(int bg, int panel, int panel2, int border, int border2, int text, int muted,
+                    int dim, int accent, int accentWeak, int ok, int warn, int bad,
+                    int tx, int tx2) {
         this.bg = bg;
         this.panel = panel;
         this.panel2 = panel2;
         this.border = border;
+        this.border2 = border2;
         this.text = text;
         this.muted = muted;
         this.dim = dim;
@@ -34,14 +37,18 @@ public final class Palette {
         this.ok = ok;
         this.warn = warn;
         this.bad = bad;
+        this.tx = tx;
+        this.tx2 = tx2;
     }
 
     public static Palette of(Context c) {
         return new Palette(
                 col(c, R.attr.cBg), col(c, R.attr.cPanel), col(c, R.attr.cPanel2),
-                col(c, R.attr.cBorder), col(c, R.attr.cText), col(c, R.attr.cMuted),
-                col(c, R.attr.cDim), col(c, R.attr.cAccent), col(c, R.attr.cAccentWeak),
-                col(c, R.attr.cOk), col(c, R.attr.cWarn), col(c, R.attr.cBad));
+                col(c, R.attr.cBorder), col(c, R.attr.cBorder2),
+                col(c, R.attr.cText), col(c, R.attr.cMuted), col(c, R.attr.cDim),
+                col(c, R.attr.cAccent), col(c, R.attr.cAccentWeak),
+                col(c, R.attr.cOk), col(c, R.attr.cWarn), col(c, R.attr.cBad),
+                col(c, R.attr.cTx), col(c, R.attr.cTx2));
     }
 
     /** 解析一个颜色型主题属性。取不到时退回品红 —— 一眼就能看出是配置漏了。 */

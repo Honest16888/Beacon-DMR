@@ -19,6 +19,8 @@
     <!-- 卡片内的次级底（输入框、未选中分段） -->
     <attr name="cPanel2" format="color" />
     <attr name="cBorder" format="color" />
+    <!-- 比 cBorder 更淡一档，用在卡片标题栏下的分隔线、虚线折角 -->
+    <attr name="cBorder2" format="color" />
     <!-- 正文 -->
     <attr name="cText" format="color" />
     <!-- 次要文字 -->
@@ -32,4 +34,8 @@
     <attr name="cOk" format="color" />
     <attr name="cWarn" format="color" />
     <attr name="cBad" format="color" />
+    <!-- 发射红（WebView 版的 -tx）：PTT 钮、正在发射的话组、录音按钮 -->
+    <attr name="cTx" format="color" />
+    <!-- 发射红的浅底（-tx2）：警告条底色、回复按钮底色 -->
+    <attr name="cTx2" format="color" />
 </resources>

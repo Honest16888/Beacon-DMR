@@ -1,247 +1,743 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  主页 = 收听。
+  主页 = 收听。1:1 对齐 web/index.html 的手机端。
 
-  顶栏和底栏在 activity_main.xml 里，这一页只负责中间那块：
-    正在收听（谁在说 / 说给哪个组 / 波形） → 音量 → 话组搜索 → 话组列表
+  整页是「上固定 + 下滚动」：
+    ┌─ home-top（sticky，WebView 里 top:62px 钉在顶栏下）────────┐
+    │  网络条（国际 BM / 国内 DMR）                              │
+    │  发射条 3 行（目标话组+连接 / 身份+状态 / 提示 + 电平细线） │
+    │  [折叠时] 摘要行 26dp                                      │
+    │  分栏条（我的收听 / 实时活动 / 话组库）                     │
+    │  收起操作区（22dp，上方虚线）                               │
+    ├─ homeList（可滚动，手机端一次只显示一栏）────────────────────┤
+    └────────────────────────────────────────────────────────────┘
+    ＋ 右下角悬浮 PTT 圆钮（74dp，z 在列表之上）
+
+  WebView 里 home-top 是 position:sticky，滚动时钉住不跟着走。原生的等价做法是
+  把它放在滚动容器**外面** —— 效果完全一样，而且不用自己算偏移量。那个
+  「-topbar-h 实测顶栏高度再喂给 top」的补丁（syncTopbarH）在这里根本不需要，
+  因为顶栏也不在一个会滚的容器里。
+
+  ★ 悬浮 PTT 而不是底部条：列表一长就得往下滚，目标选好了 PTT 却在屏幕外，
+    等于白选。WebView 版 84dp（手机 74dp）、right:16px、bottom:20px。
 -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical">
+    android:clipChildren="false"
+    android:clipToPadding="false">
 
-    <!-- ============ 正在收听 ============ -->
     <LinearLayout
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginStart="12dp"
-        android:layout_marginEnd="12dp"
-        android:layout_marginTop="4dp"
-        android:orientation="vertical"
-        android:background="@drawable/bg_card"
-        android:padding="14dp">
+        android:layout_height="match_parent"
+        android:orientation="vertical">
 
+        <!-- ==================== home-top ==================== -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal"
-            android:gravity="center_vertical">
-
-            <TextView
-                android:id="@+id/npTg"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/idle_tg"
-                android:textColor="?attr/cText"
-                android:textSize="19sp"
-                android:textStyle="bold"
-                android:singleLine="true"
-                android:ellipsize="end" />
-
-            <TextView
-                android:id="@+id/npTime"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text=""
-                android:textColor="?attr/cDim"
-                android:textSize="12sp"
-                android:fontFamily="monospace" />
-        </LinearLayout>
-
-        <TextView
-            android:id="@+id/npCaller"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="2dp"
-            android:text="@string/idle_caller"
-            android:textColor="?attr/cMuted"
-            android:textSize="12.5sp"
-            android:singleLine="true"
-            android:ellipsize="end" />
-
-        <net.beacon.dmr.ui.WaveView
-            android:id="@+id/wave"
-            android:layout_width="match_parent"
-            android:layout_height="60dp"
-            android:layout_marginTop="8dp" />
-    </LinearLayout>
-
-    <!-- ============ 音量 ============ -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingTop="10dp"
-        android:paddingBottom="2dp">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="@string/volume"
-            android:textColor="?attr/cMuted"
-            android:textSize="12sp" />
-
-        <SeekBar
-            android:id="@+id/seekVol"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginStart="10dp"
-            android:max="150"
-            android:progress="100" />
-
-        <TextView
-            android:id="@+id/volPct"
-            android:layout_width="42dp"
-            android:layout_height="wrap_content"
-            android:gravity="end"
-            android:text="100%"
-            android:textColor="?attr/cMuted"
-            android:textSize="11.5sp"
-            android:fontFamily="monospace" />
-    </LinearLayout>
-
-    <!-- ============ 话组搜索 / 添加 ============ -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:paddingTop="6dp">
-
-        <EditText
-            android:id="@+id/search"
-            android:layout_width="0dp"
-            android:layout_height="42dp"
-            android:layout_weight="1"
-            android:background="@drawable/bg_inner"
+            android:orientation="vertical"
+            android:background="?attr/cPanel"
             android:paddingStart="12dp"
             android:paddingEnd="12dp"
-            android:hint="搜索话组号 / 名称"
-            android:textColorHint="?attr/cDim"
-            android:textColor="?attr/cText"
-            android:textSize="13sp"
-            android:inputType="text"
-            android:imeOptions="actionSearch"
-            android:singleLine="true" />
+            android:paddingTop="10dp"
+            android:paddingBottom="10dp">
 
-        <Button
-            android:id="@+id/btnAdd"
-            android:layout_width="48dp"
-            android:layout_height="42dp"
-            android:layout_marginStart="8dp"
-            android:minWidth="0dp"
-            android:padding="0dp"
-            android:text="＋"
-            android:textSize="18sp"
-            android:textAllCaps="false" />
-    </LinearLayout>
+            <!-- ============ 操作区（折叠时整块隐藏） ============ -->
+            <LinearLayout
+                android:id="@+id/homeOp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical">
 
-    <!-- ============ 过滤 / 计数 ============ -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="16dp"
-        android:paddingEnd="16dp"
-        android:paddingTop="2dp"
-        android:paddingBottom="2dp">
+                <!-- - 网络条 - -->
+                <!-- 手机端 .netbar{flex-direction:column;gap:5px;padding:0 0 2px}
+                     且 .seg.segnet{width:100%}、.netinfo 居中缩到 10.5sp -->
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
 
-        <CheckBox
-            android:id="@+id/ckOnlySub"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:minHeight="0dp"
-            android:minWidth="0dp"
-            android:text="只看已订阅"
-            android:textSize="12sp"
-            android:textColor="?attr/cMuted" />
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:background="@drawable/bg_seg"
+                        android:padding="2dp">
 
-        <TextView
-            android:id="@+id/tgCount"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
+                        <Button
+                            android:id="@+id/btnNetBm"
+                            style="@style/SegButton"
+                            android:paddingTop="7dp"
+                            android:paddingBottom="7dp"
+                            android:paddingStart="9dp"
+                            android:paddingEnd="9dp"
+                            android:text="🌍 国际 BM" />
+
+                        <Button
+                            android:id="@+id/btnNetCn"
+                            style="@style/SegButton"
+                            android:layout_marginStart="2dp"
+                            android:paddingTop="7dp"
+                            android:paddingBottom="7dp"
+                            android:paddingStart="9dp"
+                            android:paddingEnd="9dp"
+                            android:text="🇨🇳 国内 DMR" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/netInfo"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="5dp"
+                        android:paddingBottom="2dp"
+                        android:gravity="center"
+                        android:text="BrandMeister Hoseline"
+                        android:textColor="?attr/cDim"
+                        android:textSize="10.5sp"
+                        android:maxLines="1"
+                        android:ellipsize="end" />
+                </LinearLayout>
+
+                <!-- - 发射条 - -->
+                <!--
+                  .home-top .ptx{padding:0 0 6px} 覆盖掉了 .ptx 自己的 8/12/10，
+                  左右边距由 home-top 的 12dp 统一决定（这是 WebView 版的实测行为，
+                  所以弹窗里量出来的左右边线是 12dp 而不是 8dp）。
+                -->
+                <LinearLayout
+                    android:id="@+id/ptxBar"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:orientation="vertical"
+                    android:paddingBottom="6dp">
+
+                    <!-- 第 1 行：发射到哪个话组 + 连接 / 断开 -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <TextView
+                            style="@style/PtxLabel"
+                            android:text="发射到" />
+
+                        <EditText
+                            android:id="@+id/txTg"
+                            style="@style/PtxTgInput"
+                            android:layout_marginStart="6dp"
+                            android:hint="91"
+                            android:importantForAutofill="no" />
+
+                        <TextView
+                            android:id="@+id/txTgName"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginStart="6dp"
+                            android:text="—"
+                            android:textColor="?attr/cMuted"
+                            android:textSize="11sp"
+                            android:maxLines="1"
+                            android:ellipsize="end"
+                            android:paddingTop="4dp"
+                            android:paddingBottom="4dp" />
+
+                        <Button
+                            android:id="@+id/btnTxConn"
+                            style="@style/BtnSmall"
+                            android:layout_marginStart="6dp"
+                            android:background="@drawable/bg_btn"
+                            android:textColor="#ffffff"
+                            android:text="连接" />
+
+                        <Button
+                            android:id="@+id/btnTxDisc"
+                            style="@style/BtnSmall"
+                            android:layout_marginStart="6dp"
+                            android:text="断开" />
+                    </LinearLayout>
+
+                    <!-- 第 2 行：身份快捷（DMR ID / 主站 / 状态 / 更多设置） -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical">
+
+                        <EditText
+                            android:id="@+id/txIdQuick"
+                            style="@style/PtxInput"
+                            android:layout_width="96dp"
+                            android:layout_weight="0"
+                            android:hint="DMR ID"
+                            android:importantForAutofill="no"
+                            android:fontFamily="monospace"
+                            android:textStyle="bold"
+                            android:letterSpacing="0.03" />
+
+                        <TextView
+                            android:id="@+id/txHostQuick"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:layout_marginStart="6dp"
+                            android:minWidth="0dp"
+                            android:minHeight="32dp"
+                            android:background="@drawable/bg_field"
+                            android:gravity="center_vertical"
+                            android:paddingStart="7dp"
+                            android:paddingEnd="7dp"
+                            android:textColor="?attr/cText"
+                            android:textColorHint="?attr/cDim"
+                            android:textSize="11.5sp"
+                            android:maxLines="1"
+                            android:ellipsize="end"
+                            android:text="—" />
+
+                        <TextView
+                            android:id="@+id/txIdState"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="6dp"
+                            android:maxWidth="78dp"
+                            android:maxLines="1"
+                            android:ellipsize="end"
+                            android:text="未连接"
+                            android:textColor="?attr/cDim"
+                            android:textSize="10sp" />
+
+                        <Button
+                            android:id="@+id/btnTxCfg"
+                            style="@style/BtnSmall"
+                            android:layout_marginStart="6dp"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:text="⚙" />
+                    </LinearLayout>
+
+                    <!-- 提示行 -->
+                    <TextView
+                        android:id="@+id/txHint"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:text="先连接主站，再按住 PTT 说话"
+                        android:textColor="?attr/cMuted"
+                        android:textSize="10.5sp"
+                        android:lineSpacingMultiplier="1.45" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ============ 折叠摘要（折叠时才显示） ============ -->
+            <!--
+              .htsum{height:26px;gap:6px;font-size:11.5px}，默认 display:none。
+              内容：网络缩写 + 状态点 + 谁在说 + 当前发射目标组号。
+              折叠只该省屏幕，不该把收听状态一起藏起来 —— 往下滑看记录时还要能
+              一眼看到有没有人在说话、上一通是谁。
+            -->
+            <LinearLayout
+                android:id="@+id/htSum"
+                android:layout_width="match_parent"
+                android:layout_height="26dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/hsNet"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🌍 BM"
+                    android:textColor="?attr/cText"
+                    android:textSize="11.5sp"
+                    android:textStyle="bold"
+                    android:maxLines="1" />
+
+                <View
+                    android:id="@+id/hsDot"
+                    android:layout_width="7dp"
+                    android:layout_height="7dp"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/dot" />
+
+                <TextView
+                    android:id="@+id/hsTxt"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="6dp"
+                    android:text="守听中"
+                    android:textColor="?attr/cText"
+                    android:textSize="11.5sp"
+                    android:maxLines="1"
+                    android:ellipsize="end" />
+
+                <TextView
+                    android:id="@+id/hsTg"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="6dp"
+                    android:background="@drawable/bg_htsum_tg"
+                    android:paddingStart="6dp"
+                    android:paddingEnd="6dp"
+                    android:paddingTop="1dp"
+                    android:paddingBottom="1dp"
+                    android:text="91"
+                    android:textColor="?attr/cText"
+                    android:textSize="11sp"
+                    android:fontFamily="monospace"
+                    android:maxLines="1" />
+            </LinearLayout>
+
+            <!-- ============ 分栏条 ============ -->
+            <!-- 手机端才显示；和操作区在同一个容器里，操作区换行时不会错位 -->
+            <LinearLayout
+                android:id="@+id/mobNav"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal">
+
+                <Button
+                    android:id="@+id/mcolMine"
+                    style="@style/MobNavButton"
+                    android:text="⭐ 我的收听" />
+
+                <Button
+                    android:id="@+id/mcolLive"
+                    style="@style/MobNavButton"
+                    android:layout_marginStart="5dp"
+                    android:text="📡 实时活动" />
+
+                <Button
+                    android:id="@+id/mcolLib"
+                    style="@style/MobNavButton"
+                    android:layout_marginStart="5dp"
+                    android:text="📚 话组库" />
+            </LinearLayout>
+
+            <!-- ============ 收起操作区 ============ -->
+            <!--
+              .htfold{height:22px;margin-top:-4px;border-top:1px dashed;font-size:11px}
+              折叠后：margin-top:0、去掉虚线、箭头转 180°。
+              「-4dp」是用来抵消 home-top 的 8dp 间距、让虚线和上面那行贴紧。
+            -->
+            <View
+                android:id="@+id/htFoldLine"
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="4dp"
+                android:background="@drawable/dashed_line" />
+
+            <LinearLayout
+                android:id="@+id/htFold"
+                android:layout_width="match_parent"
+                android:layout_height="22dp"
+                android:orientation="horizontal"
+                android:gravity="center"
+                android:clickable="true"
+                android:focusable="true">
+
+                <TextView
+                    android:id="@+id/htFoldIco"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="▴"
+                    android:textColor="?attr/cMuted"
+                    android:textSize="9sp" />
+
+                <TextView
+                    android:id="@+id/htFoldTxt"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="5dp"
+                    android:text="收起操作区"
+                    android:textColor="?attr/cMuted"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <View
+            android:id="@+id/homeTopDivider"
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="?attr/cBorder" />
+
+        <!-- ==================== 列表区（一次只显示一栏） ==================== -->
+        <FrameLayout
+            android:layout_width="match_parent"
+            android:layout_height="0dp"
             android:layout_weight="1"
-            android:gravity="end"
-            android:text=""
-            android:textColor="?attr/cDim"
-            android:textSize="11sp"
-            android:fontFamily="monospace" />
+            android:background="?attr/cBg">
+
+            <!-- - 第 1 栏：⭐ 我的收听 + 扫描/录音/记录 - -->
+            <ScrollView
+                android:id="@+id/colMine"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="96dp"
+                android:clipToPadding="false"
+                android:scrollbars="vertical">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:background="@drawable/bg_card"
+                        android:paddingBottom="8dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="8dp"
+                            android:paddingBottom="8dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="⭐ 我的收听"
+                                android:textColor="?attr/cText"
+                                android:textSize="12.5sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/mineCount"
+                                style="@style/CountPill"
+                                android:layout_marginStart="8dp"
+                                android:text="0" />
+
+                            <View
+                                android:layout_width="0dp"
+                                android:layout_height="1dp"
+                                android:layout_weight="1" />
+
+                            <Button
+                                android:id="@+id/btnAdd"
+                                style="@style/BtnSmall"
+                                android:text="+ 添加话组" />
+                        </LinearLayout>
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:background="?attr/cBorder2" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingTop="8dp">
+
+                            <EditText
+                                android:id="@+id/search"
+                                android:layout_width="0dp"
+                                android:layout_height="36dp"
+                                android:layout_weight="1"
+                                android:background="@drawable/bg_field"
+                                android:paddingStart="10dp"
+                                android:paddingEnd="10dp"
+                                android:hint="输入话组号后回车，如 91 / 2621"
+                                android:textColorHint="?attr/cDim"
+                                android:textColor="?attr/cText"
+                                android:textSize="12sp"
+                                android:inputType="text"
+                                android:imeOptions="actionSearch"
+                                android:singleLine="true" />
+                        </LinearLayout>
+
+                        <ListView
+                            android:id="@+id/tgList"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginTop="6dp"
+                            android:divider="@null"
+                            android:dividerHeight="0dp"
+                            android:scrollbars="none"
+                            android:nestedScrollingEnabled="false" />
+                    </LinearLayout>
+
+                    <!-- 扫描 / 录音 / 记录（Phase 4 才真正有内容，先占位保持版面一致） -->
+                    <LinearLayout
+                        android:id="@+id/tabPanel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:orientation="vertical"
+                        android:background="@drawable/bg_card"
+                        android:paddingBottom="10dp">
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="8dp"
+                            android:paddingBottom="8dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="扫描"
+                                android:textColor="?attr/cAccent"
+                                android:textSize="12.5sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:text="录音"
+                                android:textColor="?attr/cMuted"
+                                android:textSize="12.5sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginStart="10dp"
+                                android:text="记录"
+                                android:textColor="?attr/cMuted"
+                                android:textSize="12.5sp"
+                                android:textStyle="bold" />
+
+                            <View
+                                android:layout_width="0dp"
+                                android:layout_height="1dp"
+                                android:layout_weight="1" />
+
+                            <TextView
+                                android:id="@+id/tabCount"
+                                style="@style/CountPill"
+                                android:text="0" />
+                        </LinearLayout>
+
+                        <View
+                            android:layout_width="match_parent"
+                            android:layout_height="1dp"
+                            android:background="?attr/cBorder2" />
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="10dp"
+                            android:text="扫描 / 录音 / 记录归 Phase 4。设置页里的「自动录音」开关目前只存值，不生成文件。"
+                            android:textColor="?attr/cDim"
+                            android:textSize="11sp"
+                            android:lineSpacingMultiplier="1.4" />
+                    </LinearLayout>
+                </LinearLayout>
+            </ScrollView>
+
+            <!-- - 第 2 栏：📡 实时活动 - -->
+            <ScrollView
+                android:id="@+id/colLive"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="96dp"
+                android:clipToPadding="false"
+                android:scrollbars="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:background="@drawable/bg_card">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="📡 实时活动"
+                            android:textColor="?attr/cText"
+                            android:textSize="12.5sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/liveCount"
+                            style="@style/CountPill"
+                            android:layout_marginStart="8dp"
+                            android:text="0" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:background="?attr/cBorder2" />
+
+                    <LinearLayout
+                        android:id="@+id/liveList"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:padding="8dp" />
+                </LinearLayout>
+            </ScrollView>
+
+            <!-- - 第 3 栏：📚 话组库 - -->
+            <ScrollView
+                android:id="@+id/colLib"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="96dp"
+                android:clipToPadding="false"
+                android:scrollbars="vertical"
+                android:visibility="gone">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:background="@drawable/bg_card">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="10dp"
+                        android:paddingEnd="10dp"
+                        android:paddingTop="8dp"
+                        android:paddingBottom="8dp">
+
+                        <TextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="📚 话组库"
+                            android:textColor="?attr/cText"
+                            android:textSize="12.5sp"
+                            android:textStyle="bold" />
+
+                        <TextView
+                            android:id="@+id/libCount"
+                            style="@style/CountPill"
+                            android:layout_marginStart="8dp"
+                            android:text="0" />
+                    </LinearLayout>
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:background="?attr/cBorder2" />
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="8dp">
+
+                        <EditText
+                            android:id="@+id/libSearch"
+                            android:layout_width="0dp"
+                            android:layout_height="36dp"
+                            android:layout_weight="1"
+                            android:background="@drawable/bg_field"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:hint="搜索话组号 / 名称"
+                            android:textColorHint="?attr/cDim"
+                            android:textColor="?attr/cText"
+                            android:textSize="12sp"
+                            android:inputType="text"
+                            android:imeOptions="actionSearch"
+                            android:singleLine="true" />
+                    </LinearLayout>
+
+                    <ListView
+                        android:id="@+id/libList"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="6dp"
+                        android:divider="@null"
+                        android:dividerHeight="0dp"
+                        android:scrollbars="none"
+                        android:nestedScrollingEnabled="false" />
+                </LinearLayout>
+            </ScrollView>
+        </FrameLayout>
     </LinearLayout>
 
-    <ListView
-        android:id="@+id/tgList"
-        android:layout_width="match_parent"
-        android:layout_height="0dp"
-        android:layout_weight="1"
-        android:divider="@null"
-        android:dividerHeight="0dp"
-        android:scrollbars="vertical" />
-
+    <!-- ==================== 悬浮 PTT ==================== -->
     <!--
-      ============ 按住说话 ============
-
-      放在这一页的最下面，而不是做成悬浮圆钮：悬浮钮会盖住话组列表的最后一两行，
-      而且在这个 LinearLayout 里做「贴底悬浮」要靠 FrameLayout 再套一层。
-      参考设备（ESP32 随身对讲）也是底部一条，按住说话、松开收听。
-
-      左侧那颗「TG 91」是**当前发射目标**，点一下换话组 —— 和收听是同一个概念，
-      用户不需要理解「发射话组」和「收听话组」是两件事。
+      74dp 圆钮，右下角 16/20。显示当前发射目标组号 + "PTT" 字样。
+      未连接时置灰（bg_ptt_off），正在接收 MMDVM 那一路时染绿（bg_ptt_rx）。
     -->
     <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:gravity="center_vertical"
-        android:paddingStart="12dp"
-        android:paddingEnd="12dp"
-        android:paddingTop="6dp"
-        android:paddingBottom="8dp"
-        android:background="?attr/cPanel">
+        android:id="@+id/pttBtn"
+        android:layout_width="74dp"
+        android:layout_height="74dp"
+        android:layout_gravity="bottom|end"
+        android:layout_marginEnd="16dp"
+        android:layout_marginBottom="20dp"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:background="@drawable/bg_ptt_off"
+        android:elevation="8dp"
+        android:clickable="true"
+        android:focusable="true">
 
         <TextView
-            android:id="@+id/pttTg"
-            android:layout_width="wrap_content"
-            android:layout_height="38dp"
-            android:minWidth="66dp"
-            android:gravity="center"
-            android:background="@drawable/bg_inner"
-            android:paddingStart="10dp"
-            android:paddingEnd="10dp"
-            android:text="TG —"
-            android:textColor="?attr/cMuted"
-            android:textSize="12.5sp"
-            android:fontFamily="monospace" />
-
-        <Button
-            android:id="@+id/pttBtn"
-            android:layout_width="0dp"
-            android:layout_height="52dp"
-            android:layout_weight="1"
-            android:layout_marginStart="8dp"
-            android:minWidth="0dp"
-            android:text="按住说话"
-            android:textSize="15sp"
-            android:textStyle="bold"
-            android:textAllCaps="false"
-            android:background="@drawable/bg_btn" />
-
-        <TextView
-            android:id="@+id/pttState"
+            android:id="@+id/pttTgNum"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginStart="10dp"
-            android:text="未连接"
-            android:textColor="?attr/cDim"
-            android:textSize="11sp"
+            android:text="—"
+            android:textColor="#ffffff"
+            android:textSize="15sp"
+            android:textStyle="bold"
             android:fontFamily="monospace"
-            android:maxLines="2" />
+            android:maxLines="1" />
+
+        <TextView
+            android:id="@+id/pttLbl"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="PTT"
+            android:textColor="#ffffff"
+            android:textSize="10sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.15"
+            android:alpha="0.85"
+            android:maxLines="1" />
     </LinearLayout>
-</LinearLayout>
+</FrameLayout>

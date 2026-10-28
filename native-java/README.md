@@ -44,11 +44,14 @@ v2.4.x～v2.5.x 修的「噼啪」「两条路叠着放」「刷新后没声音�
 ```
 app/src/main/java/net/beacon/dmr/
 ├── App.java                 Application：崩溃堆栈落盘 filesDir/last_crash.txt
-├── MainActivity.java        三页壳（收听 / 看板 / 设置）+ 三条链路调度
+├── DmrTx.java                DMRD 帧组装（JNI；★ 必须在 net.beacon.dmr 包，见下）
+├── KeepAliveService.java     前台服务：通知 + WakeLock + WifiLock
+├── MainActivity.java        三页壳（收听 / 看板 / 设置）+ 三条链路调度 + 主页 chrome
 ├── core/
 │   ├── MsgPack.java         MessagePack 编解码（零依赖，够用就好）
 │   ├── MuLaw.java           G.711 μ-law 查表，与 WebView 版逐项一致
 │   ├── Geo.java             话组号前三位 → 国家/地区（134 前缀 + 93 个 ISO）
+│   ├── HostCheck.java       主站地址本地校验（空格/全角/域名格式，能猜回正确写法）
 │   ├── Prefs.java           全部设置项的唯一读写入口（默认值都在这）
 │   ├── Palette.java         主题解析 + 取语义色 + 混色
 │   ├── Talkgroups.java      话组模型 + 订阅 / 自定义组持久化
@@ -60,14 +63,14 @@ app/src/main/java/net/beacon/dmr/
 │   ├── LhClient.java        BrandMeister LH 活动流（Socket.IO 套 Engine.IO）
 │   ├── LiveStore.java       纯 Java 统计：活跃会话 / 走势 / Top10 / 通联记录
 │   └── MasterRepo.java      主站表（40 条，7 天缓存）
-├── mmdvm/                   ← Phase 3：从 android/ 搬过来的，只改了 package 行
+├── mmdvm/                   ← Phase 3：从 android/ 搬过来（JNI 的两个类必须留在原包）
 │   ├── MmdvmSession.java    UDP 62031 握手 / 心跳 / MSTNAK 重试（纯 java.net）
 │   ├── DmrTransmitter.java  麦克风 → AGC → AMBE → DMRD（AudioRecord）
 │   ├── DmrRx.java           DMRD 载荷 → 解交织 → AMBE → PCM（纯 Java）
-│   ├── DmrTx.java           DMRD 帧组装（JNI 到 dmrtx_jni.cpp 的 FEC 链）
 │   ├── DmrDirectory.java    DMR ID ⇄ 呼号（database.radioid.net）
-│   ├── DmrLink.java         ★ 新写的接线层（替代 DmrEngine + DmrAudio）
-│   └── vocoder/Vocoder.java 声码器插件封装（JNI 到 libbeaconvoc.so）
+│   └── DmrLink.java         ★ 新写的接线层（替代 DmrEngine + DmrAudio）
+├── vocoder/
+│   └── Vocoder.java         声码器插件封装（JNI；★ 必须在 net.beacon.dmr.vocoder）
 ├── audio/
 │   ├── AudioChain.java      软限幅 → 增益 → 高通180 → presence → 软削波
 │   └── AudioOut.java        AudioTrack 8 kHz 直出 + 抖动缓冲
@@ -309,6 +312,75 @@ android.os.NetworkOnMainThreadException
 - `onState(ERROR)` 弹一次 Toast；`updateTxDiag()` 改成「状态行 + 读数 + 最近三条日志」，
   状态行在 `onState` 里定死，不再被 4 秒一次的 tick 冲掉。
 
+## 主页 1:1 复刻（alpha5）
+
+上一版的主页只有一个话组列表、一条底部 PTT、一个「只看已订阅」复选框 ——
+那是「把 WebView 版的功能挑几样搬过来」的做法，不是复刻。alpha5 按
+`web/index.html` 的**手机端**规格（`@media(max-width:760px)` 那一档，那才是
+真机看到的）整页重写。
+
+### 结构对齐
+
+| 区块 | WebView 选择器 | 说明 |
+|---|---|---|
+| 顶栏两行 | `.topbar` / `.tbrow` / `.viewtabs` | 页签**从底栏搬到顶栏**，底栏整个删掉 |
+| 警告条 | `.warnbar` | 常驻容器，默认 gone；声码器坏了这类半残状态挂这里 |
+| 播报条 | `.nowbar` / `.np-*` | **从页内提到页外**，三个页面共享 |
+| 可收起操作区 | `.netbar` / `.ptx` / `.htsum` / `.htfold` | 网络切换 + 三行发射条 + 折叠摘要 |
+| 三栏列表 | `.mobnav` / `.grid > .col` | 我的收听 / 实时活动 / 话组库，手机上一次一栏 |
+| 悬浮 PTT | `.pttf` | 74dp 圆钮，右下 16/20，**不是底部条** |
+
+### 几个必须照着做的细节
+
+**顶栏是两行，不是一行。** 桌面端用 `.tbrow{display:contents}` 把两行 DOM
+「摊平」回一行；手机端 `.tbrow{display:flex}` 才真正分成两行。我们只做手机，
+所以直接两行：第 1 行 `📻 + 页签 + 开始收听`，第 2 行 `音量 + 两个状态灯`。
+`.brand .btxt / .sub` 在手机端是 `display:none`，只留 14sp 的 📻。
+
+**播报条在页外。** 它在 WebView 的 DOM 里是 `body` 的直接子级，所以切到看板页
+也还看得见「谁在说话」。放进 `page_listen` 里就做不到这一点。
+
+**左边那条 3dp 竖线用一个独立 View 顶住左墙。** Android 的 shape 不能只画左边，
+而 `.nowbar.live` / `.txing` 只换这条线的颜色。用独立 View 之后宽度恒为 3dp，
+换色时布局不会抖。
+
+**PTT 是悬浮圆钮，而且三态。** 未连接灰渐变（`.ptt:disabled`）、正在接收
+MMDVM 那一路染绿（`.ptt.rx`）、其余红渐变。绿色那档很重要 —— 它让
+「现在有人在说话」在拇指下面就能看见，不用回头看播报条。
+按下时只做 `scale(.94)`，圆钮上的字一个都不换（`.ptt.live` 就是这么做的）。
+
+**「只看已订阅」复选框删掉了。** 上一版把全部 1873 个话组塞进一个列表，
+靠一个复选框筛 —— 那是「一个列表兼两用」。WebView 版本来就分两栏：
+「我的收听」= 订阅，「话组库」= 全部。现在两个列表各管一件事，
+`TgAdapter` 带一个 `data` 参数，两栏共用一个类。
+
+### 折叠只省屏幕，不藏状态
+
+`.home-top.collapsed .home-op{display:none}` + `.htsum{display:flex}`。
+收起后只剩 26dp 的摘要行：网络缩写 + 状态点 + 谁在说 + 当前发射目标。
+**往下滑看记录时还要能一眼看到有没有人在说话、上一通是谁** ——
+所以摘要行不是「缩小版操作区」，是另一套只读信息。
+
+折叠状态存本地（`Prefs.htCollapsed`），箭头转 180°，虚线和负边距一起收掉。
+
+### 新增的色板与 drawable
+
+WebView 的 `--tx` / `--tx2` / `--border2` 在原生侧原来没有，补成
+`cTx` / `cTx2` / `cBorder2` 三个主题属性（`Palette` 里也有对应字段）。
+新增 14 个 drawable：分段容器与选中项、输入框、计数胶囊、话组胶囊、
+回复 / 录音按钮、悬浮 PTT 三态、虚线、摘要组号胶囊。
+
+**踩到的坑：XML 注释里不能出现 `--`。** 写注释时直接抄 CSS 变量名
+（`background:var(--bg)`）会让 `aapt` 报「注释中有不允许的字符串 “--”」，
+而且错误信息指向 `attrs.xml:37`，跟真正出问题的 drawable 差了十万八千里。
+
+### 静态检查
+
+没有 emulator，`findViewById` 返回 null 只会在真机上 NPE。所以加了
+`tools/check_layout.py`，接在出包流程里：Java 里 `R.id.x` 引用的 id 必须在
+某个 layout 里存在、同一 layout 内不能有重复 id、`@drawable/@style/@color/@string`
+引用都要解析得到。当前 134 个 id / 8 个 layout 全部对得上。
+
 ## 看板口径
 
 数字必须和 WebView 版 `dashData()` 对得上（用户两个版本来回切）：
@@ -361,9 +433,16 @@ bash native-java/tests/run.sh      # 125 项，桌面 JDK 直接跑，不需要�
 
 合计 **170 项**。
 
-### 另外还有一道静态检查
+### 另外还有两道静态检查
 
-`tools/check_jni.py` 不在上面这 170 项里，但同样挂在出包流程上（编译之前跑）：
+`tools/check_jni.py` 和 `tools/check_layout.py` 不在上面这 170 项里，
+但同样挂在出包流程上（编译之前跑）。
+
+**`check_layout.py`** 查布局与代码的 id 对应关系 —— `findViewById` 拿不到控件
+不会编译报错，只会在运行时返回 null，往下走一步就是 NPE。本工程没有 emulator，
+这是唯一能在桌面上拦住它的地方。
+
+**`check_jni.py`** 查 JNI 符号：
 扫所有 `native` 方法声明，按 JNI 规则拼出符号名，逐个 ABI 比对 `.so` 的 `.dynsym`。
 对不上就直接失败。
 
@@ -378,6 +457,7 @@ bash native-java/tests/run.sh      # 125 项，桌面 JDK 直接跑，不需要�
 - [x] **Phase 1** 看板（6 数字卡 / 走势 / 实时活动 / 4×Top10 / 通话构成 / 通联记录）
 - [x] **Phase 2** 设置（外观三档 / 音量 / 增强 / 窄带 / 保持唤醒 / 扫描 / 音频自检 / 关于）
 - [x] **Phase 3** 收发（MMDVM 会话 + 声码器 + FEC 链 + 按住说话 + 收发设置卡 + 三份自检）
+- [x] **Phase 3.5** 主页 1:1 复刻（顶栏两行 / 播报条 / 可收起操作区 / 三栏列表 / 悬浮 PTT）
 - [ ] Phase 4 录音 / 呼号库 / 国内 radiowo 链路
 - [ ] Phase 5 对齐后改回 `net.beacon.dmr`，替代 WebView 版
 

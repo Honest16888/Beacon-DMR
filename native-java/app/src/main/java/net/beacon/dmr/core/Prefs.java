@@ -51,6 +51,30 @@ public final class Prefs {
         sp(c).edit().putBoolean("simple", on).apply();
     }
 
+    /**
+     * 主页那片操作区（网络条 + 发射条）是否已收起。
+     *
+     * <p>默认展开。收起是个纯视觉偏好，但值得存：屏幕小的机型上它能把
+     * 列表多露四五行出来，用户第一次收起就不想每次都收一遍。
+     */
+    public static boolean htCollapsed(Context c) {
+        return sp(c).getBoolean("ht.collapsed", false);
+    }
+
+    public static void setHtCollapsed(Context c, boolean on) {
+        sp(c).edit().putBoolean("ht.collapsed", on).apply();
+    }
+
+    /** 上次停在主页的哪一栏：0 我的收听 / 1 实时活动 / 2 话组库。 */
+    public static int mcol(Context c) {
+        int v = sp(c).getInt("ht.mcol", 0);
+        return v < 0 || v > 2 ? 0 : v;
+    }
+
+    public static void setMcol(Context c, int v) {
+        sp(c).edit().putInt("ht.mcol", Math.max(0, Math.min(2, v))).apply();
+    }
+
     /* ==================== 收听与音频 ==================== */
 
     /** 0~150。100 = 原始电平，>100 靠 DSP 增益推上去。 */

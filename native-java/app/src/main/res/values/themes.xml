@@ -22,6 +22,7 @@
         <item name="cPanel">@color/l_panel</item>
         <item name="cPanel2">@color/l_panel2</item>
         <item name="cBorder">@color/l_border</item>
+        <item name="cBorder2">@color/l_border2</item>
         <item name="cText">@color/l_text</item>
         <item name="cMuted">@color/l_muted</item>
         <item name="cDim">@color/l_dim</item>
@@ -30,6 +31,8 @@
         <item name="cOk">@color/l_ok</item>
         <item name="cWarn">@color/l_warn</item>
         <item name="cBad">@color/l_bad</item>
+        <item name="cTx">@color/l_tx</item>
+        <item name="cTx2">@color/l_tx2</item>
 
         <item name="android:windowBackground">@color/l_bg</item>
         <item name="android:colorBackground">@color/l_bg</item>
@@ -48,6 +51,7 @@
         <item name="cPanel">@color/d_panel</item>
         <item name="cPanel2">@color/d_panel2</item>
         <item name="cBorder">@color/d_border</item>
+        <item name="cBorder2">@color/d_border2</item>
         <item name="cText">@color/d_text</item>
         <item name="cMuted">@color/d_muted</item>
         <item name="cDim">@color/d_dim</item>
@@ -56,6 +60,8 @@
         <item name="cOk">@color/d_ok</item>
         <item name="cWarn">@color/d_warn</item>
         <item name="cBad">@color/d_bad</item>
+        <item name="cTx">@color/d_tx</item>
+        <item name="cTx2">@color/d_tx2</item>
 
         <item name="android:windowBackground">@color/d_bg</item>
         <item name="android:colorBackground">@color/d_bg</item>
@@ -149,5 +155,129 @@
         <item name="android:minHeight">0dp</item>
         <item name="android:paddingTop">7dp</item>
         <item name="android:paddingBottom">7dp</item>
+    </style>
+
+    <!-- ==================== 主页（1:1 复刻 WebView 版） ==================== -->
+
+    <!--
+      分段控件里的一颗（顶栏三个视图页签、网络切换两颗）。
+
+      数值来自 web/index.html 手机端 @media(max-width:760px)：
+        .viewtabs button{flex:1 1 0;min-width:0;padding:5px 6px;font-size:12px}
+        .seg.segnet button{flex:1 1 0;padding:7px 9px;font-size:12px}
+      padding 差 2dp，这里取 6dp 折中；两处视觉上本来就几乎一样。
+      背景与文字颜色由代码按选中态切（bg_seg_on / 透明）。
+    -->
+    <style name="SegButton">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:background">@android:color/transparent</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">0dp</item>
+        <item name="android:paddingStart">6dp</item>
+        <item name="android:paddingEnd">6dp</item>
+        <item name="android:paddingTop">5dp</item>
+        <item name="android:paddingBottom">5dp</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textColor">?attr/cMuted</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:ellipsize">end</item>
+    </style>
+
+    <!-- 小节标签（「发射到」）：.ptxlab{font-size:10.5px;color:var(-muted);font-weight:600} -->
+    <style name="PtxLabel">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:textSize">10.5sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">?attr/cMuted</item>
+        <item name="android:singleLine">true</item>
+    </style>
+
+    <!--
+      发射条里的输入框。
+      .ptxin{padding:6px 7px;font-size:11.5px;border:1px solid;border-radius:8px}
+      高度交给 padding 撑，不写死 —— 中文字体行高在不同 ROM 上差 1~2dp，
+      写死 40dp 之后要么字被裁、要么上下留白不均。
+    -->
+    <style name="PtxInput">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:background">@drawable/bg_field</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">32dp</item>
+        <item name="android:paddingStart">7dp</item>
+        <item name="android:paddingEnd">7dp</item>
+        <item name="android:paddingTop">6dp</item>
+        <item name="android:paddingBottom">6dp</item>
+        <item name="android:textSize">11.5sp</item>
+        <item name="android:textColor">?attr/cText</item>
+        <item name="android:textColorHint">?attr/cDim</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:inputType">number</item>
+    </style>
+
+    <!-- 话组号输入框：定宽 66dp + 等宽粗体居中（.ptxtg） -->
+    <style name="PtxTgInput" parent="PtxInput">
+        <item name="android:layout_width">66dp</item>
+        <item name="android:layout_weight">0</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textSize">12.5sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:gravity">center</item>
+    </style>
+
+    <!-- 发射条里的小按钮（连接 / 断开 / ⚙）：.btn.sm + 手机端 min-height:28dp -->
+    <style name="BtnSmall">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">32dp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">0dp</item>
+        <item name="android:paddingStart">9dp</item>
+        <item name="android:paddingEnd">9dp</item>
+        <item name="android:paddingTop">0dp</item>
+        <item name="android:paddingBottom">0dp</item>
+        <item name="android:textSize">11.5sp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:background">@drawable/bg_btn_small</item>
+        <item name="android:textColor">?attr/cText</item>
+    </style>
+
+    <!-- 连续两栏的分栏按钮（⭐ 我的收听 / 📡 实时活动 / 📚 话组库） -->
+    <style name="MobNavButton">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:minHeight">34dp</item>
+        <item name="android:paddingStart">5dp</item>
+        <item name="android:paddingEnd">5dp</item>
+        <item name="android:paddingTop">7dp</item>
+        <item name="android:paddingBottom">7dp</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:textColor">?attr/cMuted</item>
+        <item name="android:background">@drawable/bg_btn_small</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:ellipsize">end</item>
+    </style>
+
+    <!-- 面板标题栏右侧的计数胶囊 -->
+    <style name="CountPill">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:background">@drawable/bg_pill</item>
+        <item name="android:paddingStart">7dp</item>
+        <item name="android:paddingEnd">7dp</item>
+        <item name="android:minWidth">0dp</item>
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textSize">11sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">?attr/cMuted</item>
     </style>
 </resources>

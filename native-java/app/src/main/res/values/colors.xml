@@ -15,6 +15,7 @@
     <color name="l_panel">#ffffff</color>
     <color name="l_panel2">#f7f9fb</color>
     <color name="l_border">#dde3ea</color>
+    <color name="l_border2">#e8edf3</color>
     <color name="l_text">#12161c</color>
     <color name="l_muted">#67707e</color>
     <color name="l_dim">#93a0b0</color>
@@ -23,12 +24,16 @@
     <color name="l_ok">#12a150</color>
     <color name="l_warn">#d9822b</color>
     <color name="l_bad">#c22a2f</color>
+    <!-- 发射红：PTT 钮、正在发射的话组、录音按钮都用它 -->
+    <color name="l_tx">#e5484d</color>
+    <color name="l_tx2">#fdecec</color>
 
     <!-- ==================== 深色 ==================== -->
     <color name="d_bg">#0f1216</color>
     <color name="d_panel">#171b21</color>
     <color name="d_panel2">#1e232b</color>
     <color name="d_border">#2a313b</color>
+    <color name="d_border2">#232932</color>
     <color name="d_text">#e8edf4</color>
     <color name="d_muted">#8d97a5</color>
     <color name="d_dim">#66707e</color>
@@ -37,6 +42,8 @@
     <color name="d_ok">#3dd68c</color>
     <color name="d_warn">#f0a44a</color>
     <color name="d_bad">#ff7b80</color>
+    <color name="d_tx">#ff5c62</color>
+    <color name="d_tx2">#3a1d1f</color>
 
     <!-- ==================== 与主题无关 ==================== -->
     <!-- 启动图标渐变。和 WebView 版保持一致，两个 App 并排装在桌面上

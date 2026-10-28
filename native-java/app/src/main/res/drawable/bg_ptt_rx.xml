@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 悬浮 PTT 钮（正在接收 MMDVM 那一路）：染绿，和「正在发射」的红一眼区分 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <gradient
+        android:type="radial"
+        android:gradientRadius="72%p"
+        android:centerX="0.5"
+        android:centerY="0.34"
+        android:startColor="#4fd08a"
+        android:endColor="#1f9e5f" />
+</shape>

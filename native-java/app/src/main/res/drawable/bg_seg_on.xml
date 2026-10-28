@@ -1,6 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 分段控件里「选中」那一颗。文字颜色在代码里一起改（Palette.accent）。 -->
+<!--
+  分段控件里「选中」那一颗。
+
+  WebView 版：.viewtabs button.on{background:var(-panel); color:var(-accent);
+  box-shadow:0 1px 2px rgba(0,0,0,.08); border-radius:7px}
+  深色下底色换成 -accent2，这里统一用 cPanel —— 深色下它本来就比 cBg 亮，
+  选中态看得出来，而且少一条「按主题分叉」的分支。
+-->
 <shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
-    <solid android:color="?attr/cAccentWeak" />
-    <corners android:radius="8dp" />
+    <solid android:color="?attr/cPanel" />
+    <corners android:radius="7dp" />
 </shape>

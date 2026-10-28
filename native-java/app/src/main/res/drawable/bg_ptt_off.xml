@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 悬浮 PTT 钮（未连接 / 不可用）：灰渐变 + 不投影 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <gradient
+        android:type="radial"
+        android:gradientRadius="72%p"
+        android:centerX="0.5"
+        android:centerY="0.34"
+        android:startColor="#b9c2cd"
+        android:endColor="#8b95a3" />
+</shape>
