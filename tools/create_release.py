@@ -84,9 +84,20 @@ def api(method, path, token, body=None, raw=None, content_type='application/json
 
 
 def guess_notes(version):
+    """按历史命名习惯推发布说明路径。
+
+    历来的写法不统一：2.4.10 → release_notes_2410.md（去点），
+    而 2.5.0 → release_notes_25.md（去掉末尾的 .0）。两种都试。
+    """
     root = repo_root()
-    cand = os.path.join(root, 'dist', 'release_notes_%s.md' % version.replace('.', ''))
-    return cand if os.path.isfile(cand) else None
+    cands = [version.replace('.', ''), version]
+    if version.endswith('.0'):
+        cands.append(version[:-2].replace('.', ''))
+    for c in cands:
+        p = os.path.join(root, 'dist', 'release_notes_%s.md' % c)
+        if os.path.isfile(p):
+            return p
+    return None
 
 
 def main():
