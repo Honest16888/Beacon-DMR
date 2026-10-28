@@ -133,14 +133,13 @@ public final class MmdvmSession {
     /** 握手停滞多久就从头重来（UDP 会丢包，RPTK/RPTC 丢了不能干等） */
     private static final int STALL_MS = 8000;
 
-    /**
-     * 已连接后多久收不到 MSTPONG 就判定链路已死。
+    /* 判定「链路已死」的实际时长不再是独立常量，而是
+     * PONG_MISS_LIMIT × PING_INTERVAL_MS（12 × 5 秒 = 60 秒）。
      *
-     * <p>取 25 秒 = 5 个 ping 周期，够容忍偶尔丢一两个 pong，
-     * 又不会让「主站悄悄踢掉我们」这种情况永远停在「已连接」。
-     * <b>仅当本次会话收到过 pong 才启用</b>，见 {@link #pingLoop()}。
-     */
-    private static final int PONG_TIMEOUT_MS = 25000;
+     * 原来这里有个 PONG_TIMEOUT_MS = 25000，但 pingLoop 从头到尾没用它 ——
+     * 判据早就改成数 ping 个数了，那个常量只剩一句「25 秒」的过期说明，
+     * 日志里也照着它打，于是日志说 25 秒、代码实际给 60 秒。
+     * 现在日志直接按公式算，两处不会再对不上。 */
 
     /**
      * 连续发多少个 RPTPING 没换回 MSTPONG 才算真断。
@@ -153,8 +152,14 @@ public final class MmdvmSession {
      *
      * <p>换成数「发了几个 ping 还没回」就免疫这个问题：进程被冻结时
      * 计数不会增长，只有真的发了 5 个 ping 都没回应才判定断开。
+     *
+     * <p>★ v2.4.8 从 5 提到 12。用户反馈「长时间连着不发射，会提示心跳超时」——
+     * 挂机守听时本来就一个包都没有，此时「没收到 pong」和「链路断了」在本地
+     * 观测上是同一个现象。5 个 ping = 25 秒，在移动网络上一串丢包就够凑满，
+     * 于是明明好好的却被判死。12 个 = 60 秒，容忍度高得多，而真断线最迟
+     * 一分钟也能自己恢复 —— 守听场景下这个延迟完全可接受。
      */
-    private static final int PONG_MISS_LIMIT = 5;
+    private static final int PONG_MISS_LIMIT = 12;
 
     public enum State {
         /** 未连接 */
@@ -1501,7 +1506,7 @@ public final class MmdvmSession {
             /* 第一次收到 pong 很关键：它决定 pingLoop 里的「心跳超时」判断要不要启用。
              * 有些主站根本不回 MSTPONG，对它们做超时判断会变成每 25 秒自杀一次。 */
             if (first) log("收到主站 MSTPONG，心跳正常 —— 之后连续 "
-                    + (PONG_TIMEOUT_MS / 1000) + " 秒收不到才判定链路断开");
+                    + (PONG_MISS_LIMIT * PING_INTERVAL_MS / 1000) + " 秒收不到才判定链路断开");
             if (listener != null) listener.onPong(pongCount);
             return;
         }
@@ -1523,6 +1528,14 @@ public final class MmdvmSession {
             }
             dmrdSeqLast = seq;
             dmrdRxCount++;
+            /* ★ 收到任何 DMRD 都说明链路是活的，把「漏 pong」的账一起清了。
+             *
+             * 原来只有 MSTPONG 才清零。挂机守听时主站偶尔连续丢几个 pong
+             * （或者干脆少回几个），但只要还有人说话、DMRD 一直在到，
+             * 链路就百分百是通的 —— 这时候判「心跳超时」去重连纯属自找麻烦。
+             * 收到别人的语音包是比 pong 更硬的存活证据。 */
+            pingsSincePong = 0;
+            lastPongMs = System.currentTimeMillis();
 
             int srcId = ((buf[5] & 0xFF) << 16) | ((buf[6] & 0xFF) << 8) | (buf[7] & 0xFF);
             int dstId = ((buf[8] & 0xFF) << 16) | ((buf[9] & 0xFF) << 8) | (buf[10] & 0xFF);
@@ -1617,14 +1630,14 @@ public final class MmdvmSession {
                 continue;
             }
 
-            byte[] ping = new byte[11];
-            ping[0] = 'R'; ping[1] = 'P'; ping[2] = 'T';
-            ping[3] = 'P'; ping[4] = 'I'; ping[5] = 'N'; ping[6] = 'G';
-            putBE32(ping, 7, loginId);
-            send(ping);
-            pingsSincePong++;
-
-            /* 链路存活判断。
+            /* 链路存活判断 —— 必须放在**发下一个 ping 之前**。
+             *
+             * ★ v2.4.8 把这段从「发完再判」挪到「发之前判」。
+             * 原来的顺序是 send → 计数 +1 → 立刻判，于是第 12 个 ping 刚发出去
+             * 就被算成「没回」，它的 pong 根本还没机会到 —— 等于凭空少容忍一个周期，
+             * 而且最后一个 ping 永远白发。
+             *
+             * 挪到前面之后，每个 ping 都有完整的一个间隔去等它的 pong。
              *
              * 之所以把「已建立的会话收到的 MSTNAK」一律忽略（见 handle），是因为那种
              * NAK 大多是延迟到达的旧报文；代价是万一主站真的把我们悄悄踢了，
@@ -1633,7 +1646,7 @@ public final class MmdvmSession {
              *
              * ⚠ 两个前提，缺一个就会误杀：
              *   ① 本次会话收到过至少一个 pong —— 有些主站根本不回 MSTPONG，
-             *      对它们做超时判断会变成每 25 秒自杀一次；
+             *      对它们做超时判断会变成每分钟自杀一次；
              *   ② 用「发了几个 ping」而不是「墙上时钟过了多久」——
              *      熄屏后进程被冻结，时钟照走而 ping 没发，用时间判断必然误判。 */
             if (lastPongMs > 0 && pingsSincePong >= PONG_MISS_LIMIT) {
@@ -1648,6 +1661,13 @@ public final class MmdvmSession {
                 scheduleReconnect();
                 return;
             }
+
+            byte[] ping = new byte[11];
+            ping[0] = 'R'; ping[1] = 'P'; ping[2] = 'T';
+            ping[3] = 'P'; ping[4] = 'I'; ping[5] = 'N'; ping[6] = 'G';
+            putBE32(ping, 7, loginId);
+            send(ping);
+            pingsSincePong++;
         }
     }
 

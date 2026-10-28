@@ -17,7 +17,11 @@ const CHROME = process.env.CHROME_PATH || (
       ? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
       : '/usr/bin/google-chrome'
 );
-const PAGE = pathToFileURL(path.join(ROOT, 'web', 'dmr-listener.html')).href;
+/* ★ 读 web/index.html —— 发布流程就是把工作区的 dmr-listener.html 同步成它。
+ * 以前这里读的是 web/dmr-listener.html，那是另一份**过期的副本**
+ * （停在 r2026.11.14），跑测试全过，实际测的却是三版之前的代码。
+ * 两个文件并存迟早再次搞混，所以那个副本已经删掉，只留一个真源。 */
+const PAGE = pathToFileURL(path.join(ROOT, 'web', 'index.html')).href;
 const OUT = os.tmpdir();
 const PROFILE = path.join(os.tmpdir(), 'beacon-dmr-ui-' + Date.now());
 const PORT = 9342;

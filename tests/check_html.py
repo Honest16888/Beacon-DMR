@@ -1,7 +1,9 @@
 import re, sys, io, os, subprocess, json, collections
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-P = os.path.join(ROOT, 'web', 'dmr-listener.html')
+# 只认 web/index.html —— 发布流程把工作区的 dmr-listener.html 同步成它。
+# 以前这里还有一份 web/dmr-listener.html 的旧副本，测试跑的是三版之前的代码。
+P = os.path.join(ROOT, 'web', 'index.html')
 html = io.open(P, encoding='utf-8').read()
 
 # ---- 1. 抽出所有 <script> 块 ----

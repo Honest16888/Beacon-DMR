@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.app.Activity;
 import android.content.ContentValues;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
@@ -166,10 +167,12 @@ public class MainActivity extends Activity {
             exitApp();
             return;
         }
-        // 资料弹窗开着时，返回键先关弹窗，不直接退出
+        // 资料弹窗 / 条款弹窗开着时，返回键先关弹窗，不直接退出
         web.evaluateJavascript(
                 "(function(){var m=document.getElementById('stationModal');"
                         + "if(m&&m.classList.contains('show')){m.classList.remove('show');return 1;}"
+                        + "var g=document.getElementById('legalModal');"
+                        + "if(g&&g.classList.contains('show')){g.classList.remove('show');return 1;}"
                         + "return 0;})()",
                 value -> {
                     if (!"1".equals(value)) exitApp();
@@ -463,6 +466,81 @@ public class MainActivity extends Activity {
                         .getPackageInfo(getPackageName(), 0).versionName;
             } catch (Exception e) {
                 return "?";
+            }
+        }
+
+        /* ==================== 设置持久化 ==================== */
+
+        /**
+         * 页面设置的<b>第二份副本</b>，存在原生 SharedPreferences 里。
+         *
+         * <p>页面跑在 https://appassets.androidplatform.net 上，localStorage 本身是可用的，
+         * 但那份数据归 WebView 管 —— 系统 WebView / Chrome 升级或降级、应用被「清除数据」
+         * 时会被一起丢掉。用户看到的现象就是「每次更新完，麦克风增益又回到 0 了」。
+         *
+         * <p>SharedPreferences 是应用自己的私有文件，和 WebView 的数据目录毫无关系，
+         * WebView 怎么换版本都碰不到它。页面启动时若发现 localStorage 少了某个键就从这里
+         * 回填，写入时两边都写，互为备份。
+         *
+         * <p>键名直接用页面里 localStorage 的完整键名（带 {@code dmr.} 前缀），
+         * 两边一一对应，不用再维护一张映射表。
+         */
+        private static final String PREF_FILE = "dmr-settings";
+
+        /**
+         * 一次性取出全部设置，给页面在启动时做整表回填。
+         *
+         * <p>为什么不能只靠逐键 {@link #prefsGet}：页面只有在<b>真的读过</b>某个键时
+         * 才会去问原生，而 calls、scanList 这类是「读出来发现空、随后又按空值写回去」的，
+         * 等它想起来问的时候已经被空值覆盖了。整表先灌一遍就没这个顺序问题。
+         *
+         * @return JSON 对象（键 → 原始字符串），失败返回 {@code "{}"}
+         */
+        @JavascriptInterface
+        public String prefsAll() {
+            try {
+                Map<String, ?> all = getSharedPreferences(PREF_FILE, MODE_PRIVATE).getAll();
+                JSONObject o = new JSONObject();
+                for (Map.Entry<String, ?> e : all.entrySet()) {
+                    Object v = e.getValue();
+                    if (v instanceof String) o.put(e.getKey(), (String) v);
+                }
+                return o.toString();
+            } catch (Throwable t) {
+                return "{}";
+            }
+        }
+
+        /** 读单个键，没有则返回空串（空串在页面侧等价于「没有」） */
+        @JavascriptInterface
+        public String prefsGet(String key) {
+            if (key == null || key.isEmpty()) return "";
+            try {
+                String v = getSharedPreferences(PREF_FILE, MODE_PRIVATE).getString(key, "");
+                return v == null ? "" : v;
+            } catch (Throwable t) {
+                return "";
+            }
+        }
+
+        /**
+         * 写单个键。{@code val} 传 null 表示删除。
+         *
+         * <p>用 {@code commit()} 而不是 {@code apply()}：设置项都很小，写盘代价可以忽略，
+         * 而 apply() 是异步的 —— 用户改完增益立刻被系统杀进程，那一笔就没了。
+         * 这个方法跑在 WebView 的 JavaBridge 线程上，阻塞不到界面。
+         */
+        @JavascriptInterface
+        public boolean prefsSet(String key, String val) {
+            if (key == null || key.isEmpty()) return false;
+            try {
+                SharedPreferences.Editor ed =
+                        getSharedPreferences(PREF_FILE, MODE_PRIVATE).edit();
+                if (val == null) ed.remove(key);
+                else ed.putString(key, val);
+                return ed.commit();
+            } catch (Throwable t) {
+                return false;
             }
         }
 

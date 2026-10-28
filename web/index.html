@@ -43,12 +43,19 @@ button{cursor:pointer;border:none;background:none;padding:0}
 .brand{display:flex;align-items:baseline;gap:8px;font-weight:700;font-size:15px;letter-spacing:.2px}
 .brand .em{font-size:17px}
 .brand .sub{font-weight:400;font-size:11px;color:var(--dim)}
-.viewtabs{display:flex;gap:2px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:2px}
+/* ★ v2.4.8 重排：这三个页签原来是「文字多宽就多宽」，中间夹着品牌名和
+   「开始收听」，看上去是散的。改成等宽分段控件 —— 按钮 flex:1、统一
+   min-width、圆角收进容器内侧、激活项用主色填充，三个才像一个整体。 */
+.viewtabs{display:flex;gap:3px;background:var(--bg);border:1px solid var(--border);
+  border-radius:10px;padding:3px;flex:none}
 html[data-theme="dark"] .viewtabs{background:var(--panel2)}
-.viewtabs button{padding:5px 13px;border-radius:6px;font-size:12.5px;color:var(--muted);font-weight:600;transition:.14s}
+.viewtabs button{flex:1 1 0;display:inline-flex;align-items:center;justify-content:center;gap:5px;
+  min-width:74px;padding:5px 12px;border-radius:7px;font-size:12.5px;line-height:1.35;
+  color:var(--muted);font-weight:600;transition:.14s;white-space:nowrap}
 .viewtabs button:hover{color:var(--text)}
 .viewtabs button.on{background:var(--panel);color:var(--accent);box-shadow:0 1px 2px rgba(0,0,0,.08)}
 html[data-theme="dark"] .viewtabs button.on{background:var(--accent2)}
+.viewtabs .vico{font-size:13px;line-height:1}
 .status{display:flex;gap:12px;align-items:center;font-size:11.5px;color:var(--muted);min-width:0}
 .status .stat{color:var(--dim);overflow:hidden;text-overflow:ellipsis}
 .st{display:flex;align-items:center;gap:5px;white-space:nowrap}
@@ -461,8 +468,8 @@ canvas{display:block;width:100%}
   .brand{font-size:0}
   .brand .em{font-size:20px}
   .brand .btxt,.brand .sub{display:none}
-  .viewtabs{flex:none;padding:2px}
-  .viewtabs button{padding:5px 8px;font-size:12px}
+  .viewtabs{flex:1 1 auto;padding:3px;gap:3px;min-width:0}
+  .viewtabs button{flex:1 1 0;min-width:0;padding:5px 6px;font-size:12px}
   .vico{display:none}   /* 藏掉页签 emoji，给四个页签腾出宽度 */
   .spacer{flex:1;min-width:0}
   .volwrap{flex:1;min-width:0;gap:6px;padding:0}
@@ -1006,7 +1013,67 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
 .foot .fb b{font-family:var(--mono);color:var(--accent);letter-spacing:.4px}
 .foot .fc{font-size:11px;color:var(--dim);margin-top:2px}
 .foot .fc b{font-family:var(--mono);color:var(--muted)}
+/* 法律条款入口：三枚文字按钮，故意做成「链接」而不是按钮的观感 ——
+   它们是附注，不该和页面上真正要点的操作抢注意力。 */
+.foot .flinks{margin-top:9px;display:flex;align-items:center;justify-content:center;
+  flex-wrap:wrap;gap:6px;font-size:11.5px;color:var(--dim)}
+.foot .flinks button{color:var(--muted);text-decoration:underline;text-underline-offset:2px;
+  font-size:11.5px;padding:2px 1px;border-radius:4px}
+.foot .flinks button:hover{color:var(--accent)}
+.foot .fc2{font-size:10.5px;color:var(--dim);margin-top:4px;opacity:.85}
+/* 条款正文：只读长文，行距放宽，标题分级 */
+.legal .mb h4{margin:14px 0 5px;font-size:12.5px;color:var(--text)}
+.legal .mb h4:first-child{margin-top:0}
+.legal .mb p{margin:0 0 8px;font-size:12px;line-height:1.75;color:var(--muted)}
+.legal .mb ul{margin:0 0 8px;padding-left:18px;font-size:12px;line-height:1.75;color:var(--muted)}
+.legal .mb li{margin-bottom:4px}
+.legal .mb b{color:var(--text)}
+.legal .mb .lv{margin-top:14px;padding-top:10px;border-top:1px solid var(--border2);
+  font-size:11px;color:var(--dim)}
 @media(max-width:760px){.foot{margin:0 8px 12px}}
+
+/* ===================== 简洁模式（v2.4.8） =====================
+   目标只有一个：把「守听 + 按住说话」之外的东西全部让开。
+   保留：操作区（可折叠）、我的收听、PTT、顶栏。
+   让开：看板入口、实时活动栏、话组库那两栏、录音/扫描面板默认折叠。 */
+body.simple .viewtabs button[data-view="dash"]{display:none}
+body.simple .col-mid{display:none}
+body.simple .grid{grid-template-columns:minmax(285px,1fr) minmax(300px,1.05fr)}
+body.simple .foot .fc{display:none}
+@media(max-width:760px){
+  body.simple .mobnav button[data-mcol="1"]{display:none}
+  body.simple .grid{grid-template-columns:1fr}
+}
+
+/* ===================== 面板折叠（v2.4.8） =====================
+   扫描 / 录音 / 记录 那块面板原来永远展开，手机上一个列表只剩两三行可见。
+   标题栏加一枚折叠钮，收起后只留标题行。 */
+.panel .ph .pfold{flex:none;display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:24px;margin-left:6px;border-radius:6px;border:1px solid var(--border);
+  background:var(--panel2);color:var(--muted);font-size:11px;line-height:1;transition:.15s}
+.panel .ph .pfold:hover{color:var(--accent);border-color:var(--accent)}
+.panel.folded .pfold .pfi{transform:rotate(180deg);display:inline-block}
+.panel.folded #tabTools,.panel.folded #tabBody{display:none}
+.panel.folded .ph{border-bottom:none}
+
+/* ===================== 我的收听：静音 + 长按拖动排序（v2.4.8） ===================== */
+/* 被静音的行整体压暗，但话组号和名字仍然看得清 —— 静音是「不播」，
+   不是「从列表里消失」，用户还得能找到它并解除。 */
+#mineList .row.muted .tgnum,#mineList .row.muted .tgname{color:var(--dim)}
+#mineList .row.muted .lamp{background:var(--dim);box-shadow:none}
+#mineList .row.muted .mini[data-act="mute"]{color:var(--tx);border-color:#f0c2c4}
+/* 长按拖动：抬起来的那一行跟着手指走（用 transform 而非改定位，
+   避免和列表的滚动容器打架），其余行保持原位，松手才重排。 */
+#mineList .row.lift{position:relative;z-index:6;background:var(--panel);
+  border-radius:8px;box-shadow:0 10px 26px rgba(16,24,40,.22);transform:scale(1.02);
+  transition:box-shadow .12s,transform .12s}
+#mineList .row.dgsrc{opacity:.35}
+body.dragging,#mineList .row.lift{cursor:grabbing}
+body.dragging{user-select:none;-webkit-user-select:none}
+body.dragging #mineList{overflow:visible}
+/* 排序提示：只在拖动时出现的一行小字 */
+.dghint{display:none;font-size:11px;color:var(--dim);padding:4px 10px 6px}
+body.dragging .dghint{display:block}
 </style>
 </head>
 <body>
@@ -1017,9 +1084,9 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
   <div class="tbrow">
     <div class="brand"><span class="em">📻</span><span class="btxt">DMR 收听台</span><span class="sub">BrandMeister Hoseline</span></div>
     <div class="viewtabs" id="viewTabs">
-      <button data-view="listen" class="on"><span class="vico">🎧</span> 主页</button>
-      <button data-view="dash"><span class="vico">📊</span> 看板</button>
-      <button data-view="settings"><span class="vico">⚙️</span> 设置</button>
+      <button data-view="listen" class="on"><span class="vico">🎧</span>主页</button>
+      <button data-view="dash"><span class="vico">📊</span>看板</button>
+      <button data-view="settings"><span class="vico">⚙️</span>设置</button>
     </div>
     <div class="spacer"></div>
     <button class="btn pri" id="btnPlay">🔊 开始收听</button>
@@ -1144,7 +1211,7 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
           <div class="pb" id="mineList"></div>
         </section>
 
-        <section class="panel">
+        <section class="panel" id="tabPanel">
           <div class="ph">
             <div class="tabs" id="tabTabs" style="border:none;background:transparent;padding:0">
               <button data-tab="scan" class="on">扫描</button>
@@ -1153,13 +1220,17 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
             </div>
             <div class="spacer"></div>
             <span class="n" id="tabCount">0</span>
+            <!-- 折叠钮：手机上一个列表只剩两三行可见，收起后能把屏幕全让给列表。
+                 状态存本地，下次进来还是收起的。 -->
+            <button class="pfold" id="tabFold" type="button" aria-expanded="true"
+                    aria-label="收起或展开扫描录音面板"><span class="pfi">▴</span></button>
           </div>
           <div id="tabTools"></div>
           <div class="pb" id="tabBody"></div>
         </section>
       </div>
 
-      <div class="col">
+      <div class="col col-mid">
         <section class="panel">
           <div class="ph"><h2>📡 实时活动</h2><span class="n" id="liveCount">0</span>
             <div class="spacer"></div>
@@ -1201,10 +1272,16 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
     <span class="pttl" id="pttLbl">PTT</span>
   </button>
 
-  <!-- 首页页脚：作者署名 + 开源许可提示。 -->
+  <!-- 首页页脚：作者署名 + 开源许可 + 法律条款入口。 -->
   <div class="foot">
     <div class="fb">信标 DMR 收听台 · Design by <b>BH6RGQ</b></div>
     <div class="fc">开源项目 · 代码以 <b>GPL-3.0</b> 发布 · 界面设计署名 BH6RGQ</div>
+    <div class="flinks">
+      <button type="button" data-legal="terms">用户协议</button><span>·</span>
+      <button type="button" data-legal="privacy">隐私政策</button><span>·</span>
+      <button type="button" data-legal="risk">风险提示</button>
+    </div>
+    <div class="fc2">继续使用即表示你已阅读并同意以上全部条款</div>
   </div>
 </div>
 
@@ -1256,6 +1333,11 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
           <button data-val="light">浅色</button>
           <button data-val="dark">深色</button>
         </div>
+      </div>
+      <div class="setrow tog">
+        <div class="setlbl"><b>简洁模式</b><span>只留「守听 + 按住说话」。藏起看板与实时活动栏，
+          操作区默认收起，滚回顶部也不再自动展开 —— 手机上一屏能多看好几行</span></div>
+        <label class="sw"><input type="checkbox" id="setSimple"><i></i></label>
       </div>
     </div>
 
@@ -1332,6 +1414,11 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
       <div class="setrow act">
         <div class="setlbl"><b>主站与身份</b><span id="setTxSum">还没填写通联参数</span></div>
         <div class="setctl"><button class="btn sm" id="setTxBtn">展开填写</button></div>
+      </div>
+      <div class="setrow tog">
+        <div class="setlbl"><b>启动时自动登录主站</b><span>打开 App 就按上次的参数连上，不用每次手动点「连接」。
+          参数没填全、或上次被主站连续拒绝过时不会自动连 —— 免得反复撞 MSTNAK</span></div>
+        <label class="sw"><input type="checkbox" id="setAutoConn"><i></i></label>
       </div>
       <div class="setrow act">
         <div class="setlbl"><b>发射可用性</b><span id="setTxAvail">通联为实验性功能，尚未被主站拒绝过</span></div>
@@ -1765,6 +1852,18 @@ html[data-theme="dark"] .pp.tcp{color:#93b4fd;border-color:#22304d;background:#1
       <button class="btn sm" id="smClose">关闭</button>
     </div>
     <div class="mb" id="smBody"></div>
+  </div>
+</div>
+
+<div class="modal legal" id="legalModal">
+  <div class="box">
+    <div class="mh">
+      <span style="font-size:17px">📄</span>
+      <span class="t" id="lgTitle">用户协议</span>
+      <div class="spacer"></div>
+      <button class="btn sm" id="lgClose">关闭</button>
+    </div>
+    <div class="mb" id="lgBody"></div>
   </div>
 </div>
 
@@ -19392,6 +19491,14 @@ const state = {
   /* 首页操作区（网络切换 + 发射条）是否被手动收起。只收 .home-op，
      分栏条和折叠按钮留着 —— 收起后还得能切列表、能再展开。 */
   htCollapsed:false,
+  /* ★ v2.4.8 简洁模式：藏起看板与实时活动栏，操作区默认收起且不自动展开。
+     给「只想守着听、按住说话」的用户一个不被干扰的界面。 */
+  simple:false,
+  /* ★ v2.4.8 启动时自动登录主站。以前每次更新完都得手动点一次「连接」，
+     参数明明都还在。默认开，想手动控制的可以关掉。 */
+  autoConn:true,
+  /* 扫描 / 录音 / 记录 那块面板是否被手动收起（手机上一收就能多看好几行） */
+  tabFolded:false,
   recOn:true, recActive:false, recs:[], playingRec:null, recAudio:null,
   spotter:{ ws:null, open:false, subscribed:[], retry:0, timer:null },
   /* 国内链路（China DMR / radiowo）。和 spotter 并列，由 net 决定用哪条。 */
@@ -19413,9 +19520,86 @@ const state = {
 };
 const $=s=>document.querySelector(s);
 const esc=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+/* ============================ 本地存储 ============================
+   localStorage 是主存，原生 SharedPreferences 是副本。
+
+   ★ v2.4.8 加副本的原因：页面跑在 https 源上，localStorage 本身可用，
+   但那份数据归 WebView 管 —— 系统 WebView / Chrome 升级或降级、应用被
+   「清除数据」时会被一起丢掉。用户看到的就是「每次更新完，麦克风增益
+   又变回 0 了」。SharedPreferences 是应用自己的私有文件，和 WebView 的
+   数据目录毫无关系，WebView 换多少版本都碰不到它。
+
+   策略：写的时候两边都写；读的时候 localStorage 缺了就问副本要，要到
+   顺手写回 localStorage。启动时再整表灌一遍（见 hydrate 的注释）。 */
 const store={
-  get(k,d){ try{ const v=localStorage.getItem('dmr.'+k); return v==null?d:JSON.parse(v); }catch(e){ return d; } },
-  set(k,v){ try{ localStorage.setItem('dmr.'+k,JSON.stringify(v)); }catch(e){} }
+  get(k,d){
+    const nk='dmr.'+k;
+    let v=null;
+    try{ v=localStorage.getItem(nk); }catch(e){}
+    if(v==null){
+      try{
+        if(ANDROID&&typeof ANDROID.prefsGet==='function'){
+          const s=ANDROID.prefsGet(nk);
+          if(s!=null&&s!==''){ v=s; try{ localStorage.setItem(nk,s); }catch(e){} }
+        }
+      }catch(e){}
+    }
+    if(v==null)return d;
+    try{ return JSON.parse(v); }catch(e){ return d; }
+  },
+  set(k,v){
+    const nk='dmr.'+k;
+    const s=JSON.stringify(v);
+    try{ localStorage.setItem(nk,s); }catch(e){}
+    try{ if(ANDROID&&typeof ANDROID.prefsSet==='function')ANDROID.prefsSet(nk,s); }catch(e){}
+  },
+  /* 启动时先把副本里「localStorage 还没有」的键整表回填一遍。
+     逐键 get 其实也能回填，但那只覆盖页面真的读过的键；像 calls、scanList
+     这种「读出来发现是空、随后又按空值写回去」的，等它想起来问副本的时候
+     已经被空值覆盖了。整表先灌一遍就没这个顺序问题。 */
+  hydrate(){
+    try{
+      if(!ANDROID||typeof ANDROID.prefsAll!=='function')return 0;
+      const raw=ANDROID.prefsAll();
+      if(!raw)return 0;
+      const o=JSON.parse(raw);
+      let n=0;
+      for(const k in o){
+        if(k.indexOf('dmr.')!==0)continue;
+        let cur=null;
+        try{ cur=localStorage.getItem(k); }catch(e){}
+        if(cur==null){ try{ localStorage.setItem(k,String(o[k])); n++; }catch(e){} }
+      }
+      return n;
+    }catch(e){ return 0; }
+  },
+  /* 整体写入一份「键 → 原始字符串」（导入用）。两边都要写 ——
+     只写 localStorage 的话，下次 localStorage 被清，副本会把旧值灌回来。 */
+  putRaw(obj){
+    let n=0;
+    for(const k in obj){
+      if(k.indexOf('dmr.')!==0)continue;
+      const s=String(obj[k]);
+      try{ localStorage.setItem(k,s); }catch(e){}
+      try{ if(ANDROID&&typeof ANDROID.prefsSet==='function')ANDROID.prefsSet(k,s); }catch(e){}
+      n++;
+    }
+    return n;
+  },
+  /* 清空全部设置（恢复默认）。★ 副本必须一起清，否则下次启动
+     hydrate 又把这些键原样灌回来，「恢复默认」看起来完全没生效。 */
+  clearAll(){
+    const ks=[];
+    try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k&&k.indexOf('dmr.')===0)ks.push(k); } }catch(e){}
+    ks.forEach(k=>{ try{ localStorage.removeItem(k); }catch(e){} });
+    try{
+      if(ANDROID&&typeof ANDROID.prefsAll==='function'&&typeof ANDROID.prefsSet==='function'){
+        const o=JSON.parse(ANDROID.prefsAll()||'{}');
+        for(const k in o)ANDROID.prefsSet(k,null);
+      }
+    }catch(e){}
+    return ks.length;
+  }
 };
 
 /* ============================ 话组 / 国家 ============================ */
@@ -19694,10 +19878,18 @@ function scanSet(){
 function effSubs(){
   let s=state.solo!=null?[state.solo]:state.subscribed.slice();
   if(state.solo==null&&state.scan.on)s=s.concat(scanSet());
-  return [...new Set(s)].filter(n=>n>90);
+  /* ★ v2.4.8 静音的话组**不进订阅** —— 这是最彻底的一层。
+     HOSE 的音频帧不带话组号，只靠「收到之后丢掉」总有漏网的可能
+     （尤其 state.current 指着别的组时）。干脆不订阅，服务器就不会推它的音频。
+     下面的 audioAllowed / RXG.attrTg 是第二道闸，留给「已经在路上的帧」。 */
+  return [...new Set(s)].filter(n=>n>90
+    && !(state.rxMuteTg&&state.rxMuteTg.indexOf(n)>=0));
 }
 function audioAllowed(tg){
   tg=Number(tg);
+  /* ★ v2.4.8 单个话组静音：这一条必须排在「独听」之前 ——
+     独听选中的组如果同时被静音了，用户的意思显然是「这个我不听」。 */
+  if(state.rxMuteTg&&state.rxMuteTg.indexOf(tg)>=0)return false;
   if(state.solo!=null)return tg===state.solo;
   if(state.subscribed.includes(tg))return true;
   if(state.scan.on&&!state.scan.skip.includes(tg)&&scanSet().includes(tg)){
@@ -19724,6 +19916,17 @@ const RXG={
   tg:0,            // 当前占着坑位的话组
   at:0,            // 最后一次收到该组音频的时间
   muteUntil:0,     // 交接静默截止时间，这段时间内丢弃所有音频
+  /* ★ v2.4.8 音频归属覆盖：被静音的话组正在说话时填它的 tg。
+   *
+   * 为什么需要这个字段：HOSE 的 CALL_AUDIO 帧**不带话组号**，音频归属只能靠
+   * state.current 推断。而静音的话组我们**故意不切 current**（切了就会把正在听
+   * 的那一路硬切断）。于是它的音频会被当成「上一组说的」照常播出来 ——
+   * 表现就是「静音了还在响」，v2.4.8 第一版正是这么坏掉的。
+   *
+   * 所以这里单独记一个「现在路上的音频其实属于谁」，只参与过滤、不进界面。
+   * 代价：静音组说话期间，上一组的尾巴也会一起被丢掉 —— 两路在同一个流里，
+   * 不带话组号就没法分开，这是协议本身的限制（见上面那段注释）。 */
+  attrTg:0,
   LOST_MS:15000    // 占用的组这么久没声音 = CALL_END 丢了，兜底释放
 };
 /* 现在是否被别的组占着。返回占用的 tg，0 表示可以接。
@@ -19759,6 +19962,8 @@ function rxHandoff(){
   let best=null;
   for(const a of state.active.values()){
     if(!a||a.tg===RXG.tg)continue;
+    /* ★ 被静音的话组不能接手坑位 —— 接手就等于把它放出来播 */
+    if(state.rxMuteTg&&state.rxMuteTg.indexOf(Number(a.tg))>=0)continue;
     if(now-(a.at||a.start||0)>6000)continue;   // 6 秒没动静的不算「还在等」
     if(!best||(a.at||a.start)>(best.at||best.start))best=a;
   }
@@ -19776,7 +19981,7 @@ function activeSweep(){
     if(now-(a.at||a.start||0)>60000)state.active.delete(k);
   }
 }
-function rxReset(){ RXG.tg=0; RXG.at=0; RXG.muteUntil=0; }
+function rxReset(){ RXG.tg=0; RXG.at=0; RXG.muteUntil=0; RXG.attrTg=0; }
 /* 订阅同步 —— 两条链路协议完全不同，这里做分派：
      BM(HOSE)  增量：[GROUP_JOIN,[ids]] / [GROUP_LEAVE,[ids]]
      CN(radiowo) 全量：{action:'subscribe',talkgroups:[全部]}  */
@@ -20472,6 +20677,16 @@ function handleRw(o){
   if(o.type==='call_start'){
     const srcId=Number(o.src_id)||0, tg=Number(o.dst_id)||0;
     const ts=Number(o.timeslot)||1, sid=Number(o.stream_id)||0;
+    /* ★ v2.4.8 被静音的话组：只记进「实时活动」，不抢坑位、不清播放队列。
+       国内是多流并发，抢了坑位会把正在听的那一路硬切断。 */
+    if(state.rxMuteTg&&state.rxMuteTg.indexOf(tg)>=0){
+      state.active.set('rw'+sid,{ key:'rw'+sid, tg, srcId, alias:'', start:Date.now(),
+                                  seen:Date.now(), slot:ts-1, rssi:null, master:'', types:[],
+                                  priv:o.call_type==='private' });
+      state.rw.streams.set(sid,{ tg, srcId, ts });
+      renderMine(); renderTab(); renderLive(true);
+      return;
+    }
     const prev=state.current;
     if(prev&&prev.tg!==tg)logCall(prev);
     state.rw.streams.set(sid,{ tg, srcId, ts });
@@ -20523,6 +20738,20 @@ function handleSpotter(m){
   const type=m[0];
   if(type===T.CALL_START){
     const srcId=m[2], tg=m[3];
+    /* ★ v2.4.8 被静音的话组：照样记进「实时活动」（能看见它在呼叫），
+       但不占收听坑位、不播、不弹提示 —— 静音了就彻底安静，
+       否则每来一句都弹一次「有呼叫」，等于没静音。
+       ⚠ 这里**必须**把 RXG.attrTg 立起来：HOSE 的音频帧不带话组号，
+       不切 current 的话，它的声音会被当成「上一组说的」照常播出去。 */
+    if(state.rxMuteTg&&state.rxMuteTg.indexOf(Number(tg))>=0){
+      RXG.attrTg=Number(tg)||0;
+      state.active.set(tg,{ tg, srcId, alias:'', start:Date.now(), at:Date.now() });
+      activeSweep();
+      renderMine(); renderTab(); renderLive(true);
+      return;
+    }
+    /* 走到这里就是「没静音」的正常通话，把归属覆盖清掉 */
+    RXG.attrTg=0;
     /* 别的组还在说 → 这一句让路。不切 current、不 silence，
        正在听的声音和界面上的呼号都不动。但 active 照样记下来，
        「实时活动」里能看到它在呼叫，想切过去点一下就行。 */
@@ -20560,6 +20789,14 @@ function handleSpotter(m){
     renderNow(); renderMine(); renderTab(); renderLive(true);
   } else if(type===T.CALL_ALIAS){
     const a=String(m[1]||'').trim();
+    /* 静音组正在说话时，它的别名**不能**写到 state.current 上 ——
+       那上面是上一组的呼号，写上去就变成「张冠李戴」。只更新 active 里那一条。 */
+    if(RXG.attrTg){
+      const ma=state.active.get(RXG.attrTg);
+      if(ma)ma.alias=a;
+      renderLive(true);
+      return;
+    }
     if(state.current)state.current.alias=a;
     const tg=state.current?state.current.tg:null;
     if(tg&&state.active.has(tg))state.active.get(tg).alias=a;
@@ -20570,10 +20807,17 @@ function handleSpotter(m){
     const c=state.current;
     if(!state.audioOn)return;
     if(Date.now()<RXG.muteUntil)return;   // 交接静默期：丢弃在途的旧帧
-    if(c&&!audioAllowed(c.tg))return;
-    /* 别的组正占着坑位 → 这一帧丢掉，别和它在听的那句叠在一起 */
-    if(c&&rxHold(c.tg))return;
-    if(c)rxTake(c.tg);
+    /* ★ 归属优先用 RXG.attrTg（被静音的话组正在说话时它才有值）。
+       否则退回 state.current —— HOSE 的音频帧本身不带话组号。 */
+    const atg=RXG.attrTg||(c?Number(c.tg):0);
+    /* 只在「知道这帧属于谁」时才拦。atg=0 说明既没有静音覆盖也没有 current
+       （比如半路加入、CALL_START 丢了）—— 这种时候维持老行为，照播，
+       否则会变成「偶尔整段没声音」这种更难查的毛病。 */
+    if(atg&&!audioAllowed(atg))return;
+    /* 别的组正占着坑位 → 这一帧丢掉，别和它在听的那句叠在一起。
+       静音组说话期间 c 是「上一组」，它已经不占坑位了，不能拿它去判让路。 */
+    if(c&&!RXG.attrTg&&rxHold(c.tg))return;
+    if(c&&!RXG.attrTg)rxTake(c.tg);
     const f=Audio_.decode(m[1]);
     Audio_.push(f);
     if(state.recActive)Rec.push(f);
@@ -20583,6 +20827,8 @@ function handleSpotter(m){
        变僵尸；而 rxRelease() 又靠 active 判断「还有谁在等」，于是每次收尾
        都误判，把坑位白白让出去，下一个组随便就能接管。 */
     const endTg=Number(m[3])||0;
+    /* 被静音的那一组说完了 → 音频归属覆盖要撤掉，否则后面正常的组会被一直挡 */
+    if(endTg&&RXG.attrTg===endTg)RXG.attrTg=0;
     const cur=state.current;
     const tg=endTg||(cur?cur.tg:0);      // 老格式没带 tg 时退回 current
     if(cur&&cur.tg===tg){
@@ -20604,6 +20850,21 @@ function handleSpotter(m){
     toast('服务器要求重连，正在恢复…'); spotterClose(); setTimeout(ensureSpotter,800);
   }
 }
+/* ★ v2.4.8 通联记录：只留最近 50 条、且不超过 24 小时。
+   原来是 120 条、没有时间上限 —— 挂机一整天之后记录里一半是昨天的，
+   点开「记录」翻半天找不到刚才那一通。条数上限解决不了这个问题，
+   必须按时间切。 */
+const CALLS_MAX=50;
+const CALLS_TTL_MS=24*3600*1000;
+/* 就地裁剪，返回被删掉的条数（>0 说明存储也该跟着重写一遍） */
+function callsPrune(){
+  const cut=Date.now()-CALLS_TTL_MS;
+  const before=(state.calls||[]).length;
+  state.calls=(state.calls||[])
+    .filter(x=>x&&Number(x.t)>=cut)
+    .slice(0,CALLS_MAX);
+  return before-state.calls.length;
+}
 function logCall(c){
   if(!c||!c.tg)return;
   const key=c.srcId+'@'+c.tg+'@'+c.start;
@@ -20613,7 +20874,7 @@ function logCall(c){
   const priv=!!c.priv;
   state.calls.unshift({ tg:c.tg, srcId:c.srcId, call:a.call, name:a.name, t:Date.now(),
                         dur:Math.round((Date.now()-c.start)/1000), priv });
-  if(state.calls.length>120)state.calls.length=120;
+  callsPrune();
   store.set('calls',state.calls);
   /* 留一份「刚才是谁说的」：对方一松手 state.current 就被清空，
      界面上立刻变成「暂无通话」，回话时根本想不起跟谁通联。
@@ -21098,18 +21359,111 @@ function renderMine(){
     const sub=subList.includes(id);
     const solo=state.solo===id;
     const inScan=state.scan.list.includes(id);
-    return '<div class="row'+(tx?' tx':'')+' pinned" data-id="'+id+'">'+
+    /* ★ v2.4.8 单个话组静音：和「接收过滤」里那份名单是同一个（state.rxMuteTg），
+       因为对用户来说「静音」就是静音 —— 不管声音是从 HOSE 还是 MMDVM 来的。 */
+    const muted=state.rxMuteTg.indexOf(id)>=0;
+    return '<div class="row'+(tx?' tx':'')+(muted?' muted':'')+' pinned" data-id="'+id+'">'+
       '<span class="lamp'+(tx?' on':'')+'"></span>'+
       '<span class="tgnum">'+id+'</span>'+
       '<div class="tginfo"><div class="tgname">'+esc(tgLabel(id))+'</div>'+
-      '<div class="tgsub">'+flagHtml(id)+'<span>'+(solo?'独听模式':(spOpen&&sub?'已连接':(spOpen?'订阅中…':'未连接')))+(inScan?' · 在扫描列表':'')+'</span></div></div>'+
+      '<div class="tgsub">'+flagHtml(id)+'<span>'+(muted?'已静音':(solo?'独听模式':(spOpen&&sub?'已连接':(spOpen?'订阅中…':'未连接'))))+(inScan?' · 在扫描列表':'')+'</span></div></div>'+
       '<div class="acts">'+
+        '<button class="mini'+(muted?' act':'')+'" data-act="mute" title="'+(muted?'取消静音':'静音这个话组（只影响收听，不影响发射）')+'">'+(muted?'🔇':'🔊')+'</button>'+
         '<button class="mini'+(inScan?' act':'')+'" data-act="'+(inScan?'unscan':'scan')+'" title="'+(inScan?'移出扫描列表':'加入扫描列表')+'">📡</button>'+
         '<button class="mini'+(solo?' act':'')+'" data-act="solo" title="独听（只收这个话组）">🎯</button>'+
         '<button class="mini danger" data-act="del" title="移出收听列表">✕</button>'+
       '</div></div>';
   }).join('');
 }
+/* ===================== 我的收听：长按拖动排序（v2.4.8） =====================
+   列表顺序就是「先看哪个组」的偏好，以前只能删了再加回来才能调。
+   这里做长按拖动：
+     · 按住 420 ms 才进入拖动 —— 手指划过列表是滚动，不能误触发；
+     · 进入拖动后按指针位置找目标行，插到它前半/后半；
+     · 松手把 DOM 顺序读回来写进 state.subscribed。
+   只在「我的收听」的行上生效，行内 ✕ / 📡 / 🎯 / 🔊 那几颗小按钮不参与。 */
+const DG={on:false,row:null,timer:null,y0:0,x0:0,lastDrop:0};
+function dgCancel(){
+  if(DG.timer){ clearTimeout(DG.timer); DG.timer=null; }
+  if(DG.row)DG.row.classList.remove('lift');
+  DG.on=false; DG.row=null;
+  document.body.classList.remove('dragging');
+}
+function dgStart(row){
+  DG.on=true; DG.row=row;
+  row.classList.add('lift');
+  document.body.classList.add('dragging');
+  try{ if(navigator.vibrate)navigator.vibrate(12); }catch(e){}
+}
+/* 把被拖的行挪到指针所在位置。用 elementFromPoint 之外的做法（遍历兄弟节点比
+   中点）更稳：行高不一样、列表滚过一半时都不会算错。 */
+function dgMoveTo(y){
+  const row=DG.row; if(!row||!row.parentNode)return;
+  const list=row.parentNode;
+  const kids=[...list.children].filter(el=>el.classList&&el.classList.contains('row'));
+  let before=null;
+  for(const el of kids){
+    if(el===row)continue;
+    const r=el.getBoundingClientRect();
+    if(y<r.top+r.height/2){ before=el; break; }
+  }
+  if(before){
+    if(row.nextElementSibling!==before)list.insertBefore(row,before);
+  }else if(list.lastElementChild!==row){
+    list.appendChild(row);
+  }
+}
+function dgDrop(){
+  if(!DG.on){ dgCancel(); return; }
+  const list=document.getElementById('mineList');
+  const order=list
+    ? [...list.children].filter(el=>el.classList&&el.classList.contains('row'))
+        .map(el=>Number(el.dataset.id)).filter(n=>n>0)
+    : [];
+  DG.lastDrop=Date.now();
+  dgCancel();
+  if(!order.length||order.length!==state.subscribed.length
+     ||order.every((n,i)=>n===state.subscribed[i])){
+    renderMine();                       /* 没变，只把 lift 样式收掉 */
+    return;
+  }
+  state.subscribed=order;
+  store.set(netSubKey(state.net),state.subscribed.slice());
+  syncSubs(); renderMine(); renderTab(); renderLive(true);
+  toast('收听顺序已保存');
+}
+(function(){
+  const list=document.getElementById('mineList');
+  if(!list)return;
+  list.addEventListener('pointerdown',e=>{
+    if(e.button!=null&&e.button!==0)return;
+    const row=e.target.closest('.row[data-id]');
+    if(!row)return;
+    if(e.target.closest('.acts'))return;      /* 行内小按钮不参与拖动 */
+    DG.y0=e.clientY; DG.x0=e.clientX; DG.row=row;
+    DG.timer=setTimeout(()=>{ DG.timer=null; dgStart(row); },420);
+  });
+  list.addEventListener('pointermove',e=>{
+    if(DG.timer){
+      /* 还没到长按时长就明显移动了 → 那是在滚动列表，放弃这次长按 */
+      if(Math.abs(e.clientY-DG.y0)>8||Math.abs(e.clientX-DG.x0)>8)dgCancel();
+      return;
+    }
+    if(DG.on)dgMoveTo(e.clientY);
+  });
+  /* pointermove 的 preventDefault 拦不住滚动，得靠 touchmove（非 passive） */
+  list.addEventListener('touchmove',e=>{
+    if(DG.on&&e.cancelable)e.preventDefault();
+  },{passive:false});
+  list.addEventListener('pointerup',()=>{ if(DG.on||DG.timer)dgDrop(); });
+  list.addEventListener('pointercancel',dgCancel);
+  /* 长按松手后浏览器还会补一个 click，会顺手把这一行设成发射目标 —— 拦掉 */
+  list.addEventListener('click',e=>{
+    if(e.target.closest('.acts'))return;
+    if(Date.now()-DG.lastDrop<400){ e.stopPropagation(); e.preventDefault(); }
+  },true);
+})();
+
 function fmtDur(sec){
   if(sec<60)return sec+'s';
   const m=Math.floor(sec/60), s=sec%60;
@@ -22034,6 +22388,11 @@ function rxMuteRender(){
     box.appendChild(c);
   });
 }
+/* ★ v2.4.8 静音生效的三层，全部在这里收口（列表按钮 / 设置页输入框 / 最近话组
+   三个入口都走这两个函数，所以只要改这里，三处行为必然一致）：
+     ① 从订阅里摘掉 → 服务器根本不再推这个组的音频（effSubs 里过滤）
+     ② 正在播的立刻掐掉，并立起 RXG.attrTg 挡住已经在路上的帧
+     ③ audioAllowed 作为最后一道闸 */
 function rxMuteAdd(tg){
   tg=Number(tg)||0;
   if(!(tg>0)){ toast('话组号不合法'); return false; }
@@ -22041,6 +22400,19 @@ function rxMuteAdd(tg){
   if(state.rxMuteTg.length>=RX_MUTE_MAX){ toast('最多静音 '+RX_MUTE_MAX+' 个话组'); return false; }
   state.rxMuteTg.push(tg);
   rxBlockSave(); rxMuteRender(); rxBlockApply(); rxTgRender();
+  /* 正在播的那一组被静音：立刻掐掉，不然得等这句说完才生效。
+     ★ 同时把 RXG.attrTg 立起来 —— current 清空之后音频归属就没了，
+     不带话组号的 HOSE 帧会被当成「无主音频」照常播出来（v2.4.8 第一版
+     就是这么坏掉的：呼号不显示了，声音还在响）。 */
+  if(state.current&&Number(state.current.tg)===tg){
+    RXG.attrTg=tg;
+    state.current=null;
+    try{Audio_.silence();}catch(e){}
+    renderNow();
+  }
+  /* 重新订阅：把这个组 GROUP_LEAVE 掉，服务器就不会再推它 */
+  syncSubs(); ensureSpotter();
+  renderMine(); renderTab(); renderLive(true);
   txLog('🔇 已静音话组 '+tg+(tgName(tg)?('（'+tgName(tg)+'）'):''));
   return true;
 }
@@ -22049,7 +22421,12 @@ function rxMuteDel(tg){
   const i=state.rxMuteTg.indexOf(tg);
   if(i<0)return;
   state.rxMuteTg.splice(i,1);
+  /* 解除静音时把归属覆盖撤掉 —— 万一它的 CALL_END 丢了，
+     留着这个值会把后面所有正常的组一起挡掉。 */
+  if(RXG.attrTg===tg)RXG.attrTg=0;
   rxBlockSave(); rxMuteRender(); rxBlockApply(); rxTgRender();
+  syncSubs(); ensureSpotter();     /* 重新 GROUP_JOIN 回去 */
+  renderMine(); renderTab(); renderLive(true);
   txLog('🔊 已取消静音话组 '+tg);
 }
 function rxMuteSubmit(){
@@ -22058,6 +22435,22 @@ function rxMuteSubmit(){
   if(!raw){ toast('填话组号'); return; }
   if(!/^\d{1,8}$/.test(raw)){ toast('话组号只能是数字'); return; }
   if(rxMuteAdd(parseInt(raw,10)) && inp)inp.value='';
+}
+/* ★ v2.4.8「我的收听」列表里那枚 🔊/🔇 走这里。
+   它和「接收过滤 → 静音话组」用的是同一份 state.rxMuteTg —— 对用户来说
+   「静音」就是静音，不该分成「HOSE 的静音」和「MMDVM 的静音」两套。
+   真正的落地动作全在 rxMuteAdd / rxMuteDel 里，这里只负责提示与重绘。 */
+function toggleMuteTg(tg){
+  tg=Number(tg)||0;
+  if(!(tg>0))return;
+  if(rxMuteHas(tg)){
+    rxMuteDel(tg);
+    toast('已取消静音 '+tg+(tgName(tg)?('（'+tgName(tg)+'）'):''));
+  }else{
+    if(!rxMuteAdd(tg))return;
+    toast('已静音 '+tg+' · 只影响收听，不影响发射');
+  }
+  if(state.view==='settings')renderSet();
 }
 
 /* 「最近话组」：和「最近听到」同源（rx 事件），只是按话组去重。
@@ -23294,7 +23687,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.16';
+const PAGE_VER='2026.11.17';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
@@ -23379,6 +23772,8 @@ function renderSet(){
   if(sg)[...sg.children].forEach(b=>b.classList.toggle('on',Number(b.dataset.val)===Number(state.gain)));
   const a=q('setAwake');       if(a)a.checked=!!state.awakeOn;
   const r=q('setRecOn');       if(r)r.checked=!!state.recOn;
+  const sp=q('setSimple');     if(sp)sp.checked=!!state.simple;
+  const ac=q('setAutoConn');   if(ac)ac.checked=!!state.autoConn;
   const pd=q('setPttDrag');    if(pd)pd.checked=!!state.pttDrag;
   pttApplyState();             /* 同步 PTT 拖动开关 + 上次停放位置 */
   const sr=q('setScanResume'); if(sr)sr.checked=!!state.scanResume;
@@ -23449,6 +23844,21 @@ $('#setRecOn').addEventListener('change',e=>{
 $('#setScanResume').addEventListener('change',e=>{
   state.scanResume=!!e.target.checked; store.set('scanResume',state.scanResume);
   toast(state.scanResume?'下次打开会接着上次的扫描':'下次打开不再自动扫描');
+});
+/* --- 简洁模式 --- */
+$('#setSimple').addEventListener('change',e=>{
+  state.simple=!!e.target.checked; store.set('simple',state.simple);
+  applySimple(state.simple);
+  setView(state.view); mobCol(state.mcol);
+  if(state.simple)htFoldSet(true,true);
+  toast(state.simple
+    ? '简洁模式已开启 · 操作区默认收起，滚回顶部也不再自动展开'
+    : '简洁模式已关闭');
+});
+/* --- 启动自动登录主站 --- */
+$('#setAutoConn').addEventListener('change',e=>{
+  state.autoConn=!!e.target.checked; store.set('autoConn',state.autoConn);
+  toast(state.autoConn?'下次启动会自动登录主站':'下次启动不再自动登录');
 });
 /* --- PTT 按钮 --- */
 $('#setPttDrag').addEventListener('change',e=>{
@@ -23533,8 +23943,7 @@ $('#setImport').addEventListener('click',()=>{
         const j=JSON.parse(String(rd.result));
         const keys=(j&&j.keys&&typeof j.keys==='object')?j.keys:j;
         if(!keys||typeof keys!=='object')throw new Error('不是本页导出的文件');
-        let n=0;
-        for(const k in keys){ if(k.indexOf('dmr.')===0){ localStorage.setItem(k,String(keys[k])); n++; } }
+        const n=store.putRaw(keys);
         if(!n)throw new Error('文件里没有可用的设置项');
         toast('已导入 '+n+' 项设置，正在重载…');
         setTimeout(()=>location.reload(),800);
@@ -23546,9 +23955,7 @@ $('#setImport').addEventListener('click',()=>{
 });
 $('#setReset').addEventListener('click',()=>{
   if(!confirm('恢复默认会清空全部设置：收听列表、扫描列表、发射参数、界面偏好都会没掉。\n（录音和通话记录本来就不落盘，不受影响）\n\n确定继续吗？'))return;
-  const ks=[];
-  try{ for(let i=0;i<localStorage.length;i++){ const k=localStorage.key(i); if(k&&k.indexOf('dmr.')===0)ks.push(k); } }catch(e){}
-  ks.forEach(k=>{ try{localStorage.removeItem(k);}catch(e){} });
+  store.clearAll();       /* localStorage 和原生副本一起清，否则重载后又被灌回来 */
   toast('已恢复默认，正在重载…');
   setTimeout(()=>location.reload(),700);
 });
@@ -23625,12 +24032,74 @@ $('#htFold').addEventListener('click',htFoldToggle);
 window.addEventListener('scroll',()=>{
   const y=window.scrollY||window.pageYOffset||0;
   if(y>48)htLeftTop=true;
+  /* ★ v2.4.8 简洁模式：不自动展开。这个模式本来就是「别老弹出来挡列表」，
+     自动展开等于把它白关了。手动点折叠钮仍然可以展开。 */
+  if(state.simple)return;
   /* 手动点完的 500ms 内不响应，避开点击时的抖动/回弹 */
   if(y<=12 && state.htCollapsed && htLeftTop && Date.now()-htFoldAt>500){
     htFoldSet(false,true);
     htLeftTop=false;          /* 复位，下次还得再往下走一趟才触发 */
   }
 },{passive:true});
+
+/* ===================== 简洁模式（v2.4.8） =====================
+   只做三件事，都靠 CSS 的 body.simple 完成：
+     · 藏掉顶栏「看板」入口（那一页是统计，守听时用不到）
+     · 藏掉「实时活动」栏（全球活动流刷得飞快，容易分心）
+     · 操作区默认收起，且滚回顶部不再自动展开
+   这里只负责把「当前停在被藏起来的地方」这个坑填掉 —— 否则用户刚打开
+   简洁模式，看到的就是一片空白。 */
+function applySimple(on){
+  on=!!on;
+  document.body.classList.toggle('simple',on);
+  if(!on)return;
+  if(state.view==='dash'){ state.view='listen'; store.set('view','listen'); }
+  if(state.mcol===1){ state.mcol=0; store.set('mcol',0); }
+}
+
+/* ===================== 扫描 / 录音 / 记录 面板折叠（v2.4.8） ===================== */
+function tabFoldSet(on,persist){
+  on=!!on;
+  const p=document.getElementById('tabPanel');
+  if(p)p.classList.toggle('folded',on);
+  const b=document.getElementById('tabFold');
+  if(b){
+    b.setAttribute('aria-expanded',on?'false':'true');
+    b.setAttribute('aria-label',on?'展开扫描录音面板':'收起扫描录音面板');
+  }
+  if(persist){ state.tabFolded=on; store.set('tabFolded',on); }
+  syncHomeTopH();
+}
+(function(){
+  const b=document.getElementById('tabFold');
+  if(b)b.addEventListener('click',()=>tabFoldSet(!state.tabFolded,true));
+})();
+
+/* ===================== 启动自动登录主站（v2.4.8） =====================
+   用户反馈：每次更新完都得自己点一次「连接」，参数明明都还在。
+   这里在启动后自动发一次登录，但有四道闸，避免帮倒忙：
+     · 浏览器里没有原生层，连也没意义
+     · 用户在设置里关掉了这一项
+     · 上次被主站连续拒过（TX.blocked）—— 再连只是重复撞 MSTNAK
+     · 已经连着 / 正在连
+   参数不全也不连，只在发射日志里留一行原因，不弹 toast 打扰。 */
+let autoConnTried=false;
+function txAutoConnect(){
+  if(autoConnTried)return;
+  autoConnTried=true;
+  if(!ANDROID||!state.autoConn||TX.blocked)return;
+  if(TX.conn||TX.state!=='IDLE')return;
+  const host=String((txEl('txHost')||{}).value||'').trim();
+  const id=parseInt((txEl('txId')||{}).value,10)||0;
+  const pwd=String((txEl('txPwd')||{}).value||'');
+  const call=String((txEl('txCall')||{}).value||'').trim();
+  if(!host||id<1000||!pwd||!call){
+    txLog('启动自动登录已跳过：主站 / DMR ID / 密码 / 呼号还没填全','em');
+    return;
+  }
+  txLog('启动自动登录主站（可在「设置 → 📡 通联」关掉）','em');
+  txConnect();
+}
 /* 顶栏会随宽度换行，高度不固定；把实测高度喂给 CSS 变量，分栏条才能严丝合缝贴着它吸顶 */
 function syncTopbarH(){
   const tb=document.querySelector('.topbar');
@@ -23697,6 +24166,7 @@ document.addEventListener('click',e=>{
       case 'add': addTg(id); return;
       case 'del': removeTg(id); toast('已移出 '+id); return;
       case 'solo': toggleSolo(id); toast(state.solo===id?'独听 '+id:'已退出独听'); return;
+      case 'mute': toggleMuteTg(id); return;
       case 'scan': addScan(id); return;
       case 'unscan': removeScan(id); toast('已移出扫描 '+id); return;
       case 'scanDel': removeScan(id); return;
@@ -23796,12 +24266,166 @@ document.addEventListener('pointerdown',()=>{ if(state.audioOn)Audio_.resume(); 
 /* 回到前台补一次 resume：Android 在后台有可能把 AudioContext 挂起 */
 document.addEventListener('visibilitychange',()=>{ if(!document.hidden&&state.audioOn)Audio_.resume(); });
 document.addEventListener('keydown',e=>{
-  if(e.key==='Escape'){ $('#stationModal').classList.remove('show'); stopRecPlay(); }
+  if(e.key==='Escape'){ $('#stationModal').classList.remove('show'); closeLegal(); stopRecPlay(); }
 });
 window.addEventListener('resize',()=>{ syncTopbarH(); renderPlayBtn(); if(state.view==='dash')renderDash(); });
 
+/* ===================== 用户协议 / 隐私政策 / 风险提示（v2.4.8） =====================
+   放在页脚三个文字入口后面。文本刻意写具体：说清「我们做什么、不做什么」，
+   而不是一堆免责套话 —— 这类工具真正的风险点就三个：
+     ① 没有操作证书/执照就发射；② 把中继参数当公开信息到处传；
+     ③ 以为「收听」也要许可（其实不用）。
+   条款改动时请一并改下面的版本号，用户能看出自己看过的是哪一版。 */
+const LEGAL_VER='2026-11';
+const LEGAL={
+  terms:{
+    t:'用户协议',
+    h:''
+      +'<h4>一、这是什么</h4>'
+      +'<p>信标 DMR 收听台（下称「本软件」）是一个<b>开源的 DMR 收听与通联客户端</b>，'
+      +'以 GPL-3.0 许可发布。它本身不运营任何服务器、不转发任何语音，'
+      +'只是把你的手机直接连到 BrandMeister / China DMR（radiowo）等公开网络上。</p>'
+      +'<h4>二、你可以做什么</h4>'
+      +'<ul>'
+      +'<li>自由使用、复制、修改、再分发本软件，条件是保留同样的开源许可与作者署名。</li>'
+      +'<li>用它收听公开话组，把听到的内容用于个人学习、收听与交流。</li>'
+      +'<li>在<b>你已经合法取得业余电台操作证书与电台执照</b>的前提下，用它进行发射通联。</li>'
+      +'</ul>'
+      +'<h4>三、你不可以做什么</h4>'
+      +'<ul>'
+      +'<li><b>未取得相应资格就发射。</b>这是本软件唯一一条硬性禁止项，详见「风险提示」。</li>'
+      +'<li>用本软件发射任何违法、危害公共安全、侵犯他人权益的内容。</li>'
+      +'<li>冒用他人的呼号、DMR ID，或在主站上注册虚假信息。</li>'
+      +'<li>把本软件用于商业转播、收费收听等未经授权的用途。</li>'
+      +'</ul>'
+      +'<h4>四、第三方网络</h4>'
+      +'<p>本软件连接的 BrandMeister、China DMR（radiowo）等网络由<b>第三方独立运营</b>，'
+      +'与本软件作者无关。你的账号、DMR ID、热点密码由那些平台管理，'
+      +'它们随时可能更改协议、限制接入或封禁账号，本软件无法对此作出任何保证。'
+      +'因第三方服务变更导致的功能不可用，不构成对本软件的索赔理由。</p>'
+      +'<h4>五、无担保</h4>'
+      +'<p>本软件按「现状」提供，<b>不附带任何明示或默示的担保</b>，'
+      +'包括但不限于适销性、特定用途适用性与不侵权担保。'
+      +'在法律允许的最大范围内，作者不对因使用本软件产生的任何直接或间接损失负责。</p>'
+      +'<h4>六、协议变更</h4>'
+      +'<p>本协议可能随版本更新调整，最新文本始终随软件一起发布，'
+      +'你可以在本页随时查看。继续使用即视为接受当时的版本。</p>'
+  },
+  privacy:{
+    t:'隐私政策',
+    h:''
+      +'<h4>一句话总结</h4>'
+      +'<p><b>本软件没有自己的服务器，不收集、不上传、不出售你的任何个人信息。</b>'
+      +'所有设置都存在你自己的手机上。</p>'
+      +'<h4>一、我们存了什么，存在哪</h4>'
+      +'<ul>'
+      +'<li><b>设置项</b>（话组列表、音量、麦克风增益、主题、主站参数等）：'
+      +'存在本机。网页版用浏览器 localStorage；App 版同时写一份到应用私有的 '
+      +'SharedPreferences，所以系统 WebView 升级、应用更新都不会把设置弄丢。</li>'
+      +'<li><b>通联记录</b>：只保留最近 50 条、24 小时以内，同样只在本机，到期自动删除。</li>'
+      +'<li><b>录音</b>：只存在内存里，你点「保存」才会写到手机的音乐目录；不点就一直不落盘。</li>'
+      +'<li><b>麦克风</b>：只在<b>你按住 PTT 的那几秒</b>打开。松开就停，不后台录音。</li>'
+      +'</ul>'
+      +'<h4>二、什么会离开你的手机</h4>'
+      +'<ul>'
+      +'<li><b>连到 DMR 网络本身必需的报文</b>：主站地址、你的 DMR ID、呼号、'
+      +'热点密码（用于登录鉴权）、订阅的话组号。这些是协议要求，不给就连不上。</li>'
+      +'<li><b>发射时的语音</b>：压成 AMBE 码流后按 DMR 协议发给主站 —— '
+      +'这本来就是「发射」这件事的含义，全网都能听到。</li>'
+      +'<li><b>呼号 ⇄ DMR ID 查询</b>：App 版会请求 RadioID.net 的公开数据库，'
+      +'只发你要查的那个呼号或 ID，不附带任何设备信息。</li>'
+      +'</ul>'
+      +'<h4>三、我们不做什么</h4>'
+      +'<ul>'
+      +'<li>没有统计埋点、没有崩溃上报、没有广告 SDK、没有用户账号体系。</li>'
+      +'<li>不读取通讯录、短信、位置、相册、设备标识符。</li>'
+      +'<li>不把你的收听记录、通联记录上传到任何地方。</li>'
+      +'</ul>'
+      +'<h4>四、权限说明</h4>'
+      +'<ul>'
+      +'<li><b>麦克风</b>：发射用，只在按住 PTT 时生效。</li>'
+      +'<li><b>存储</b>（仅 Android 9 及以下）：把录音保存到音乐目录；'
+      +'Android 10 起改用系统媒体库，不再需要这个权限。</li>'
+      +'<li><b>前台服务 / 唤醒锁</b>：熄屏后保持收听不断线，通知栏会常驻一条提示，'
+      +'随时可以在设置里关掉。</li>'
+      +'</ul>'
+      +'<h4>五、你可以怎么清干净</h4>'
+      +'<p>「设置 → 恢复默认」会清空本机保存的全部设置（网页版的 localStorage 与 '
+      +'App 版的 SharedPreferences 会一起清）。卸载 App 会一并删除应用私有数据；'
+      +'已经保存到音乐目录的录音需要你自己删。</p>'
+  },
+  risk:{
+    t:'风险提示',
+    h:''
+      +'<h4>一、发射必须先有资格（最重要）</h4>'
+      +'<p>在中国境内使用业余无线电发射，'
+      +'<b>必须同时持有有效的《业余无线电台操作证书》和《业余无线电台执照》</b>，'
+      +'并在执照核准的频率、功率范围内操作。'
+      +'<b>没有执照就发射属于违法行为</b>，可能面临行政处罚。'
+      +'本软件不核验、也无法核验你的资格 —— <b>资格是你的责任，不是软件的责任</b>。</p>'
+      +'<p>只在手机上「收听」不需要任何许可，这也是本软件的主要用途。</p>'
+      +'<h4>二、DMR 网络是第三方的</h4>'
+      +'<p>BrandMeister、China DMR（radiowo）等网络由第三方运营，'
+      +'它们各自有使用条款：一个 DMR ID 通常只允许一台热点在线，'
+      +'多设备并存需要 ESSID 别名 ID，违规可能被直接封号。'
+      +'登录被拒（MSTNAK）时请先查自己的账号状态，不要反复重试 —— '
+      +'本软件在连续被拒后会自动停用发射，这是保护，不是故障。</p>'
+      +'<h4>三、通联内容是公开的</h4>'
+      +'<p>DMR 话组是<b>开放式广播</b>：任何人只要订阅了同一个话组就能听到你说的话，'
+      +'而且可能被录音、转发、上传。'
+      +'<b>不要在通联中说出密码、住址、身份证号、行程等敏感信息。</b>'
+      +'涉及隐私的内容请改用其它方式沟通。</p>'
+      +'<h4>四、不要传播中继与主站参数</h4>'
+      +'<p>热点密码、主站登录凭据属于你个人账号的凭据。'
+      +'把它发到群里、写进教程、截图分享，等于把账号交给别人使用，'
+      +'由此产生的违规发射记录会记在<b>你的</b> DMR ID 上。</p>'
+      +'<h4>五、功能局限</h4>'
+      +'<ul>'
+      +'<li>本软件是<b>收听工具</b>，不是应急通信设备，<b>不能用于求救</b>。'
+      +'遇到紧急情况请拨 110 / 119 / 120。</li>'
+      +'<li>通联功能依赖网络与第三方主站，可能随时不可用；'
+      +'录音、看板、话组库等本地功能不受影响。</li>'
+      +'<li>音质受声码器（AMBE）与网络抖动限制，'
+      +'与手机、耳机、信号质量都有关系，不保证达到商用通话水平。</li>'
+      +'<li>长时间守听会持续耗电并占用网络，请注意手机温度与流量。</li>'
+      +'</ul>'
+      +'<h4>六、合规使用</h4>'
+      +'<p>使用本软件即表示你已理解上述风险，并承诺在<b>法律允许的范围内</b>使用。'
+      +'作者不对任何违规使用行为承担责任。</p>'
+  }
+};
+function openLegal(k){
+  const d=LEGAL[k]||LEGAL.terms;
+  const t=document.getElementById('lgTitle'), b=document.getElementById('lgBody');
+  if(t)t.textContent=d.t;
+  if(b)b.innerHTML=d.h+'<div class="lv">条款版本 '+LEGAL_VER
+    +' · 信标 DMR 收听台 · GPL-3.0 · Design by BH6RGQ</div>';
+  const m=document.getElementById('legalModal');
+  if(m)m.classList.add('show');
+}
+function closeLegal(){
+  const m=document.getElementById('legalModal');
+  if(m)m.classList.remove('show');
+}
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-legal]');
+  if(b){ openLegal(b.dataset.legal); return; }
+});
+(function(){
+  const c=document.getElementById('lgClose'); if(c)c.addEventListener('click',closeLegal);
+  const m=document.getElementById('legalModal');
+  if(m)m.addEventListener('click',e=>{ if(e.target===m)closeLegal(); });
+})();
+
 /* ============================ 启动 ============================ */
 function boot(){
+  /* ★ 第一件事就是回填副本 —— 必须早于任何 store.get。
+     放在 initVu 之前也不行，因为 initVu 里也可能读设置。 */
+  const restored=store.hydrate();
+  if(restored>0)console.log('[store] 从原生副本恢复了 '+restored+' 项设置');
+  /* 屏蔽名单 / 静音话组要早读 —— setPlay 会立刻去连 HOSE，
+     音频到得比 txEnter 早，那时 audioAllowed 已经在查 state.rxMuteTg 了。 */
+  rxBlockLoad();
   initVu();
   cnInit();          // 本地中国台站库（若 dmr-cn.js 缺失则自动降级，不影响其他功能）
   loadHamCache();
@@ -23831,6 +24455,8 @@ function boot(){
   state.scan.auto=state.scanResume&&!!store.get('scanAuto',false);
   state.scan.autoN=Math.max(1,Math.min(20,Number(store.get('scanAutoN',8))||8));
   state.calls=store.get('calls',[])||[];
+  /* ★ v2.4.8 启动就裁一遍：挂机久了再打开，「记录」里不该还留着昨天的 */
+  if(callsPrune())store.set('calls',state.calls);
   /* 自定义主站：老版本没有这一项，取出来先过一遍形状，
      免得手工改过 localStorage 或者旧数据缺字段导致渲染时抛错。 */
   state.customHosts=(store.get('customHosts',[])||[]).filter(
@@ -23852,6 +24478,13 @@ function boot(){
   state.pttDrag=!!store.get('pttDrag',false);
   state.pttPos=store.get('pttPos',null);
   state.htCollapsed=store.get('htCollapsed',false)===true;
+  /* ★ v2.4.8 简洁模式：开着的时候操作区一律先收起 —— 这就是它存在的意义。
+     用户想调参数手动展开一次即可，只是「滚回顶部自动展开」不再发生。 */
+  state.simple=store.get('simple',false)===true;
+  state.autoConn=store.get('autoConn',true)!==false;
+  state.tabFolded=store.get('tabFolded',false)===true;
+  applySimple(state.simple);
+  if(state.simple)state.htCollapsed=true;
   /* 上次被主站连续拒绝过就一直挂着「暂不开放」声明，
    * 发射页与设置页两处都要显示，直到用户点「重新启用并重试」 */
   TX.blocked=!!store.get('txBlocked',false);
@@ -23859,6 +24492,7 @@ function boot(){
   applyTheme(); setView(state.view); mobCol(state.mcol);
   /* 折叠状态要在量 --htop-h 之前落地，否则拿到的还是展开时的高度 */
   htFoldSet(state.htCollapsed,false);
+  tabFoldSet(state.tabFolded,false);
   syncTopbarH();
   renderNetInfo();
   renderMine(); renderTab(); renderNow(); renderStatus();
@@ -23870,6 +24504,10 @@ function boot(){
   /* 发射条现在长在收听页里，进页面就要把它初始化好 ——
    * 身份回填 / 主站面板绑定 / 声码器加载全在 txEnter 里，它自己是幂等的。 */
   txEnter();
+  /* ★ v2.4.8 启动自动登录主站：等 txEnter 把参数从存储里回填完、
+     声码器开始加载之后再发，太早的话 txHost/txId 还是空的。
+     失败也不会打扰用户 —— txConnect 自己会把原因写进发射日志。 */
+  setTimeout(txAutoConnect,1200);
   /* 设置页所有卡片改成可折叠（默认收起，只留标题） */
   setFoldInit();
   /* 列表重绘后把「发射目标」高亮补回去。放在这里而不是每个 render 里加一行，
