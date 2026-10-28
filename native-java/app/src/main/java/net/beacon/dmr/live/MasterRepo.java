@@ -49,6 +49,18 @@ public final class MasterRepo {
 
     public static int size() { return map.size(); }
 
+    /**
+     * 所有主站号，升序。
+     *
+     * <p>给「发射条上的主站下拉」用 —— 那边需要的是「有哪些主站可选」，
+     * 而 {@link #iso} 只能反查单个。返回副本，调用方随便改。
+     */
+    public static java.util.List<String> ids() {
+        java.util.List<String> l = new java.util.ArrayList<>(map.keySet());
+        java.util.Collections.sort(l);
+        return l;
+    }
+
     /** 立刻读缓存（没有就空表），然后后台刷新。回调在主线程之外，调用方自己切。 */
     public static void load(Context ctx, Runnable onReady) {
         Map<String, String> cached = readCache(ctx);

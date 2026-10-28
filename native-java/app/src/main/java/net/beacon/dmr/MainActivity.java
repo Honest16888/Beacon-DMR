@@ -25,6 +25,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import net.beacon.dmr.audio.AudioOut;
+import net.beacon.dmr.core.CallLog;
+import net.beacon.dmr.core.Geo;
 import net.beacon.dmr.core.HostCheck;
 import net.beacon.dmr.core.MuLaw;
 import net.beacon.dmr.core.Palette;
@@ -109,6 +111,14 @@ public final class MainActivity extends Activity
     private LinearLayout liveList;
     private EditText libSearch;
     private ListView libList;
+    private Button libTabCommon, libTabCountry, libTabSpecial, libTabAll;
+    private Button tabScan, tabRec, tabLog;
+    private LinearLayout tabTools, tabBody;
+
+    /** 扫描 / 录音 / 记录 三选一。不持久化，每次进来回「扫描」。 */
+    private String tab = "scan";
+    /** 通话记录（内存里一份，写盘由 {@link CallLog} 管）。 */
+    private List<CallLog.Rec> callLog = new ArrayList<>();
 
     /* ---- 我的收听 ---- */
     private Button btnAdd;
@@ -134,14 +144,47 @@ public final class MainActivity extends Activity
 
     private final List<Talkgroups.Tg> allTgs = new ArrayList<>();
     private final List<Talkgroups.Tg> shown = new ArrayList<>();
-    /** 「📚 话组库」那一栏的数据。和 {@link #shown}（我的收听）是两个独立列表。 */
-    private final List<Talkgroups.Tg> libShown = new ArrayList<>();
+    /**
+     * 「📚 话组库」那一栏的数据。和 {@link #shown}（我的收听）是两个独立列表。
+     *
+     * <p>元素是 {@code Object}：{@link String} 表示分组标题，{@link Talkgroups.Tg}
+     * 表示话组。ListView 靠 item view type 区分两种行 —— 这样「按国家分组」
+     * 才不用额外套一层 ExpandableListView。
+     */
+    private final List<Object> libShown = new ArrayList<>();
     private final Set<Integer> subs = new LinkedHashSet<>();
     private final Set<Integer> custom = new LinkedHashSet<>();
     private final LiveStore live = new LiveStore();
 
     private TgAdapter adapter;
-    private TgAdapter libAdapter;
+    private LibAdapter libAdapter;
+
+    /** 话组库当前分类：common / country / special / all。不持久化，每次进来回「常用」。 */
+    private String libTab = "common";
+
+    /**
+     * 「常用话组」硬编码表。
+     *
+     * <p>★ 这是**人工挑的**，不是使用统计。WebView 版就是这样（COMMON_IDS），
+     * 理由是不用维护一份「用了几次」的本地计数，也不会因为刚装上一条记录都没有
+     * 而让「常用」是空的。顺序即展示顺序，不再排序。
+     */
+    private static final int[] COMMON_IDS = {
+            91, 92, 93, 94, 95, 98,
+            907, 913, 910, 914, 915, 916, 918, 922, 923, 924, 927, 930, 937, 940, 955, 969, 971, 973,
+            460, 454, 466, 440, 450, 505, 530,
+            2350, 2351, 2352,
+            2621, 2622, 2620,
+            3100, 3110, 3120,
+            2041, 2081, 2021
+    };
+
+    /** 「语言 / 主题话组」硬编码表（同样来自 WebView 版的 SPECIAL_IDS）。 */
+    private static final int[] SPECIAL_IDS = {
+            91, 92, 93, 94, 95, 98,
+            901, 902, 903, 907, 910, 913, 914, 915, 916, 918, 920, 922, 923, 924,
+            927, 930, 937, 940, 955, 969, 971, 973
+    };
     private HoseClient hose;
     private AudioOut audio;
     private LhClient lh;
@@ -177,6 +220,8 @@ public final class MainActivity extends Activity
     /** 主卡片现在显示的是原生接收的那一路（句子结束时据此收回） */
     private boolean nativeRxOn;
     private volatile float lastRxDb = -120f;
+    /** HOSE（AudioOut）那条路的最近电平，0..1 RMS。原生链路用不到它。 */
+    private volatile float lastHoseRms = 0f;
     private volatile int txLevel;
     private volatile float txDb = -120f;
     /** 「话组忙」提示只弹一次，别每个包弹一遍 */
@@ -230,7 +275,12 @@ public final class MainActivity extends Activity
         custom.addAll(Talkgroups.loadCustom(this));
 
         audio = new AudioOut();
-        audio.setLevelListener(rms -> ui.post(() -> npVu.push(rms)));
+        audio.setLevelListener(rms -> ui.post(() -> {
+            /* 存一份给 dB 读数用 —— 波形和读数是同一个电平的两种表现。
+             * 只喂波形不存的话，HOSE 在播时 dB 永远是「—」。 */
+            lastHoseRms = rms;
+            npVu.push(rms);
+        }));
         audio.setVolume(Prefs.volume(this));
         audio.setBoost(Prefs.gain(this));
         audio.setPresence(Prefs.presence(this));
@@ -355,7 +405,8 @@ public final class MainActivity extends Activity
         npDb = findViewById(R.id.npDb);
         npTime = findViewById(R.id.npTime);
         npVu = findViewById(R.id.npVu);
-        npVu.setBarColor(pal.accent);
+        /* 三段色按柱位置分：低段绿、中段橙、高段红（WebView 版 .vu 的规则） */
+        npVu.setColors(pal.ok, pal.warn, pal.tx, pal.border);
         npTgLbl = findViewById(R.id.npTgLbl);
         npTgNum = findViewById(R.id.npTgNum);
         npTgName = findViewById(R.id.npTgName);
@@ -402,6 +453,15 @@ public final class MainActivity extends Activity
         liveList = findViewById(R.id.liveList);
         libSearch = findViewById(R.id.libSearch);
         libList = findViewById(R.id.libList);
+        tabScan = findViewById(R.id.tabScan);
+        tabRec = findViewById(R.id.tabRec);
+        tabLog = findViewById(R.id.tabLog);
+        tabTools = findViewById(R.id.tabTools);
+        tabBody = findViewById(R.id.tabBody);
+        libTabCommon = findViewById(R.id.libTabCommon);
+        libTabCountry = findViewById(R.id.libTabCountry);
+        libTabSpecial = findViewById(R.id.libTabSpecial);
+        libTabAll = findViewById(R.id.libTabAll);
 
         /* ---- 我的收听 ---- */
         btnAdd = findViewById(R.id.btnAdd);
@@ -430,12 +490,27 @@ public final class MainActivity extends Activity
         });
 
         /* 「📚 话组库」是独立的一栏、独立的搜索框、独立的数据源。
-         * 点一下就是加入 / 移出收听 —— 和「我的收听」里那个勾选框等价。 */
-        libAdapter = new TgAdapter(libShown);
+         * 点一下就是加入 / 移出收听 —— 和「我的收听」里那个勾选框等价。
+         * 分组标题行（String）不可点，直接忽略。 */
+        libAdapter = new LibAdapter();
         libList.setAdapter(libAdapter);
         libList.setOnItemClickListener((p, v, pos, id) -> {
-            if (pos >= 0 && pos < libShown.size()) toggleSub(libShown.get(pos).id);
+            if (pos < 0 || pos >= libShown.size()) return;
+            Object o = libShown.get(pos);
+            if (o instanceof Talkgroups.Tg) toggleSub(((Talkgroups.Tg) o).id);
         });
+        tabScan.setOnClickListener(v -> setTab("scan"));
+        tabRec.setOnClickListener(v -> setTab("rec"));
+        tabLog.setOnClickListener(v -> setTab("log"));
+        callLog = CallLog.load(this);
+        paintTabButtons();
+        renderTab();
+
+        libTabCommon.setOnClickListener(v -> setLibTab("common"));
+        libTabCountry.setOnClickListener(v -> setLibTab("country"));
+        libTabSpecial.setOnClickListener(v -> setLibTab("special"));
+        libTabAll.setOnClickListener(v -> setLibTab("all"));
+        paintLibTabs();
         libSearch.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int c, int d) { }
             @Override public void onTextChanged(CharSequence s, int a, int c, int d) { }
@@ -526,13 +601,70 @@ public final class MainActivity extends Activity
             }
         });
 
-        /* 主站点一下就能改：这里只做「跳到设置页那一段」，不另开一套编辑器 */
-        txHostQuick.setOnClickListener(v -> setView("settings"));
+        /* 主站点一下弹列表选 —— WebView 版是个 <select>，这里用单选框等效。
+         * 上一版只跳设置页，等于「首页那条显示着主站、但点不动」，用户反馈
+         * 「操作区域无法列表选择服务器」就是指这个。 */
+        txHostQuick.setOnClickListener(v -> pickHost());
 
         renderNet();
         renderIdentity(false);
         htFoldSet(htCollapsed, false);
         mobCol(mcol);
+    }
+
+    /**
+     * 弹主站列表让用户选。
+     *
+     * <p>候选 = 内置的四台（中国 / 韩国 / 马来西亚 / 澳大利亚）＋
+     * BrandMeister 官方主站表里的其余几十台。内置那四台放最前面，
+     * 因为它们是「一定连得上」的，而官方表里有些主站已经下线了。
+     *
+     * <p>★ 端口跟着条目一起写（这里全是 62031）。WebView 版的注释写得很清楚：
+     * 自建主站可能是任意端口，一律写死 62031 会让它永远连不上，而且报错是
+     * MSTNAK，很难查。等做「自定义主站」时端口要跟着一起填。
+     */
+    private void pickHost() {
+        final java.util.LinkedHashMap<String, String> hosts = new java.util.LinkedHashMap<>();
+        hosts.put("4602.master.brandmeister.network", "中国（国际推荐）");
+        hosts.put("4501.master.brandmeister.network", "韩国");
+        hosts.put("5021.master.brandmeister.network", "马来西亚");
+        hosts.put("5051.master.brandmeister.network", "澳大利亚");
+        for (String id : MasterRepo.ids()) {
+            String h = id + ".master.brandmeister.network";
+            if (hosts.containsKey(h)) continue;
+            String iso = MasterRepo.iso(id);
+            String nm = (iso == null || iso.isEmpty()) ? "" : Geo.isoName(iso);
+            hosts.put(h, nm.isEmpty() ? "" : nm);
+        }
+
+        final java.util.List<String> keys = new java.util.ArrayList<>(hosts.keySet());
+        String[] labels = new String[keys.size()];
+        String cur = Prefs.host(this);
+        int checked = -1;
+        for (int i = 0; i < keys.size(); i++) {
+            String h = keys.get(i);
+            String note = hosts.get(h);
+            /* BM 域名太长，下拉里只显示主站号 + 国家 —— 完整域名塞不进一行，
+             * 用户真正想确认的也正是「是哪个主站号」。 */
+            String head = h.contains(".master.") ? h.substring(0, h.indexOf('.')) : h;
+            labels[i] = note.isEmpty() ? head : head + " · " + note;
+            if (h.equalsIgnoreCase(cur)) checked = i;
+        }
+
+        new AlertDialog.Builder(this)
+                .setTitle("选择主站")
+                .setSingleChoiceItems(labels, checked, (d, which) -> {
+                    String h = keys.get(which);
+                    Prefs.setHost(this, h);
+                    Prefs.setPort(this, 62031);
+                    if (settingsPage != null) settingsPage.setHostText(h);
+                    renderIdentity(false);
+                    Toast.makeText(this, "主站已设为 " + h
+                            + "（已连接的话要先断开再连）", Toast.LENGTH_LONG).show();
+                    d.dismiss();
+                })
+                .setNegativeButton("取消", null)
+                .show();
     }
 
     /** 提交「发射到哪个话组」。1~7 位数字才算数，别的直接回滚显示。 */
@@ -1004,8 +1136,221 @@ public final class MainActivity extends Activity
                 || t.desc.toLowerCase(Locale.ROOT).contains(q);
     }
 
+    /* ==================== 扫描 / 录音 / 记录 ==================== */
+
+    private void setTab(String t) {
+        tab = t == null ? "scan" : t;
+        paintTabButtons();
+        renderTab();
+    }
+
+    private void paintTabButtons() {
+        paintSeg(tabScan, "scan".equals(tab));
+        paintSeg(tabRec, "rec".equals(tab));
+        paintSeg(tabLog, "log".equals(tab));
+    }
+
+    /** 一块小按钮（工具条里那些）。 */
+    private Button chip(String text, boolean on, android.view.View.OnClickListener l) {
+        Button b = new Button(this);
+        b.setText(text);
+        b.setTextSize(11.5f);
+        b.setAllCaps(false);
+        b.setMinWidth(0);
+        b.setMinimumWidth(0);
+        b.setMinimumHeight(0);
+        b.setPadding(dp(9), dp(5), dp(9), dp(5));
+        b.setBackgroundResource(on ? R.drawable.bg_btn : R.drawable.bg_btn_small);
+        b.setTextColor(on ? 0xFFFFFFFF : pal.text);
+        b.setOnClickListener(l);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT, dp(30));
+        lp.rightMargin = dp(6);
+        b.setLayoutParams(lp);
+        return b;
+    }
+
+    private TextView line(String text, int color, float size) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextColor(color);
+        tv.setTextSize(size);
+        tv.setLineSpacing(dp(2), 1f);
+        tv.setPadding(dp(2), dp(5), dp(2), dp(5));
+        return tv;
+    }
+
     /**
-     * 重建「📚 话组库」那一栏 —— 全部话组，带自己的搜索框。
+     * 按当前 tab 重画工具条与内容区。
+     *
+     * <p>对应 WebView 版 {@code renderTab()}，三分支。
+     */
+    private void renderTab() {
+        if (tabTools == null || tabBody == null) return;
+        tabTools.removeAllViews();
+        tabBody.removeAllViews();
+
+        switch (tab) {
+            case "rec":  renderRecTab(); break;
+            case "log":  renderLogTab(); break;
+            default:     renderScanTab(); break;
+        }
+    }
+
+    /* ---------- 扫描 ---------- */
+
+    /**
+     * 扫描 tab。
+     *
+     * <p>★ 扫描**不产生订阅列表**，它只是 {@link #effectiveSubs()} 的一个加项：
+     * 开着「自动跟进」时，每个 tick 取此刻最活跃的 N 个组一起订阅，
+     * 谁说话就放谁。关掉扫描后这些组会被 GROUP_RESET 掉。
+     *
+     * <p>WebView 版的空态文案说得很清楚：「只有列表内的频道会出声，其余自动静默」
+     * —— 这句话直接抄过来，因为它解释了扫描到底是个什么东西。
+     */
+    private void renderScanTab() {
+        boolean on = Prefs.scanOn(this);
+        boolean auto = Prefs.scanAuto(this);
+        tabTools.addView(chip(on ? "⏸ 停止扫描" : "▶ 开始扫描", on, v -> {
+            Prefs.setScanOn(this, !Prefs.scanOn(this));
+            syncSubs();
+            renderTab();
+            Toast.makeText(this, Prefs.scanOn(this) ? "扫描已开启" : "扫描已关闭",
+                    Toast.LENGTH_SHORT).show();
+        }));
+        tabTools.addView(chip("📻 自动跟进", auto, v -> {
+            Prefs.setScanAuto(this, !Prefs.scanAuto(this));
+            syncSubs();
+            renderTab();
+        }));
+
+        List<Integer> picked = autoPick();
+        if (tabCount != null) tabCount.setText(String.valueOf(on ? picked.size() : 0));
+
+        if (!on) {
+            tabBody.addView(line("扫描是关着的。\n开启后只会放扫描列表里的频道，其余自动静默。",
+                    pal.dim, 11.5f));
+            return;
+        }
+        if (!auto) {
+            tabBody.addView(line("打开了扫描，但没开「自动跟进」——"
+                    + "现在扫的是你手动加进「我的收听」的那些组。\n"
+                    + "点上面的「📻 自动跟进」让它自己找最活跃的。", pal.dim, 11.5f));
+            return;
+        }
+        if (picked.isEmpty()) {
+            tabBody.addView(line("自动跟进中 —— 还没发现活跃话组。\n"
+                    + "等几秒，或者去「实时活动」看看现在有没有人在说话。", pal.dim, 11.5f));
+            return;
+        }
+        tabBody.addView(line("自动跟进 " + picked.size() + " 个（上限 " + Prefs.autoN(this)
+                + "，在设置页调）", pal.muted, 11f));
+        for (int tg : picked) {
+            TextView tv = line("TG " + tg + "   " + Geo.tgLabel(tg, nameOf(tg)), pal.text, 12.5f);
+            tv.setBackgroundResource(R.drawable.bg_field);
+            tv.setPadding(dp(9), dp(7), dp(9), dp(7));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = dp(5);
+            tv.setLayoutParams(lp);
+            tv.setOnClickListener(v -> {
+                Prefs.setWatchTg(this, tg);
+                if (link != null) link.setWatchTg(tg);
+                renderPttTg();
+            });
+            tabBody.addView(tv);
+        }
+    }
+
+    /* ---------- 录音 ---------- */
+
+    private void renderRecTab() {
+        boolean on = Prefs.recOn(this);
+        tabTools.addView(chip(on ? "● 自动录音：开" : "○ 自动录音：关", on, v -> {
+            Prefs.setRecOn(this, !Prefs.recOn(this));
+            renderTab();
+        }));
+        if (tabCount != null) tabCount.setText("0");
+        tabBody.addView(line("录音还没做 —— 它要把 HOSE 的 μ-law 帧攒成 WAV，"
+                + "归下一轮。\n"
+                + "现在这个开关只存值：「自动录音」打开后，"
+                + "设置页会显示「仅本次运行」，但不会真的生成文件。", pal.dim, 11.5f));
+    }
+
+    /* ---------- 记录 ---------- */
+
+    private void renderLogTab() {
+        tabTools.addView(chip("清空", false, v -> {
+            CallLog.clear(this);
+            callLog = new ArrayList<>();
+            renderTab();
+            Toast.makeText(this, "记录已清空", Toast.LENGTH_SHORT).show();
+        }));
+        if (tabCount != null) tabCount.setText(String.valueOf(callLog.size()));
+
+        if (callLog.isEmpty()) {
+            tabBody.addView(line("还没有记录。\n"
+                    + "收到一句话结束后会自动记一笔（谁 / 哪个组 / 说了多久），"
+                    + "保留 24 小时、最多 " + CallLog.MAX + " 条。", pal.dim, 11.5f));
+            return;
+        }
+        java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("HH:mm", Locale.US);
+        for (CallLog.Rec r : callLog) {
+            String who = r.call.isEmpty() ? ("ID " + r.srcId) : r.call;
+            String nm = r.name.isEmpty() ? "" : " · " + r.name;
+            String tg = (r.priv ? "个呼 " : "TG ") + r.tg + " "
+                    + (nameOf(r.tg) == null ? "" : nameOf(r.tg));
+            TextView tv = line(f.format(new java.util.Date(r.at)) + "   " + who + nm
+                    + "\n" + tg + "   " + r.dur + " 秒", pal.text, 12f);
+            tv.setBackgroundResource(R.drawable.bg_field);
+            tv.setPadding(dp(9), dp(7), dp(9), dp(7));
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT);
+            lp.bottomMargin = dp(5);
+            tv.setLayoutParams(lp);
+            tabBody.addView(tv);
+        }
+    }
+
+    /** 一句话结束，记一笔。太短的（<1 秒）不记 —— 那是点一下 PTT 的杂音。 */
+    private void recordCall() {
+        if (curStart <= 0 || curTg <= 90) return;
+        int dur = (int) ((System.currentTimeMillis() - curStart) / 1000);
+        if (dur < 1) return;
+        callLog = CallLog.add(this, new CallLog.Rec(curTg, curSrc, curCall, curName,
+                System.currentTimeMillis(), dur, false));
+        if ("log".equals(tab)) renderTab();
+    }
+
+    /** 切话组库的分类。切 tab 不清搜索框 —— 搜索优先，效果一样但不丢字。 */
+    private void setLibTab(String t) {
+        libTab = t == null ? "common" : t;
+        paintLibTabs();
+        rebuildLib();
+    }
+
+    private void paintLibTabs() {
+        paintSeg(libTabCommon, "common".equals(libTab));
+        paintSeg(libTabCountry, "country".equals(libTab));
+        paintSeg(libTabSpecial, "special".equals(libTab));
+        paintSeg(libTabAll, "all".equals(libTab));
+    }
+
+    /**
+     * 重建「📚 话组库」那一栏。
+     *
+     * <p>四个分类，对应 WebView 版 {@code #libTabs}：
+     * <b>常用</b>（硬编码 COMMON_IDS，按原顺序）/
+     * <b>国家</b>（按 {@link Geo} 分组，组名按中文名排序，每组最多 26 条）/
+     * <b>语言</b>（硬编码 SPECIAL_IDS，数字升序）/
+     * <b>全部</b>（数字升序，上限 300）。
+     *
+     * <p>★ 有搜索词时**忽略分类**，直接在全部话组里搜（上限 300）。
+     * WebView 版切 tab 会清空搜索框，这里不清 —— 但搜索优先于分类，
+     * 效果一样，而且用户切 tab 时不会丢掉刚敲的字。
      *
      * <p>库里的条目点一下就是「加入收听 / 从收听移除」，和「我的收听」里
      * 勾选框的效果一致：这里不做第三个概念，只有「在听」和「不在听」。
@@ -1015,18 +1360,123 @@ public final class MainActivity extends Activity
         String q = libSearch == null ? ""
                 : libSearch.getText().toString().trim().toLowerCase(Locale.ROOT);
         libShown.clear();
-        for (Talkgroups.Tg t : allTgs) {
-            if (!q.isEmpty() && !match(t, q)) continue;
-            libShown.add(t);
-            /* 库有 1800+ 条，全塞进一个 LinearLayout/ListView 会让滚动卡顿。
-             * 搜了就给 200 条上限，没搜也一样 —— 剩下的靠搜索找。 */
-            if (libShown.size() >= 200) break;
+
+        if (!q.isEmpty()) {
+            int n = 0;
+            for (Talkgroups.Tg t : allTgs) {
+                if (!match(t, q)) continue;
+                libShown.add(t);
+                if (++n >= 300) break;
+            }
+            addGroupNote("搜索结果", libShown.size());
+        } else {
+            switch (libTab) {
+                case "common":  addIdGroup("常用话组", COMMON_IDS); break;
+                case "special": addSortedIdGroup("语言 / 主题话组", SPECIAL_IDS); break;
+                case "country": addCountryGroups(); break;
+                default:        addAllGroup(); break;
+            }
         }
+
         libAdapter.notifyDataSetChanged();
         if (libCount != null) {
-            libCount.setText(q.isEmpty() ? String.valueOf(libShown.size())
-                    : libShown.size() + "/" + allTgs.size());
+            int rows = 0;
+            for (Object o : libShown) if (o instanceof Talkgroups.Tg) rows++;
+            boolean ready = !allTgs.isEmpty();
+            libCount.setText(!ready ? "—" : String.valueOf(rows));
         }
+    }
+
+    /** 按给定顺序把 id 换成话组塞进去（「常用」用）。表里没有的跳过。 */
+    private void addIdGroup(String title, int[] ids) {
+        List<Talkgroups.Tg> list = new ArrayList<>();
+        for (int id : ids) {
+            Talkgroups.Tg t = findTg(id);
+            if (t != null) list.add(t);
+        }
+        libShown.add(title + " · " + list.size());
+        libShown.addAll(list);
+    }
+
+    /** 同上但按数字升序（「语言」用）。 */
+    private void addSortedIdGroup(String title, int[] ids) {
+        List<Talkgroups.Tg> list = new ArrayList<>();
+        for (int id : ids) {
+            Talkgroups.Tg t = findTg(id);
+            if (t != null) list.add(t);
+        }
+        list.sort((a, b) -> Integer.compare(a.id, b.id));
+        libShown.add(title + " · " + list.size());
+        libShown.addAll(list);
+    }
+
+    /**
+     * 按国家分组。
+     *
+     * <p>只收 3~5 位话组号 —— 6 位以上（{@code 460562} 这类）基本是地区细分，
+     * 挂到国家下面会把组撑爆。WebView 版也是这么过滤的（{@code length>5} 跳过），
+     * 那些号在「全部」里还能找到。
+     *
+     * <p>每组只放前 26 条：一屏就那么高，翻 60 条德国话组没人受得了。
+     */
+    private void addCountryGroups() {
+        java.util.Map<String, List<Talkgroups.Tg>> byIso = new java.util.TreeMap<>();
+        java.util.Map<String, String> names = new java.util.HashMap<>();
+        for (Talkgroups.Tg t : allTgs) {
+            String s = String.valueOf(t.id);
+            if (s.length() < 3 || s.length() > 5) continue;
+            String iso = Geo.regionIso(t.id);
+            if (iso == null || iso.isEmpty()) continue;
+            byIso.computeIfAbsent(iso, k -> new ArrayList<>()).add(t);
+            names.put(iso, Geo.regionName(t.id));
+        }
+        if (byIso.isEmpty()) {
+            libShown.add("话组表还没加载完 · 稍等几秒再点这个分类");
+            return;
+        }
+        /* 组按中文名排序 —— 按 ISO 排的话用户得先知道「德国是 de」才找得到。 */
+        List<java.util.Map.Entry<String, List<Talkgroups.Tg>>> groups =
+                new ArrayList<>(byIso.entrySet());
+        groups.sort((a, b) -> {
+            String na = names.get(a.getKey()), nb = names.get(b.getKey());
+            return String.valueOf(na).compareTo(String.valueOf(nb));
+        });
+        for (java.util.Map.Entry<String, List<Talkgroups.Tg>> e : groups) {
+            List<Talkgroups.Tg> list = e.getValue();
+            list.sort((a, b) -> Integer.compare(a.id, b.id));
+            String fl = Geo.flag(e.getKey());
+            libShown.add((fl.isEmpty() ? "" : fl + " ")
+                    + names.get(e.getKey()) + " · " + list.size());
+            int n = 0;
+            for (Talkgroups.Tg t : list) {
+                libShown.add(t);
+                if (++n >= 26) break;
+            }
+        }
+    }
+
+    /** 「全部」：数字升序，上限 300（再多滚动会卡，剩下的靠搜索）。 */
+    private void addAllGroup() {
+        List<Talkgroups.Tg> list = new ArrayList<>(allTgs);
+        list.sort((a, b) -> Integer.compare(a.id, b.id));
+        addGroupNote("全部话组", list.size());
+        int n = 0;
+        for (Talkgroups.Tg t : list) {
+            libShown.add(t);
+            if (++n >= 300) break;
+        }
+        if (list.size() > 300) {
+            libShown.add("还有 " + (list.size() - 300) + " 个，输入关键词缩小范围");
+        }
+    }
+
+    private void addGroupNote(String title, int n) {
+        libShown.add(title + " · " + n);
+    }
+
+    private Talkgroups.Tg findTg(int id) {
+        for (Talkgroups.Tg t : allTgs) if (t.id == id) return t;
+        return null;
     }
 
     private void addTyped() {
@@ -1121,9 +1571,14 @@ public final class MainActivity extends Activity
     }
 
     private void renderMute() {
-        /* 顶栏那颗是「开始 / 停止收听」，不是「静音」—— WebView 版 #btnPlay 的语义。
-         * 文案跟着状态走，否则用户会以为它是一个切换开着的开关。 */
-        btnMute.setText(muted ? "🔇 已停听" : "🔊 开始收听");
+        /* ★ 这颗按钮显示的是「点下去会发生什么」，不是「当前是什么状态」。
+         *
+         * WebView 版 renderPlayBtn()：开着 → 「🔇 静音」，关着 → 「🔊 开始收听」。
+         * 上一版写反了 —— 开着的时候显示「开始收听」，用户点一下反而变成静音，
+         * 反馈就是「右上角的收听点了之后显示已静音」。
+         *
+         * 语义上它是**静音**（只掐音频，不断链路、不退订阅），不是「停止收听」。 */
+        btnMute.setText(muted ? "🔊 开始收听" : "🔇 静音");
         if (muted) {
             showIdle("🔇 已静音 · 仍会记录通联");
         } else {
@@ -1147,7 +1602,9 @@ public final class MainActivity extends Activity
 
         npTgLbl.setText("话组");
         npTgNum.setText(tg > 0 ? String.valueOf(tg) : "—");
-        npTgName.setText(tgName == null || tgName.isEmpty() ? "—" : tgName);
+        String fl = (tg > 0 && !"cn".equals(net)) ? Geo.tgFlag(tg) : "";
+        String nm = tgName == null || tgName.isEmpty() ? "—" : tgName;
+        npTgName.setText(fl.isEmpty() ? nm : fl + " " + nm);
 
         npCall.setText(call == null || call.isEmpty() ? "—" : call);
         npName.setText(name == null ? "" : name);
@@ -1195,6 +1652,9 @@ public final class MainActivity extends Activity
          * 这里如果还更新卡片，就会出现「卡片写着 A、耳朵里是 B」。
          * 注意只在这个窗口内让位 —— 判据是「正在收」，不是「已连接」。 */
         if (link != null && link.isNativeRx()) return;
+        /* 不该出声的组，播报条也不该显示它 ——
+         * 否则「卡片写着 460、耳朵里没声音」，用户会以为坏了。 */
+        if (tg > 90 && !audioAllowed(tg)) return;
         curTg = tg;
         curSrc = srcId;
         curCall = "";
@@ -1209,6 +1669,7 @@ public final class MainActivity extends Activity
     public void onCallEnd(int tg) {
         if (link != null && link.isNativeRx()) return;
         if (tg != 0 && tg != curTg) return;
+        recordCall();
         curStart = 0;
         curTg = 0;
         curSrc = 0;
@@ -1222,6 +1683,7 @@ public final class MainActivity extends Activity
     public void onAlias(int tg, String alias) {
         if (link != null && link.isNativeRx()) return;
         if (alias == null || alias.isEmpty()) return;
+        if (tg > 90 && !audioAllowed(tg)) return;
         String[] p = alias.trim().split("\\s+", 3);
         if (p.length > 0 && p[0].matches("[A-Z0-9/]{3,}")) {
             curCall = p[0];
@@ -1234,21 +1696,58 @@ public final class MainActivity extends Activity
     }
 
     @Override
-    public void onAudio(byte[] ulaw) {
+    public void onAudio(int tg, byte[] ulaw) {
         if (muted || audio == null) return;
         /* ★ 半双工闸门的第二半：原生链路在收的时候，HOSE 让位。
          *
-         * 判据是 link.isNativeRx()（= rxOn && 已连接），两个条件都得成立 ——
-         * 「只发不收」的用户关掉了 rxOn，那时原生不播，如果 HOSE 还让位，
-         * 就是全静音。v2.5.x 在 WebView 版里踩过这个坑，注释写在 DmrLink 类头。
+         * 判据是 link.isNativeRx()（= 最近 500 ms 收到过原生语音帧），不是「已连接」——
+         * 按「已连接」掐掉会变成「连上主站反而什么都听不见」。
          *
          * 注意这里丢的是「帧」而不是「压增益」：两条链共用同一个 AudioOut 队列，
-         * 所以不存在「两句叠着放」，也就完全不需要在句子中间做归属判断。 */
+         * 所以不存在「两句叠着放」。 */
         if (link != null && link.isNativeRx()) return;
+
+        /* ★ 第三层：这一帧到底该不该放。
+         *
+         * HOSE 的 CALL_AUDIO 帧**不带话组号**，tg 是靠 CALL_START 记下来的归属。
+         * 上一版完全没查这个，订阅了 91 和 460 两个组时两边的语音会一起出来 ——
+         * 用户的原话是「收听的组选择了不生效还是乱播放其他的组」。
+         *
+         * tg == 0 表示归属不明（半路加入、CALL_START 丢了）。这种时候**照播**:
+         * 拦下来会变成「偶尔整段没声音」，比串音更难查。WebView 版也是这么处理的。
+         */
+        if (tg > 90 && !audioAllowed(tg)) return;
 
         short[] pcm = new short[ulaw.length];
         MuLaw.decode(ulaw, 0, ulaw.length, pcm);
         audio.feed(pcm, ulaw.length);
+    }
+
+    /**
+     * 这个话组现在该不该出声。
+     *
+     * <p>对应 WebView 版 {@code audioAllowed(tg)}：
+     * 扫描开着时放扫描集里的，否则只放已订阅的。
+     *
+     * <p>「单个话组静音」（WebView 的 {@code rxMuteTg}）还没做 —— 它需要在
+     * 订阅层就把这个组摘掉，只靠这里拦是不够的（HOSE 照样推音频，只是我们不听，
+     * 白白占带宽）。等做单组静音 UI 时一起处理。
+     */
+    private boolean audioAllowed(int tg) {
+        if (subs.contains(tg)) return true;
+        if (Prefs.scanOn(this)) {
+            int[] auto = autoPickArray();
+            for (int v : auto) if (v == tg) return true;
+        }
+        return false;
+    }
+
+    /** {@link #autoPick()} 的数组版，给 {@link #audioAllowed} 用。 */
+    private int[] autoPickArray() {
+        List<Integer> l = autoPick();
+        int[] a = new int[l.size()];
+        for (int i = 0; i < a.length; i++) a[i] = l.get(i);
+        return a;
     }
 
     @Override
@@ -1309,7 +1808,8 @@ public final class MainActivity extends Activity
     private void renderLiveState() {
         int n = live.activeCount();
         if (liveCount != null) liveCount.setText(String.valueOf(n));
-        if (tabCount != null) tabCount.setText(String.valueOf(n));
+        /* ★ 这里**不要**动 tabCount —— 它现在是「扫描/录音/记录」那个面板的计数，
+         * 归 renderTab() 管。上一版两处都写它，结果活动数把记录条数冲掉了。 */
         if (stateText != null) {
             stateText.setText(String.format(Locale.US, "收听 %d 组", sentSubs.length));
         }
@@ -1342,11 +1842,12 @@ public final class MainActivity extends Activity
             TextView tv = new TextView(this);
             String nm = nameOf((int) s.tg);
             String who = (s.call == null || s.call.isEmpty()) ? ("ID " + s.srcId) : s.call;
+            String fl = "cn".equals(net) ? "" : Geo.tgFlag(s.tg);
             /* s.start 是 epoch 秒，不是毫秒 —— 早先这里按毫秒算过，
              * 结果每条都显示「1750 万秒前」。 */
             long age = Math.max(0, now - s.start);
-            tv.setText(String.format(Locale.US, "%s  ·  TG %d %s  ·  %ds",
-                    who, s.tg, nm == null ? "" : nm, age));
+            tv.setText(String.format(Locale.US, "%s%s  ·  TG %d %s  ·  %ds",
+                    fl.isEmpty() ? "" : fl + " ", who, s.tg, nm == null ? "" : nm, age));
             tv.setTextColor(s.stop == 0 ? pal.text : pal.muted);
             tv.setTextSize(11.5f);
             tv.setSingleLine(true);
@@ -1463,6 +1964,12 @@ public final class MainActivity extends Activity
     @Override
     public void onRxLevel(float dbfs) {
         lastRxDb = dbfs;
+        /* ★ 原生这条路的电平必须自己喂给波形。
+         *
+         * AudioOut 的 level listener 只在 HOSE 那条路上有值 ——
+         * MMDVM 接管接收之后 HOSE 整句不解码，level 一直是 0，
+         * 于是「声音在响、柱子是平的」。这就是「波形图显示不形象」。 */
+        if (npVu != null) npVu.setDb(dbfs);
     }
 
     @Override
@@ -1497,6 +2004,7 @@ public final class MainActivity extends Activity
 
     /** 原生接收这一句说完了 → 把主卡片收回「守听中」。 */
     private void clearNativeRx() {
+        recordCall();
         nativeRxOn = false;
         curStart = 0;
         curTg = 0;
@@ -1521,13 +2029,21 @@ public final class MainActivity extends Activity
                 npTime.setText("");
             }
             /* 接收电平：DMRD 包不带 RSSI，这是解出来 PCM 的电平（dBFS），
-             * 不是空口信号强度 —— 播报条那个 tooltip 的说明就是这个意思。 */
-            if (curStart > 0) {
-                float db = lastRxDb;
-                npDb.setText(db <= -120f ? "—" : String.format(Locale.US, "%.0f dB", db));
-                npDb.setTextColor(db > -12f ? pal.tx : db > -30f ? pal.ok
-                        : db > -60f ? pal.muted : pal.dim);
+             * 不是空口信号强度 —— 播报条那个 tooltip 的说明就是这个意思。
+             *
+             * ★ 两条路都要算，缺一条就是「有声音但 dB 不显示」：
+             *   原生在收  → 用 onRxLevel 报上来的 lastRxDb；
+             *   HOSE 在播 → 用 AudioOut 的 RMS 换算（Audio_.level 那一路）。
+             * 上一版只算了原生那条，所以只要不是在走 MMDVM，dB 一直是「—」。 */
+            float db = -120f;
+            if (link != null && link.isNativeRx()) {
+                db = lastRxDb;
+            } else if (curStart > 0 && lastHoseRms > 0.0005f) {
+                db = (float) (20.0 * Math.log10(lastHoseRms));
             }
+            npDb.setText(db <= -119f ? "—" : String.format(Locale.US, "%.0f dB", db));
+            npDb.setTextColor(db > -12f ? pal.tx : db > -30f ? pal.ok
+                    : db > -60f ? pal.muted : pal.dim);
             npVu.decay();
             /* 悬浮钮的红/绿、折叠摘要那一行都跟着收/发状态变，500 ms 刷一次足够 */
             if (tickCount % 2 == 0) renderPttButton();
@@ -1943,6 +2459,104 @@ public final class MainActivity extends Activity
     /* ==================== 列表 ==================== */
 
     /**
+     * 话组库的列表适配器 —— 两种行：分组标题（{@link String}）和话组（{@link Talkgroups.Tg}）。
+     *
+     * <p>为什么用 ListView 的 item view type 而不是 ExpandableListView：
+     * 「国家」那个分类有 20+ 个组，展开/折叠反而是负担 —— 用户要的是
+     * 「一眼看到有哪些国家、每组前几条」，不是一棵树。
+     *
+     * <p>话组行复用 {@code item_tg}，但把勾选框藏掉：话组库里勾选框会让每一行
+     * 看起来很挤，而且点整行本身就是「加入 / 移出」，勾选框只是重复的视觉噪音。
+     */
+    private final class LibAdapter extends BaseAdapter {
+        @Override public int getCount() { return libShown.size(); }
+
+        @Override public Object getItem(int i) { return libShown.get(i); }
+
+        @Override public long getItemId(int i) {
+            Object o = libShown.get(i);
+            return o instanceof Talkgroups.Tg ? ((Talkgroups.Tg) o).id : -i;
+        }
+
+        @Override public int getViewTypeCount() { return 2; }
+
+        @Override public int getItemViewType(int i) {
+            return libShown.get(i) instanceof Talkgroups.Tg ? 1 : 0;
+        }
+
+        @Override
+        public boolean areAllItemsEnabled() { return false; }
+
+        @Override
+        public boolean isEnabled(int i) { return libShown.get(i) instanceof Talkgroups.Tg; }
+
+        @Override
+        public View getView(int pos, View convert, ViewGroup parent) {
+            Object o = libShown.get(pos);
+
+            if (!(o instanceof Talkgroups.Tg)) {
+                View g = convert;
+                if (g == null || g.findViewById(R.id.gtitle) == null) {
+                    g = LayoutInflater.from(MainActivity.this)
+                            .inflate(R.layout.item_group, parent, false);
+                }
+                TextView gt = g.findViewById(R.id.gtitle);
+                TextView gc = g.findViewById(R.id.gcount);
+                TextView gf = g.findViewById(R.id.gflag);
+
+                /* 分组标题的文案是「德国 · 26」，最后那截是计数 —— 拆开，
+                 * 让计数用等宽浅色靠右，标题用正文色。 */
+                String text = String.valueOf(o);
+                int cut = text.lastIndexOf(" · ");
+                if (cut > 0) {
+                    gt.setText(text.substring(0, cut));
+                    gc.setText(text.substring(cut + 3));
+                } else {
+                    gt.setText(text);
+                    gc.setText("");
+                }
+                /* 国家分组的旗帜已经在文案里了（Geo.flag 拼进去的 emoji），
+                 * 这里的 gf 留给以后「单独控制旗帜大小」，现在不用。 */
+                gf.setVisibility(View.GONE);
+                return g;
+            }
+
+            Talkgroups.Tg t = (Talkgroups.Tg) o;
+            View v = convert;
+            if (v == null || v.findViewById(R.id.gtitle) != null) {
+                v = LayoutInflater.from(MainActivity.this).inflate(R.layout.item_tg, parent, false);
+            }
+            CheckBox ck = v.findViewById(R.id.ck);
+            TextView flag = v.findViewById(R.id.flag);
+            TextView name = v.findViewById(R.id.name);
+            TextView id = v.findViewById(R.id.tgid);
+            TextView desc = v.findViewById(R.id.desc);
+
+            boolean on = subs.contains(t.id);
+            /* 库里不显示勾选框，改用文字颜色区分「已在收听」——
+             * 藏控件而不是设不可见，省每行一个 View 的测量开销。 */
+            ck.setVisibility(View.GONE);
+            name.setTextColor(on ? pal.text : pal.muted);
+
+            String fl = "cn".equals(net) ? "" : Geo.tgFlag(t.id);
+            if (fl.isEmpty()) {
+                flag.setVisibility(View.GONE);
+            } else {
+                flag.setText(fl);
+                flag.setVisibility(View.VISIBLE);
+            }
+
+            name.setText(t.name);
+            id.setText(String.valueOf(t.id));
+            id.setTextColor(pal.dim);
+            desc.setText(on ? "已在收听" : t.desc);
+            desc.setTextColor(on ? pal.ok : pal.dim);
+            desc.setVisibility(t.desc.isEmpty() && !on ? View.GONE : View.VISIBLE);
+            return v;
+        }
+    }
+
+    /**
      * 话组列表项。
      *
      * <p>★ 带一个 {@code data} 参数而不是固定读 {@link #shown} ——
@@ -1966,12 +2580,24 @@ public final class MainActivity extends Activity
             }
             Talkgroups.Tg t = data.get(pos);
             CheckBox ck = v.findViewById(R.id.ck);
+            TextView flag = v.findViewById(R.id.flag);
             TextView name = v.findViewById(R.id.name);
             TextView id = v.findViewById(R.id.tgid);
             TextView desc = v.findViewById(R.id.desc);
 
             boolean on = subs.contains(t.id);
             ck.setChecked(on);
+
+            /* 国旗只在国际网有意义 —— 国内的 460 / 860 是「话组号」不是国家码，
+             * 给 460 挂面中国国旗反而误导（860 又查不到，两边不一致）。 */
+            String fl = "cn".equals(net) ? "" : Geo.tgFlag(t.id);
+            if (fl.isEmpty()) {
+                flag.setVisibility(View.GONE);
+            } else {
+                flag.setText(fl);
+                flag.setVisibility(View.VISIBLE);
+            }
+
             name.setText(t.name);
             name.setTextColor(on ? pal.text : pal.muted);
             id.setText(String.valueOf(t.id));

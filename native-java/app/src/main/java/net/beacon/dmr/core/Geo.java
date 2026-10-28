@@ -67,6 +67,43 @@ public final class Geo {
         return n == null ? up : n;
     }
 
+    /**
+     * ISO 代码 → 国旗 emoji（🇨🇳 / 🇩🇪）。
+     *
+     * <p><b>和 WebView 版的一个有意偏离：</b>那边用 CDN 上的 SVG
+     * （{@code cdn.jsdelivr.net/.../flag-icons/4x3/xx.svg}，15×11 圆角小图），
+     * 这里换成 Unicode 区域指示符。理由：
+     * <ul>
+     *   <li>离线可用 —— 收听类 App 经常在没网/弱网下开，一屏灰方块不如不显示；</li>
+     *   <li>不用为了一张 15px 的图引一条 HTTP + 图片缓存 + 三级缓存淘汰；</li>
+     *   <li>体积为零，渲染在系统字体里，跟着系统字体走。</li>
+     * </ul>
+     * 代价是不同 ROM 的旗帜画风略有差异，而且极少数老机型字体缺这几个码位
+     * （缺了就显示成两个方框字母，不会崩）。
+     *
+     * @return 两个区域指示符拼成的旗帜；iso 不合法时返回空串
+     */
+    public static String flag(String iso) {
+        if (iso == null || iso.length() != 2) return "";
+        char a = Character.toUpperCase(iso.charAt(0));
+        char b = Character.toUpperCase(iso.charAt(1));
+        if (a < 'A' || a > 'Z' || b < 'A' || b > 'Z') return "";
+        // 区域指示符 A = U+1F1E6，所以 'A' 偏移 0、'Z' 偏移 25
+        return new String(Character.toChars(0x1F1E6 + (a - 'A')))
+                + new String(Character.toChars(0x1F1E6 + (b - 'A')));
+    }
+
+    /**
+     * 话组号 → 国旗 emoji，查不到返回空串。
+     *
+     * <p>★ 只在国际网有意义。国内的 460 / 860 是**话组号**不是国家码，
+     * 给 460 挂面中国国旗反而误导（860 又查不到，两边不一致）。
+     * 调用方要自己判断当前网络 —— 和 WebView 版 {@code flagHtml} 一样。
+     */
+    public static String tgFlag(long tg) {
+        return flag(regionIso(tg));
+    }
+
     /** 话组显示名：表里有名字用名字，没有就用「德国 区域话组」这种兜底。 */
     public static String tgLabel(long tg, String name) {
         if (name != null && !name.isEmpty()) return name;

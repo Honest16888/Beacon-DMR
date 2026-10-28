@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  话组库里的分组标题行（「德国 26」「常用话组 43」这种）。
+
+  ★ 单独一个 layout 而不是复用一个带 style 的 TextView：ListView 的
+  「分组标题」需要 sticky 感（视觉上和下面的行分开），而且它的左内边距
+  比普通行小 —— 复用会变成「标题和行左对齐、看着像同一层」。
+
+  国旗只在「按国家分组」时出现，用同一个 TextView 装，没国旗就 gone。
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:orientation="horizontal"
+    android:gravity="center_vertical"
+    android:background="?attr/cPanel2"
+    android:paddingStart="10dp"
+    android:paddingEnd="12dp"
+    android:paddingTop="7dp"
+    android:paddingBottom="7dp">
+
+    <TextView
+        android:id="@+id/gflag"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginEnd="6dp"
+        android:textSize="12sp"
+        android:visibility="gone" />
+
+    <TextView
+        android:id="@+id/gtitle"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_weight="1"
+        android:textColor="?attr/cText"
+        android:textSize="12sp"
+        android:textStyle="bold"
+        android:singleLine="true"
+        android:ellipsize="end" />
+
+    <TextView
+        android:id="@+id/gcount"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="8dp"
+        android:textColor="?attr/cDim"
+        android:textSize="10.5sp"
+        android:fontFamily="monospace" />
+</LinearLayout>

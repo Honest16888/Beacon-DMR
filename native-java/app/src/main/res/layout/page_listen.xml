@@ -475,15 +475,19 @@
                             android:nestedScrollingEnabled="false" />
                     </LinearLayout>
 
-                    <!-- 扫描 / 录音 / 记录（Phase 4 才真正有内容，先占位保持版面一致） -->
+                    <!--
+                      扫描 / 录音 / 记录。对应 WebView 的 #tabPanel：
+                      标题栏里三个 tab（点切换）+ 计数胶囊，下面一条工具条 + 内容区。
+                      内容区是空 LinearLayout，由代码按 tab 填 —— 三块的东西差别太大
+                      （工具按钮 / 录音文件列表 / 通联记录），塞一个固定布局里反而更难读。
+                    -->
                     <LinearLayout
                         android:id="@+id/tabPanel"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="8dp"
                         android:orientation="vertical"
-                        android:background="@drawable/bg_card"
-                        android:paddingBottom="10dp">
+                        android:background="@drawable/bg_card">
 
                         <LinearLayout
                             android:layout_width="match_parent"
@@ -495,31 +499,22 @@
                             android:paddingTop="8dp"
                             android:paddingBottom="8dp">
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:text="扫描"
-                                android:textColor="?attr/cAccent"
-                                android:textSize="12.5sp"
-                                android:textStyle="bold" />
+                            <Button
+                                android:id="@+id/tabScan"
+                                style="@style/SegButton"
+                                android:text="扫描" />
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginStart="10dp"
-                                android:text="录音"
-                                android:textColor="?attr/cMuted"
-                                android:textSize="12.5sp"
-                                android:textStyle="bold" />
+                            <Button
+                                android:id="@+id/tabRec"
+                                style="@style/SegButton"
+                                android:layout_marginStart="4dp"
+                                android:text="录音" />
 
-                            <TextView
-                                android:layout_width="wrap_content"
-                                android:layout_height="wrap_content"
-                                android:layout_marginStart="10dp"
-                                android:text="记录"
-                                android:textColor="?attr/cMuted"
-                                android:textSize="12.5sp"
-                                android:textStyle="bold" />
+                            <Button
+                                android:id="@+id/tabLog"
+                                style="@style/SegButton"
+                                android:layout_marginStart="4dp"
+                                android:text="记录" />
 
                             <View
                                 android:layout_width="0dp"
@@ -537,16 +532,25 @@
                             android:layout_height="1dp"
                             android:background="?attr/cBorder2" />
 
-                        <TextView
+                        <LinearLayout
+                            android:id="@+id/tabTools"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:paddingStart="10dp"
-                            android:paddingEnd="10dp"
-                            android:paddingTop="10dp"
-                            android:text="扫描 / 录音 / 记录归 Phase 4。设置页里的「自动录音」开关目前只存值，不生成文件。"
-                            android:textColor="?attr/cDim"
-                            android:textSize="11sp"
-                            android:lineSpacingMultiplier="1.4" />
+                            android:orientation="horizontal"
+                            android:gravity="center_vertical"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingTop="8dp" />
+
+                        <LinearLayout
+                            android:id="@+id/tabBody"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="vertical"
+                            android:paddingStart="8dp"
+                            android:paddingEnd="8dp"
+                            android:paddingTop="4dp"
+                            android:paddingBottom="10dp" />
                     </LinearLayout>
                 </LinearLayout>
             </ScrollView>
@@ -657,6 +661,39 @@
                         android:layout_width="match_parent"
                         android:layout_height="1dp"
                         android:background="?attr/cBorder2" />
+
+                    <LinearLayout
+                        android:id="@+id/libTabs"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:paddingStart="8dp"
+                        android:paddingEnd="8dp"
+                        android:paddingTop="8dp">
+
+                        <Button
+                            android:id="@+id/libTabCommon"
+                            style="@style/SegButton"
+                            android:text="常用" />
+
+                        <Button
+                            android:id="@+id/libTabCountry"
+                            style="@style/SegButton"
+                            android:layout_marginStart="4dp"
+                            android:text="国家" />
+
+                        <Button
+                            android:id="@+id/libTabSpecial"
+                            style="@style/SegButton"
+                            android:layout_marginStart="4dp"
+                            android:text="语言" />
+
+                        <Button
+                            android:id="@+id/libTabAll"
+                            style="@style/SegButton"
+                            android:layout_marginStart="4dp"
+                            android:text="全部" />
+                    </LinearLayout>
 
                     <LinearLayout
                         android:layout_width="match_parent"

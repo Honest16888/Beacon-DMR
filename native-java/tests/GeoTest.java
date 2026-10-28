@@ -19,6 +19,19 @@ public final class GeoTest {
         }
     }
 
+    /** 把 emoji 转成 `U+1F1E8 U+1F1F3` 这种，测试失败时能一眼看出偏了几位。 */
+    private static String esc(String s) {
+        if (s == null) return null;
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            if (sb.length() > 0) sb.append(' ');
+            sb.append(String.format("U+%04X", cp));
+            i += Character.charCount(cp);
+        }
+        return sb.toString();
+    }
+
     public static void main(String[] args) {
         System.out.println("\n=== 6. 话组号 → 国家/地区 ===");
 
@@ -51,6 +64,22 @@ public final class GeoTest {
         ok("有名字就用名字", "世界组".equals(Geo.tgLabel(91, "世界组")), Geo.tgLabel(91, "世界组"));
         ok("没名字用地区兜底", "德国 区域话组".equals(Geo.tgLabel(2621, null)), Geo.tgLabel(2621, null));
         ok("什么都没有就说未收录", "未收录话组".equals(Geo.tgLabel(999999, "")), Geo.tgLabel(999999, ""));
+
+        /* ---- 国旗 emoji ----
+         * 区域指示符的码位是 0x1F1E6 + (字母 - 'A')，差一位就是另一面旗。
+         * 这类"看着对、其实偏了一位"的错误在手机上极难发现，所以钉死。 */
+        ok("flag(cn) = 🇨🇳", "\uD83C\uDDE8\uD83C\uDDF3".equals(Geo.flag("cn")), esc(Geo.flag("cn")));
+        ok("flag(de) = 🇩🇪", "\uD83C\uDDE9\uD83C\uDDEA".equals(Geo.flag("de")), esc(Geo.flag("de")));
+        ok("flag(us) = 🇺🇸", "\uD83C\uDDFA\uD83C\uDDF8".equals(Geo.flag("us")), esc(Geo.flag("us")));
+        ok("flag(大写也认)", Geo.flag("CN").equals(Geo.flag("cn")), esc(Geo.flag("CN")));
+        ok("flag(空) = 空串", "".equals(Geo.flag("")), esc(Geo.flag("")));
+        ok("flag(null) = 空串", "".equals(Geo.flag(null)), null);
+        ok("flag(单字母) = 空串", "".equals(Geo.flag("c")), esc(Geo.flag("c")));
+        ok("flag(三位) = 空串", "".equals(Geo.flag("chn")), esc(Geo.flag("chn")));
+        ok("flag(数字) = 空串", "".equals(Geo.flag("12")), esc(Geo.flag("12")));
+        ok("tgFlag(2621) 是德国旗", Geo.flag("de").equals(Geo.tgFlag(2621)), esc(Geo.tgFlag(2621)));
+        ok("tgFlag(91) 为空（91 不是国家码）", "".equals(Geo.tgFlag(91)), esc(Geo.tgFlag(91)));
+        ok("tgFlag(860) 为空（860 不是国家码）", "".equals(Geo.tgFlag(860)), esc(Geo.tgFlag(860)));
 
         /* ---- 表规模：小于这个数说明抽取时截断了 ---- */
         int n = 0;

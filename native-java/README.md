@@ -431,7 +431,7 @@ bash native-java/tests/run.sh      # 125 项，桌面 JDK 直接跑，不需要�
   看不出是哪个字错了。其中一条钉的就是真机上那串
   `4602.ma4614ster.brandmeister.network` → 必须猜回正确地址
 
-合计 **170 项**。
+合计 **182 项**。
 
 ### 另外还有两道静态检查
 

@@ -53,7 +53,19 @@ public final class HoseClient {
         void onCallStart(int srcId, int tg);
         void onCallEnd(int tg);
         void onAlias(int tg, String alias);
-        void onAudio(byte[] ulaw);
+        /**
+         * 一帧 20 ms 的 μ-law 音频。
+         *
+         * <p>★ 带上 {@code tg}：HOSE 的 CALL_AUDIO 帧**本身不带话组号**，
+         * 归属只能靠最近一个 CALL_START 记下的 {@link #getAttrTg()}。
+         * 不带这个参数的话，主界面收到就播 —— 订阅了 91 和 460 两个组时，
+         * 两边的语音会一起出来，听感就是「乱播放别的组」。
+         *
+         * <p>{@code tg == 0} 表示归属不明（半路加入、CALL_START 丢了）。
+         * 这种时候调用方**应该照播**，否则会变成「偶尔整段没声音」，
+         * 比串音更难查 —— WebView 版的原话。
+         */
+        void onAudio(int tg, byte[] ulaw);
         void onMeter(int tg, int db);
     }
 
@@ -193,7 +205,10 @@ public final class HoseClient {
                     if (!(b instanceof byte[])) break;
                     byte[] pcm = (byte[]) b;
                     if (pcm.length == 0) break;
-                    post(() -> cb.onAudio(pcm));
+                    /* 归属用 attrTg（CALL_START 时立起来、CALL_END 时清掉）。
+                     * 0 表示不知道是谁的，交给调用方按「照播」处理。 */
+                    final int tg = attrTg;
+                    post(() -> cb.onAudio(tg, pcm));
                     break;
                 }
                 case T_CALL_ALIAS: {
