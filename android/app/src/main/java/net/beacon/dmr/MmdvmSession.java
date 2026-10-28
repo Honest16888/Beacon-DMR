@@ -105,7 +105,13 @@ public final class MmdvmSession {
      * <p>所以 MSTNAK <b>是暂时性的</b>，绝不能当致命错误 ——
      * 等窗口过去自动重试即可，用户不必反复点「连接」。
      */
-    private static final int[] NAK_WAITS_MS = {10000, 20000, 30000, 45000, 60000};
+    /* ★ 首档从 10 秒提到 15 秒。
+     *
+     * BrandMeister 官方 wiki 里 Hand-Off Timer 写的是 15 秒 —— 也就是说
+     * 被拒之后**至少**要等这么久，旧会话才可能被回收。原来首档 10 秒
+     * 刚好差一点，第一次重试必然又撞一次，白丢一轮。
+     * 后四档不动（20/30/45/60），累计从 165 秒变成 170 秒，覆盖 60 秒级回收绰绰有余。 */
+    private static final int[] NAK_WAITS_MS = {15000, 20000, 30000, 45000, 60000};
 
     /** 连续被拒多少次才放弃（前 5 次都会自动重试，累计等待约 165 秒） */
     private static final int MAX_NAK = 6;
@@ -350,6 +356,25 @@ public final class MmdvmSession {
     private volatile int rxPackets;
     private volatile int rptlSent;
     private volatile boolean gotAnyReply;
+
+    /* ---- 跨进程的「上次可能还挂着会话」标记 ----
+     *
+     * 这个类拿不到 Context（它是纯 java.net，桌面自检也能跑），所以由
+     * DmrEngine 在构造时从这里读、在状态变化时往这里写，真正落盘在那边。
+     *
+     * ★ 为什么必须有它：{@link #hadSession} / {@link #lastDisconnectMs} 都是
+     * 内存变量。**进程被系统杀掉**（切后台内存紧张、用户从最近任务划掉、
+     * 崩溃）时不会走 disconnect()，RPTCL 发不出去，主站那边的会话要等
+     * 15~60 秒才回收。而重开 App 时 hadSession=false、lastDisconnectMs=0，
+     * 我们完全不知道有残留，直接发 RPTL —— 必然被 MSTNAK。
+     * 用户看到的就是「偶尔一打开就连不上，过一会儿自己好了」。
+     */
+    /** 上次进程退出时，主站那边可能还挂着本 ID 的会话。 */
+    public static volatile boolean carrySession;
+    /** 那个会话最后一次确认存在过的时刻（ms）。用来算还要等多久。 */
+    public static volatile long carrySinceMs;
+    /** 主站回收会话需要的时间。等满这个数再登录，比撞上去再重试快得多。 */
+    private static final int SESSION_RECLAIM_MS = 20000;
 
     /* ---- MSTNAK（主站拒绝）处理 ---- */
     private volatile int nakCount;
@@ -658,9 +683,7 @@ public final class MmdvmSession {
         boolean hadPrevSession = hadSession;
         hadSession = false;
 
-        /* 刚断开不久就重连时，主站的旧会话可能还没释放。
-         * 先安静等一小会儿，给断开时发出的 RPTCL 生效的机会；
-         * 真没生效也不要紧 —— 随后的 MSTNAK 会自动进入重试链。 */
+        /* ① 同一次运行内：刚断开不久就重连，先给 RPTCL 一点生效时间。 */
         long since = System.currentTimeMillis() - lastDisconnectMs;
         if (hadPrevSession && lastDisconnectMs > 0 && since < POST_DISCONNECT_WAIT_MS) {
             long wait = POST_DISCONNECT_WAIT_MS - since;
@@ -669,6 +692,28 @@ public final class MmdvmSession {
                     + "先等 " + wait + " 毫秒再登录");
         } else {
             nakWaitUntil = 0L;
+        }
+
+        /* ② 跨进程：上次是被杀掉的，主站那边可能还挂着会话。
+         *
+         * 这种情况原来完全没处理 —— 进程一死，内存里的 hadSession /
+         * lastDisconnectMs 全没了，重开就当成「第一次连接」直接发 RPTL，
+         * 必然撞 MSTNAK，然后靠 15+20+30… 的重试链硬等。
+         * 与其撞上去再等，不如**先等满回收时间再发第一个包** ——
+         * 用户看到的是「正在登录…」多转十几秒，而不是「被拒绝 / 第 N 次重试」。
+         *
+         * 只在「上次退出距今不到回收时间」时才等：如果已经过了五分钟，
+         * 主站早就回收了，再等就是白等。 */
+        if (carrySession) {
+            long gap = carrySinceMs > 0 ? System.currentTimeMillis() - carrySinceMs : Long.MAX_VALUE;
+            if (gap >= 0 && gap < SESSION_RECLAIM_MS) {
+                long wait = SESSION_RECLAIM_MS - gap;
+                nakWaitUntil = System.currentTimeMillis() + wait;
+                log("上次没正常断开（距今 " + (gap / 1000) + " 秒），主站会话可能还挂着；"
+                        + "先等 " + (wait / 1000) + " 秒让主站释放，再登录");
+            }
+            /* 用掉一次就作废 —— 下次再连时以新的状态为准 */
+            carrySession = false;
         }
         handshakeDeadline = Math.max(nakWaitUntil, System.currentTimeMillis())
                 + HANDSHAKE_TIMEOUT_MS;
@@ -1261,7 +1306,9 @@ public final class MmdvmSession {
                               .append(" 完全相同）—— 所以问题多半不在密码本身。\n")
                               .append("  常见原因按可能性排序：\n")
                               .append("    1. 主站还挂着上一次的会话。进程被强杀（装更新、清后台）时")
-                              .append("没有发出登出包，主站要等自己超时。等 2~3 分钟再连一次。\n")
+                              .append("没有发出登出包，主站要等自己超时。等 2~3 分钟再连一次。")
+                              .append("（v2.5.8 起本机会先自己等 20 秒、再按 15/20/30/45/60 秒重试，")
+                              .append("不用手动点「连接」。）\n")
                               .append("    2. 短时间内失败次数太多，主站临时限流。停 10 分钟。\n")
                               .append("    3. 同一个 DMR ID 在别的设备/热点上在线，主站只允许一台。")
                               .append("去 SelfCare 的 Hotspots 页看有没有多余的在线记录。\n")

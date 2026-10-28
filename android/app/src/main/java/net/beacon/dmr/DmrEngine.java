@@ -132,6 +132,19 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
         this.ctx = ctx.getApplicationContext();
         this.cb = cb;
         this.session = new MmdvmSession(this);
+        /* ★ 把「上次进程退出时可能还挂着会话」这件事跨进程带过来。
+         *
+         * MmdvmSession 拿不到 Context（纯 java.net，桌面自检也要能跑），
+         * 所以落盘放在这里：启动时读出来塞进静态字段，状态变化时写回去。
+         *
+         * 为什么必须做：进程被系统杀掉时不会走 disconnect()，RPTCL 发不出去，
+         * 主站会话要等 15~60 秒回收。重开 App 如果没有这个标记，就会当成
+         * 「第一次连接」直接发 RPTL，必然被 MSTNAK ——
+         * 用户看到的是「偶尔一打开就连不上，过一会儿自己好了」。 */
+        android.content.SharedPreferences sp =
+                ctx.getSharedPreferences("dmr-mm", Context.MODE_PRIVATE);
+        MmdvmSession.carrySession = sp.getBoolean("dirty", false);
+        MmdvmSession.carrySinceMs = sp.getLong("dirtyAt", 0L);
         this.transmitter = new DmrTransmitter(this);
         this.audio = new DmrAudio(new DmrAudio.Listener() {
             @Override
@@ -251,6 +264,11 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
         transmitter.stop("用户断开");
         session.disconnect();
         audio.flush();
+        /* 正常断开时我们已经发了 RPTCL，主站会立刻释放会话 ——
+         * 把 dirty 清掉，下次启动就不用白等 20 秒。 */
+        ctx.getSharedPreferences("dmr-mm", Context.MODE_PRIVATE)
+           .edit().putBoolean("dirty", false)
+           .putLong("dirtyAt", System.currentTimeMillis()).apply();
     }
 
     public boolean isConnected() {
@@ -493,6 +511,19 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
 
     @Override
     public void onState(MmdvmSession.State state, String detail) {
+        /* 维护「上次退出时还挂着会话」的跨进程标记。
+         * 只在真正建立会话（CONNECTED）时置位、在确实断开（IDLE / ERROR）时清除 ——
+         * CONNECTING / AUTH / CONF 这些中间态不动它，否则一次握手失败就会
+         * 把「可能有残留」这个事实抹掉，下次启动就不等了。 */
+        android.content.SharedPreferences sp =
+                ctx.getSharedPreferences("dmr-mm", Context.MODE_PRIVATE);
+        if (state == MmdvmSession.State.CONNECTED) {
+            sp.edit().putBoolean("dirty", true)
+                     .putLong("dirtyAt", System.currentTimeMillis()).apply();
+        } else if (state == MmdvmSession.State.IDLE || state == MmdvmSession.State.ERROR) {
+            sp.edit().putBoolean("dirty", false)
+                     .putLong("dirtyAt", System.currentTimeMillis()).apply();
+        }
         emit("state", "value", state.name(), "detail", detail);
     }
 
