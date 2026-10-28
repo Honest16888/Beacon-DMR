@@ -109,7 +109,7 @@ if assets:
     for k in ['recCall', 'heldCall', 'selfRecGuard', 'logged=true']:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
     print('  ---- v2.5.1 ----')
-    for k in ['np-row np-r1', 'state.rxDb', 'underAt', '2026.11.21']:
+    for k in ['np-row np-r1', 'state.rxDb', 'underAt', 'this.pad=Math.min(0.30']:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
     print('  ---- v2.5.2 ----')
     for k in ['createWaveShaper', "ws.oversample='none'", 'CEIL=0.98',
