@@ -108,6 +108,13 @@ public final class DmrLink implements MmdvmSession.Listener, DmrTransmitter.List
     /** 当前关注 / 发射的目标话组。0 = 还没选 */
     private volatile int txDstId = 0;
 
+    /* ---- 只给 diagnose() 用的配置镜像 ----
+     * 诊断要能回答「我到底拿什么去登录的」，所以把最近一次 connect 的入参留下来。
+     * 密码只记长度，明文不出这个类。 */
+    private volatile String password = "";
+    private volatile int slot = 2;
+    private volatile int cc = 1;
+
     /* ---- 接收侧 ---- */
     private volatile boolean rxOn = true;
     private volatile int curSrcId, curDstId, curSlot;
@@ -213,24 +220,158 @@ public final class DmrLink implements MmdvmSession.Listener, DmrTransmitter.List
     /* 连接                                                             */
     /* ================================================================ */
 
+    /**
+     * 登录主站并准备发射。
+     *
+     * <p>★ <b>声码器失败不阻断登录。</b> 之前这里写的是「声码器没就绪就 return」，
+     * 结果声码器一旦加载失败（插件 .so 缺失、ABI 不匹配、libc++ 冲突…），
+     * 用户点「连接主站」之后<b>什么都不发生</b> —— 界面上只有一行「未连接」，
+     * 日志里那句原因要翻到自检弹窗才看得到。表现就是「连不上主站」。
+     *
+     * <p>而登录（UDP 62031）和声码器（PCM ⇄ AMBE）是两件完全独立的事：
+     * 不发射就完全不需要声码器，收听走的是 HOSE 那条路。所以现在改成
+     * 「声码器坏了也能登录，只是暂时不能按 PTT」，失败原因通过 {@link Listener#onLog}
+     * 和 {@link #ptt} 的返回值暴露。
+     */
     public void connect(String host, int port, int dmrId, int essid, String password,
                         String callsign, String location, String description) {
         myId = dmrId;
 
-        if (!vocoderReady) loadVocoder();
-        if (!vocoderReady) {
-            log("声码器未就绪，无法发射。请先看自检报告。");
+        /* 前置校验放在这里做，失败也要明确报出来 —— 不能让 connect 静默返回。 */
+        if (host == null || host.trim().isEmpty()) {
+            cb.onState(MmdvmSession.State.ERROR, "主站地址为空");
             return;
+        }
+        if (dmrId < 1000) {
+            cb.onState(MmdvmSession.State.ERROR, "DMR ID 无效：" + dmrId);
+            return;
+        }
+        if (password == null || password.trim().isEmpty()) {
+            cb.onState(MmdvmSession.State.ERROR,
+                    "主站密码为空。BrandMeister 在 selfcare 里设的那串，不能留空");
+            return;
+        }
+
+        if (!vocoderReady) {
+            String report = loadVocoder();
+            if (vocoderReady) {
+                log("声码器就绪，可以发射");
+            } else {
+                /* 明确告知「能听不能发」，并且把第一行原因带出来 —— 不要让人去翻自检。 */
+                log("⚠ 声码器未就绪，登录照常，但暂时不能发射。原因："
+                        + firstLine(report));
+            }
         }
 
         /* softwareId 必须是合法日期 YYYYMMDD —— 那是 BrandMeister 配置阶段的
          * 校验点之一，传品牌名会被 sanitize 掉并多打一条警告。 */
+        this.password = password.trim();
         session.setStationInfo(callsign, location, description, "",
                 MmdvmSession.DEFAULT_SWID, 0);
         session.configure(host, port, dmrId, essid, password);
         /* 原生接管期间抖动缓冲要更厚，见 NATIVE_PRE_ROLL */
         audio.setPreRollFrames(NATIVE_PRE_ROLL);
-        session.connect();
+        try {
+            session.connect();
+        } catch (Throwable t) {
+            /* 兜底：MmdvmSession 里大部分失败都会走 fail() → onState(ERROR)，
+             * 但抛异常的那几条路径（比如某个 InetAddress 调用在奇怪 ROM 上
+             * 抛 SecurityException）如果没有这一层，就只会打到 logcat。 */
+            cb.onState(MmdvmSession.State.ERROR, "登录抛异常：" + t);
+        }
+    }
+
+    /** 取多行文本的第一行非空内容，用来把报告压成一句话。 */
+    private static String firstLine(String s) {
+        if (s == null) return "";
+        for (String line : s.split("\n")) {
+            String t = line.trim();
+            if (!t.isEmpty()) return t.length() > 120 ? t.substring(0, 120) + "…" : t;
+        }
+        return "";
+    }
+
+    /**
+     * 连接诊断：把「连不上」这件事拆成能一条条看的项。
+     *
+     * <p>为什么值得单独做一个：MMDVM 登录失败有七八种成因（域名解析、UDP 被占、
+     * 密码错、ID 格式、主站没开、声码器……），而它们的<b>界面表现完全一样</b>：
+     * 一直停在「正在登录」或者弹一句 MSTNAK。让用户描述「它说连不上」是没法查的，
+     * 让他把这一屏发过来就能直接定位。
+     *
+     * <p>不联网、不发包、不改状态 —— 只做本地可测的检查，随时可以点。
+     */
+    public String diagnose(String host, int port, int dmrId, int essid) {
+        StringBuilder sb = new StringBuilder();
+
+        sb.append("【配置】\n");
+        sb.append("  主站    ").append(host == null || host.isEmpty() ? "(空)" : host)
+          .append(':').append(port).append('\n');
+        sb.append("  DMR ID  ").append(dmrId <= 0 ? "(未填)" : String.valueOf(dmrId)).append('\n');
+        sb.append("  ESSID   ").append(essid <= 0 ? "0（不用别名）" : String.valueOf(essid))
+          .append(" → 登录 ID ")
+          .append(essid > 0 ? String.valueOf(dmrId * 100 + (essid - 1)) : String.valueOf(dmrId))
+          .append('\n');
+        sb.append("  密码    ").append(password.isEmpty() ? "✗ 空（必须填）"
+                : "✓ 已填 " + password.length() + " 字符").append('\n');
+        sb.append("  时隙    TS").append(slot).append(" · 色码 ").append(cc).append('\n');
+
+        sb.append("\n【域名解析】\n");
+        if (host == null || host.trim().isEmpty()) {
+            sb.append("  ✗ 没填主站，跳过\n");
+        } else {
+            try {
+                java.net.InetAddress[] all = java.net.InetAddress.getAllByName(host.trim());
+                sb.append("  ✓ ").append(all.length).append(" 个地址：");
+                for (int i = 0; i < all.length; i++) {
+                    if (i > 0) sb.append(", ");
+                    sb.append(all[i].getHostAddress());
+                }
+                sb.append('\n');
+            } catch (Throwable t) {
+                sb.append("  ✗ 解析失败：").append(t.getMessage()).append('\n');
+                sb.append("    → 地址规则是「<主站ID>.master.brandmeister.network」，\n");
+                sb.append("      中国区是 4602，即 4602.master.brandmeister.network。\n");
+                sb.append("      也可以直接填 IP（如 43.129.83.124），不需要解析。\n");
+            }
+        }
+
+        sb.append("\n【本机 UDP】\n");
+        java.net.DatagramSocket probe = null;
+        try {
+            probe = new java.net.DatagramSocket();
+            sb.append("  ✓ 可以创建，临时端口 ").append(probe.getLocalPort()).append('\n');
+        } catch (Throwable t) {
+            sb.append("  ✗ 无法创建 UDP 套接字：").append(t).append('\n');
+            sb.append("    → 检查是否有别的应用占满了 UDP 端口，或网络权限被 ROM 限制。\n");
+        } finally {
+            if (probe != null) {
+                try { probe.close(); } catch (Throwable ignored) { }
+            }
+        }
+
+        sb.append("\n【录音权限】\n");
+        sb.append(hasAudioPermission() ? "  ✓ 已授予\n"
+                : "  ✗ 未授予 —— 能收听、不能发射（发射会弹权限申请）\n");
+
+        sb.append("\n【声码器】\n");
+        if (vocoderReady) {
+            sb.append("  ✓ 已就绪\n");
+        } else {
+            sb.append("  ✗ 未就绪 —— 登录不受影响，但不能发射\n");
+            String r = vocoderReport.isEmpty() ? loadVocoder() : vocoderReport;
+            for (String line : r.split("\n")) {
+                if (line.trim().isEmpty()) continue;
+                sb.append("    ").append(line).append('\n');
+            }
+        }
+
+        sb.append("\n【当前会话】\n");
+        sb.append("  ").append(session.isConnected() ? "已连接" : "未连接")
+          .append(" · pong ").append(session.getPongCount())
+          .append(" · 收 ").append(session.getRxPacketCount()).append(" 包\n");
+
+        return sb.toString();
     }
 
     public void disconnect() {
@@ -315,8 +456,13 @@ public final class DmrLink implements MmdvmSession.Listener, DmrTransmitter.List
         }
         if (!hasAudioPermission()) return "缺少录音权限";
         if (!session.isConnected()) return "尚未连接主站";
-        if (!vocoderReady) return "声码器未就绪";
+        if (!vocoderReady) {
+            /* 明确说清是哪一步坏了 —— 「声码器未就绪」这五个字对用户没有信息量 */
+            return "声码器未就绪，暂时不能发射（登录与收听不受影响）。"
+                    + "点「诊断」看具体原因";
+        }
 
+        setTxParams(slot, colorCode);
         txDstId = tgid;
         /* repeaterId 传登录 ID（含 ESSID 别名）—— 主站据此把通联归到本机热点；
          * srcId 仍是裸 DMR ID，呼号归属不变。 */
@@ -438,6 +584,12 @@ public final class DmrLink implements MmdvmSession.Listener, DmrTransmitter.List
     }
 
     public int getWatchTg() { return txDstId; }
+
+    /** 时隙与色码。只用于诊断显示，实际发射时由 {@link #ptt} 的入参决定。 */
+    public void setTxParams(int slot, int colorCode) {
+        this.slot = slot == 1 ? 1 : 2;
+        this.cc = Math.max(0, Math.min(colorCode, 15));
+    }
 
     private void resetStreamLock() {
         lockSrc = 0;

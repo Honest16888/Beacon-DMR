@@ -219,6 +219,34 @@ bash tools/build_vocoder.sh     # 在 ASCII 镜像里重编，只拷 libbeaconvo
 削它等于赌 dlsym 要的符号恰好都在 `.dynsym` 里 —— 赔率是「装完发不出去、
 而且没有任何报错」。`useLegacyPackaging = true` 也一样，和 WebView 版逐项一致。
 
+## 「连不上主站」的三个成因（alpha3 修）
+
+真机反馈「这一版本连接主站连不上」。MMDVM 登录失败有七八种成因，
+而它们的**界面表现完全一样**：停在「未连接」或者弹一句 MSTNAK。
+排查后发现三条是设计错误，不是环境问题：
+
+1. **`DmrLink.connect()` 开头「声码器没就绪就 return」** —— 声码器一旦加载失败
+   （插件 .so 缺失、ABI 不匹配、libc++ 冲突），点「连接主站」**什么都不发生**，
+   原因只躺在自检弹窗里。而登录（UDP 62031）和声码器（PCM ⇄ AMBE）是两件独立的事：
+   **不发射就完全不需要声码器**。现在改成「声码器坏了也能登录，只是暂时不能 PTT」。
+2. **`onTxConnect()` 里挡了一道 `ensureMicPermission()`** —— 登录和麦克风毫无关系，
+   只有按 PTT 才需要。后果是没给权限的用户点「连接主站」只看到一个权限框，
+   随手点「拒绝」就永远连不上，而界面上没有任何一句话说明是因为权限。
+   麦克风现在只在 `startPtt()` 里申请。
+3. **没有任何连接诊断** —— 让用户描述「它说连不上」是查不了的。
+
+现在设置页有一行整宽的「诊断（连不上时点这个）」，`DmrLink.diagnose()`
+分六段输出【配置】【域名解析】【本机 UDP】【录音权限】【声码器】【当前会话】，
+**不联网、不发包、不改状态**，随时可以点。报告可以直接长按复制。
+
+配套的小修：
+- 连接 / 断开 / 自检 / 诊断全部移到后台线程（`MmdvmSession.connect()` 第一件事是
+  `InetAddress.getAllByName()`，DNS 卡住会冻界面数秒，用户会以为按钮没生效而反复点）。
+- 连接按钮置忙（「正在登录…」），并加 30 s 看门狗 —— 握手超时 24 s + 断开后等待 2 s，
+  最坏 26 s 才等到 ERROR；看门狗兜住「已经在连接中，忽略重复请求」那条静默 return。
+- `onState(ERROR)` 弹一次 Toast；`updateTxDiag()` 改成「状态行 + 读数 + 最近三条日志」，
+  状态行在 `onState` 里定死，不再被 4 秒一次的 tick 冲掉。
+
 ## 看板口径
 
 数字必须和 WebView 版 `dashData()` 对得上（用户两个版本来回切）：
@@ -279,9 +307,16 @@ bash native-java/tests/run.sh      # 125 项，桌面 JDK 直接跑，不需要�
 
 ## 已知的待办
 
-- **没有前台服务**：切后台后 Activity 还在，音频能继续，但被系统回收就断。
-  发射中尤其不能被回收 —— 下一个包做 `DmrKeepAliveService`。
-- **没有呼号解析**：现在显示 `ID 1234567`，Phase 4 接 `cnData` 那张表
+- ~~**没有前台服务**~~ → 已做 `KeepAliveService`（alpha3）。三件事必须一起做：
+  `startForeground()` + Partial WakeLock + WifiLock(HIGH_PERF)。
+  **只有 WakeLock 的表现是「熄屏能听、切后台会断」** —— 它只锁 CPU，锁不住进程优先级。
+  服务类型用 `mediaPlayback` 而不是 `dataSync`（Android 14 对 `dataSync` 有每天累计
+  6 小时上限，守听会撞上）；发射时再加 `microphone`。`START_NOT_STICKY` 而不是
+  `STICKY`：进程被杀后重建的是空壳（服务活着、通知挂着、锁也持着，但 Activity /
+  WebSocket / UDP 会话全没了），用户看到「守听中」却收不到东西，比通知消失更糟。
+  待真机验证：切后台 / 熄屏后链路是否还在、通知是否显示。
+- **「保持屏幕常亮」用 `FLAG_KEEP_SCREEN_ON` 而不是 PARTIAL_WAKE_LOCK** ——
+  前者跟随窗口生命周期、不需权限、不会忘记释放耗一整晚电。- **没有呼号解析**：现在显示 `ID 1234567`，Phase 4 接 `cnData` 那张表
   （`web/index.html` 里 15,529 行的那段）。`DmrDirectory` 已经搬过来了，
   但只在「添加屏蔽名单」时才该调它（radioid.net 建议控制频率）。
 - 国内话组只有 33 个，取自 WebView 版 `cnTgData`（2026-10-26）。

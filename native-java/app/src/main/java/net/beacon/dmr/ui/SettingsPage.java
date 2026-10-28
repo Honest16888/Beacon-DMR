@@ -55,6 +55,9 @@ public final class SettingsPage {
         /** 点了「自检」。 */
         void onTxSelfTest();
 
+        /** 点了「诊断」。只查本地条件，不联网。 */
+        void onTxDiagnose();
+
         /** 接收开关 / 只收当前话组 / 麦克风增益 / 色码 变了。 */
         void onTxOptionChanged();
     }
@@ -70,9 +73,11 @@ public final class SettingsPage {
     private final TextView setVolVal, setAutoNVal, audioDiag, aboutText;
     private final TextView setCcVal, setMicVal, txState;
     private final EditText txHost, txPort, txId, txEssid, txCall, txPwd;
-    private final Button btnConnect, btnSelfTest;
+    private final Button btnConnect, btnSelfTest, btnDiag;
 
     private boolean binding = true;
+    /** 记住最近一次连接状态，{@link #setTxBusy} 撤忙时要用它还原按钮文字。 */
+    private boolean txConnected = false;
 
     public SettingsPage(Activity a, View root, Palette p, Listener l) {
         this.act = a;
@@ -109,6 +114,7 @@ public final class SettingsPage {
         txPwd = root.findViewById(R.id.txPwd);
         btnConnect = root.findViewById(R.id.btnConnect);
         btnSelfTest = root.findViewById(R.id.btnSelfTest);
+        btnDiag = root.findViewById(R.id.btnDiag);
 
         Ui.tintSwitch(swSimple, pal);
         Ui.tintSwitch(swPresence, pal);
@@ -342,6 +348,9 @@ public final class SettingsPage {
         btnSelfTest.setOnClickListener(v -> {
             if (cb != null) cb.onTxSelfTest();
         });
+        btnDiag.setOnClickListener(v -> {
+            if (cb != null) cb.onTxDiagnose();
+        });
     }
 
     private interface Sink { void put(String s); }
@@ -397,8 +406,26 @@ public final class SettingsPage {
 
     /** 连接状态变了：按钮文字跟着换。 */
     public void setTxConnected(boolean connected) {
+        txConnected = connected;
         if (btnConnect == null) return;
+        btnConnect.setEnabled(true);
         btnConnect.setText(connected ? "断开连接" : "连接主站");
+    }
+
+    /**
+     * 登录 / 断开进行中：按钮置灰并改文案。
+     *
+     * <p>没有这个的话，点「连接主站」之后按钮毫无变化 —— 而登录要等 DNS + 握手，
+     * 长的一两秒。用户会以为没点上，反复戳；戳出来的第二、第三次请求虽然被
+     * {@code MmdvmSession} 的 {@code running} 挡掉，但界面上看起来像是「点了没反应」。
+     *
+     * <p>撤忙（{@code busy=false}）时必须把文字也还原 —— 只把 enabled 打开、
+     * 文字还留着「正在登录…」，那比灰着更让人困惑。
+     */
+    public void setTxBusy(boolean busy) {
+        if (btnConnect == null) return;
+        btnConnect.setEnabled(!busy);
+        btnConnect.setText(busy ? "正在登录…" : (txConnected ? "断开连接" : "连接主站"));
     }
 
     private abstract static class SimpleSeek implements SeekBar.OnSeekBarChangeListener {

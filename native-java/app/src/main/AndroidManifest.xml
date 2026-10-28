@@ -5,8 +5,22 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 守听时持 WakeLock：熄屏后 AudioTrack 的喂数不被掐断 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Wi-Fi 锁：熄屏后射频不进省电模式，否则每 5 秒一次的心跳会掉 -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
     <!-- 按住说话要采麦克风。运行时还要再申请一次（Android 6+） -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- 保活服务。三个都必须声明：
+           FOREGROUND_SERVICE             Android 9+ 的通用前提
+           …_MEDIA_PLAYBACK               守听时在放语音
+           …_MICROPHONE                   发射时要在后台用麦克风（Android 14 起强制）
+         POST_NOTIFICATIONS 是 Android 13+ 的运行时权限：不给的话服务照样跑，
+         但那条常驻通知不显示 —— 用户就看不到「还在守听」，也点不回来。 -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- 声码器插件是 arm 的预编译产物，x86 设备装了也用不了发射 -->
     <uses-feature android:name="android.hardware.microphone" android:required="false" />
@@ -33,5 +47,21 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!--
+          保活服务：把进程钉在「前台」优先级，切后台 / 熄屏时三条长连接才不会被冻。
+
+          foregroundServiceType 同时声明 mediaPlayback 与 microphone：
+          · mediaPlayback —— 守听确实在放语音，而且它没有 Android 14 对
+            dataSync 型「每天累计 6 小时」的上限（守听一开就是几小时，会撞上限）
+          · microphone —— 发射时要在后台采麦克风，Android 14 起必须由带这个
+            类型的服务支撑，否则 AudioRecord 拿到的是静音
+
+          exported="false"：只有本应用能起它。
+        -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback|microphone" />
     </application>
 </manifest>

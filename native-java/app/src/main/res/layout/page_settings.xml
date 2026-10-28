@@ -701,6 +701,24 @@
                     android:background="@drawable/bg_btn" />
             </LinearLayout>
 
+            <!--
+                「诊断」单独一行、整宽。
+
+                连不上主站有七八种成因（域名解析、UDP、密码、ID 格式、主站没开、
+                声码器…），而它们的界面表现完全一样。这个按钮把每一项单独测出来，
+                用户截一屏发过来就能直接定位 —— 比让他描述「它说连不上」有用得多。
+            -->
+            <Button
+                android:id="@+id/btnDiag"
+                android:layout_width="match_parent"
+                android:layout_height="40dp"
+                android:layout_marginTop="8dp"
+                android:minWidth="0dp"
+                android:text="诊断（连不上时点这个）"
+                android:textSize="13sp"
+                android:textAllCaps="false"
+                android:background="@drawable/bg_btn" />
+
             <TextView
                 android:id="@+id/txState"
                 android:layout_width="match_parent"

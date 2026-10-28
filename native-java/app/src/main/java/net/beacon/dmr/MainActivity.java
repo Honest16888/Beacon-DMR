@@ -8,7 +8,6 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.os.PowerManager;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.LayoutInflater;
@@ -115,13 +114,13 @@ public final class MainActivity extends Activity
     private long curStart = 0;
 
     private boolean muted;
-    private PowerManager.WakeLock wakeLock;
 
     /** PTT 当前是否按着。用来防重复下发（DOWN 事件可能来两次） */
     private boolean pttDown;
     /** 上一次请求录音权限的时机，避免连续弹窗 */
     private long permAskedAt = 0;
     private static final int REQ_MIC = 1001;
+    private static final int REQ_NOTIF = 1002;
 
     /* ---- 原生链路的界面状态 ---- */
     /** 主卡片现在显示的是原生接收的那一路（句子结束时据此收回） */
@@ -133,6 +132,13 @@ public final class MainActivity extends Activity
     private boolean busyWarned;
     /** 原生链路的日志尾巴，点「自检」时一起显示 */
     private final java.util.ArrayDeque<String> txLog = new java.util.ArrayDeque<>();
+
+    /* ---- 收发状态行 ----
+     * ★ 单独存一份，不能让 4 秒一次的 tick 用「未连接。填好主站…」把它冲掉 ——
+     * 之前就是这样：出错原因在界面上最多活 4 秒，用户根本看不到，
+     * 只记得「点了连接没反应」。 */
+    private String txHeadline = "未连接";
+    private boolean txHeadlineOk = false;
 
     /** 上次发给 HOSE 的订阅数组。用来判「要不要重发」。 */
     private int[] sentSubs = new int[0];
@@ -182,6 +188,7 @@ public final class MainActivity extends Activity
         link.setRxOn(Prefs.rxOn(this));
         link.setRxOnlyWatchTg(Prefs.onlyWatchTg(this));
         link.setMicGainDb(Prefs.micGainDb(this));
+        link.setTxParams(Prefs.slot(this), Prefs.colorCode(this));
         renderPttTg();
 
         TalkgroupRepo.load(this, (all, source) -> ui.post(() -> applyTgs(all, source)));
@@ -195,6 +202,9 @@ public final class MainActivity extends Activity
         lh.start();
 
         showLastCrashIfAny();
+        /* 通知权限（Android 13+）。不给也能用，只是看不到那条常驻通知。 */
+        ensureNotifPermission();
+        syncAwake();
         ui.postDelayed(tick, 500);
     }
 
@@ -242,8 +252,10 @@ public final class MainActivity extends Activity
     @Override
     protected void onPause() {
         super.onPause();
-        /* 关掉「保持常亮」的用户不该被这个 App 一直按住 WakeLock。 */
-        if (!Prefs.awake(this)) releaseWake();
+        /* 屏幕常亮用 FLAG_KEEP_SCREEN_ON，系统会跟着窗口生命周期自动放开，
+         * 这里不需要手动清 —— 手动清反而会在「切出去再回来」时丢掉常亮。
+         * 链路保活由 KeepAliveService 负责，onPause 也不能停它：
+         * 停了就正好是「切后台断链」。 */
     }
 
     @Override
@@ -253,7 +265,7 @@ public final class MainActivity extends Activity
         if (hose != null) hose.stop();
         if (lh != null) lh.stop();
         if (audio != null) audio.stop();
-        releaseWake();
+        KeepAliveService.stop(this);
         super.onDestroy();
     }
 
@@ -465,10 +477,14 @@ public final class MainActivity extends Activity
     @Override
     public void onRequestPermissionsResult(int req, String[] perms, int[] granted) {
         super.onRequestPermissionsResult(req, perms, granted);
-        if (req != REQ_MIC) return;
         boolean ok = granted.length > 0 && granted[0] == PackageManager.PERMISSION_GRANTED;
-        Toast.makeText(this, ok ? "麦克风权限已授予，可以按住说话了"
-                : "没有麦克风权限，只能收听不能发射", Toast.LENGTH_LONG).show();
+        if (req == REQ_MIC) {
+            Toast.makeText(this, ok ? "麦克风权限已授予，可以按住说话了"
+                    : "没有麦克风权限，只能收听不能发射", Toast.LENGTH_LONG).show();
+        } else if (req == REQ_NOTIF && !ok) {
+            Toast.makeText(this, "没给通知权限 —— 切到后台仍然在守听，只是看不到那条常驻通知",
+                    Toast.LENGTH_LONG).show();
+        }
     }
 
     /* ==================== 页面切换 ==================== */
@@ -654,6 +670,7 @@ public final class MainActivity extends Activity
         } else {
             renderNow();
         }
+        KeepAliveService.update(this, keepAliveText());
     }
 
     /* ==================== HoseClient.Listener ==================== */
@@ -755,6 +772,8 @@ public final class MainActivity extends Activity
         if (sb.length() == 0) sb.append("ID ").append(curSrc);
         else sb.append("  ·  ").append(curSrc);
         npCaller.setText(sb.toString());
+        /* 锁屏时瞄一眼通知就知道在听谁。文案没变时 update() 自己会跳过。 */
+        KeepAliveService.update(this, keepAliveText());
     }
 
     /* ==================== LhClient.Listener ==================== */
@@ -800,14 +819,25 @@ public final class MainActivity extends Activity
         final boolean ok = s == MmdvmSession.State.CONNECTED;
         final boolean bad = s == MmdvmSession.State.ERROR;
         ui.post(() -> {
+            /* ★ 状态行在这里定下来，之后 tick 只往后面追加读数，不再覆盖它 */
+            txHeadline = label;
+            txHeadlineOk = ok;
+
             if (pttState != null) {
                 pttState.setText(s == MmdvmSession.State.CONNECTED
                         ? "已连接" : DmrLink.describe(s));
                 pttState.setTextColor(ok ? pal.ok : bad ? pal.bad : pal.dim);
             }
             if (settingsPage != null) {
+                /* 先撤忙再改文案：setTxBusy(true) 之后只有状态回调能把它解掉，
+                 * 而 MmdvmSession 有一条「已经在连接中，忽略重复请求」的静默 return
+                 * （running==true 时），走到那条路上就没有任何回调。这里兜住。 */
+                settingsPage.setTxBusy(false);
                 settingsPage.setTxConnected(ok);
-                settingsPage.setTxState(label, ok);
+            }
+            /* ERROR 弹一次 Toast：错误原因不能只躺在那一行小字里 */
+            if (bad && detail != null && !detail.isEmpty()) {
+                Toast.makeText(this, detail, Toast.LENGTH_LONG).show();
             }
             updateTxDiag();
         });
@@ -955,28 +985,56 @@ public final class MainActivity extends Activity
                 Prefs.presence(this) ? "开" : "关"));
     }
 
-    /** 收发那一行的读数。2 秒刷一次，别跟着每个包跳。 */
+    /**
+     * 收发那一行的读数。2 秒刷一次。
+     *
+     * <p>★ 结构是「状态行 + 读数 + 最近日志」，状态行来自 {@link #onState}
+     * 并且**不会被这里覆盖**。之前这里直接按 {@code isConnected()} 重新拼一句话，
+     * 结果是出错原因在界面上最多活 4 秒就被换成「未连接。填好主站…」——
+     * 用户只记得「点了连接没反应」，报给我的也就只有这四个字。
+     */
     private void updateTxDiag() {
         if (settingsPage == null || link == null) return;
         StringBuilder sb = new StringBuilder();
+
+        /* ① 状态行 */
+        sb.append(txHeadline);
+
+        /* ② 读数 */
         if (link.isConnected()) {
-            sb.append("已连接 ").append(Prefs.host(this))
-              .append(':').append(Prefs.port(this)).append('\n');
-            sb.append("登录 ID ").append(link.getLoginId());
-            if (link.getEssid() > 0) sb.append("（别名 ESSID ").append(link.getEssid()).append('）');
-            sb.append(" · pong ").append(link.getPongCount()).append('\n');
-            sb.append("收 ").append(link.getRxPackets()).append(" 包 · 丢 ")
-              .append(String.format(Locale.US, "%.1f%%", link.getRxLoss()))
-              .append(" · 电平 ").append(String.format(Locale.US, "%.1f dBFS", lastRxDb));
+            sb.append("\n登录 ").append(link.getLoginId());
+            if (link.getEssid() > 0) sb.append("（ESSID ").append(link.getEssid()).append('）');
+            sb.append(" · pong ").append(link.getPongCount())
+              .append(" · 收 ").append(link.getRxPackets()).append(" 包");
+            if (link.getRxPackets() > 0) {
+                sb.append(" 丢 ").append(String.format(Locale.US, "%.1f%%", link.getRxLoss()));
+            }
             if (link.isTransmitting()) {
                 sb.append("\n发射中 · 输入 ").append(txLevel).append("% · ")
                   .append(String.format(Locale.US, "%.1f dBFS", txDb));
             }
         } else {
-            sb.append("未连接。填好主站、DMR ID、密码后点「连接主站」。");
+            sb.append("\n").append(Prefs.host(this)).append(':').append(Prefs.port(this))
+              .append(" · ID ").append(Prefs.dmrId(this) == 0 ? "未填" : String.valueOf(Prefs.dmrId(this)))
+              .append(" · 密码").append(Prefs.password(this).isEmpty() ? "未填" : "已填");
         }
-        sb.append("\n声码器：").append(link.isVocoderReady() ? "就绪" : "未加载");
-        settingsPage.setTxState(sb.toString(), link.isConnected());
+        sb.append("\n声码器：").append(link.isVocoderReady() ? "就绪（可发射）"
+                : "未就绪（只能听，不能发）");
+
+        /* ③ 最近三条日志 —— 登录过程的关键信息（解析到哪些 IP、本机 UDP 端口、
+         * 发了 RPTL、主站回了什么）全在日志里。不显示出来的话，
+         * 用户能提供的唯一信息就是「连不上」。 */
+        if (!txLog.isEmpty()) {
+            sb.append("\n— 日志 —");
+            int skip = Math.max(0, txLog.size() - 3);
+            int i = 0;
+            for (String line : txLog) {
+                if (i++ < skip) continue;
+                sb.append('\n').append(line.length() > 90 ? line.substring(0, 90) + "…" : line);
+            }
+        }
+
+        settingsPage.setTxState(sb.toString(), txHeadlineOk);
         settingsPage.setTxConnected(link.isConnected());
     }
 
@@ -1019,7 +1077,9 @@ public final class MainActivity extends Activity
         @Override public void onTxConnect() {
             if (link == null) return;
             if (link.isConnected()) {
-                /* 断开要 join 发射线程（最多 600 ms），也放后台，别冻界面 */
+                /* 断开要 join 发射线程（最多 600 ms），也放后台，别冻界面。
+                 * 这里不置忙：置忙的文案是「正在登录…」，断开时说这句是错的，
+                 * 而 600 ms 的空窗用户也感觉不到。 */
                 new Thread(() -> {
                     link.disconnect();
                     ui.post(() -> {
@@ -1042,21 +1102,52 @@ public final class MainActivity extends Activity
                         Toast.LENGTH_LONG).show();
                 return;
             }
-            if (!ensureMicPermission()) return;
+            /* ★ 这里**不要**申请麦克风权限。
+             *
+             * 登录（UDP 62031 握手）和麦克风没有任何关系 —— 只有按 PTT 才需要。
+             * 之前这里挡了一道 ensureMicPermission()，后果是：没给权限的用户
+             * 点「连接主站」只会看到一个权限框，然后什么都不发生；
+             * 他要是随手点了「拒绝」，就永远连不上，而且界面上没有任何一句话
+             * 说明是因为权限。这是「连不上主站」最隐蔽的一个成因。
+             *
+             * 麦克风在按下 PTT 的那一刻才申请（见 startPtt）。 */
 
+            if (settingsPage != null) settingsPage.setTxBusy(true);
             Toast.makeText(MainActivity.this, "正在登录 " + host, Toast.LENGTH_SHORT).show();
 
             /* ★ 必须放后台线程。
              * MmdvmSession.connect() 里第一件事是 InetAddress.getAllByName() ——
              * DNS 解析，域名拼错或者当前没网时会阻塞好几秒。
              * 在主线程调它，表现就是「点了连接，界面卡住不动，过一会儿弹一句超时」，
-             * 用户会以为按钮没生效而反复点。 */
+             * 用户会以为按钮没生效而反复点。
+             *
+             * ★ 也要 try/catch：这个线程里抛出去的异常只会打到 logcat，
+             * 界面上什么都不会发生 —— 那正是最难查的一种「连不上」。 */
             new Thread(() -> {
-                link.connect(host, Prefs.port(MainActivity.this), id,
-                        Prefs.essid(MainActivity.this), Prefs.password(MainActivity.this),
-                        Prefs.callsign(MainActivity.this), "", "");
+                try {
+                    link.connect(host, Prefs.port(MainActivity.this), id,
+                            Prefs.essid(MainActivity.this), Prefs.password(MainActivity.this),
+                            Prefs.callsign(MainActivity.this), "", "");
+                } catch (Throwable t) {
+                    final String msg = "登录过程抛异常：" + t;
+                    ui.post(() -> {
+                        txHeadline = msg;
+                        txHeadlineOk = false;
+                        updateTxDiag();
+                        showLongText("登录失败", msg + "\n\n" + android.util.Log.getStackTraceString(t));
+                    });
+                }
                 ui.post(MainActivity.this::updateTxDiag);
             }, "dmr-connect").start();
+
+            /* 看门狗：握手超时是 24 s（HANDSHAKE_TIMEOUT_MS），加上断开后等待的 2 s，
+             * 最坏 26 s 才等到 ERROR。留 4 s 余量，30 s 还没结果就把按钮放回来 ——
+             * 宁可让用户再点一次，也不要让他对着一颗灰掉的「正在登录…」发呆。 */
+            ui.postDelayed(() -> {
+                if (settingsPage != null && !link.isConnected()) {
+                    settingsPage.setTxBusy(false);
+                }
+            }, 30_000);
             updateTxDiag();
         }
 
@@ -1083,11 +1174,30 @@ public final class MainActivity extends Activity
             }, "dmr-selftest").start();
         }
 
+        @Override public void onTxDiagnose() {
+            if (link == null) return;
+            /* 诊断里含 DNS 解析（可能阻塞几秒）和 dlopen，必须放后台 */
+            new Thread(() -> {
+                String body;
+                try {
+                    body = link.diagnose(Prefs.host(MainActivity.this),
+                            Prefs.port(MainActivity.this),
+                            Prefs.dmrId(MainActivity.this),
+                            Prefs.essid(MainActivity.this));
+                } catch (Throwable t) {
+                    body = "诊断抛异常：" + t;
+                }
+                final String text = body;
+                ui.post(() -> showLongText("连接诊断", text));
+            }, "dmr-diag").start();
+        }
+
         @Override public void onTxOptionChanged() {
             if (link == null) return;
             link.setRxOn(Prefs.rxOn(MainActivity.this));
             link.setRxOnlyWatchTg(Prefs.onlyWatchTg(MainActivity.this));
             link.setMicGainDb(Prefs.micGainDb(MainActivity.this));
+            link.setTxParams(Prefs.slot(MainActivity.this), Prefs.colorCode(MainActivity.this));
             updateTxDiag();
         }
     };
@@ -1116,27 +1226,71 @@ public final class MainActivity extends Activity
                 .show();
     }
 
-    /* ==================== WakeLock ==================== */
+    /* ==================== 保活 / 常亮 ==================== */
 
+    /**
+     * 同步「保持屏幕常亮」与保活服务。
+     *
+     * <h3>两件事，别混在一起</h3>
+     * <ul>
+     *   <li><b>屏幕常亮</b>是给用户看的：守听时不想屏幕熄掉。用
+     *       {@code FLAG_KEEP_SCREEN_ON} —— 系统自动跟随窗口生命周期，
+     *       不需要权限，也不会在忘记释放时耗一整晚电。</li>
+     *   <li><b>链路保活</b>是给进程用的：{@link KeepAliveService} 持
+     *       Partial WakeLock + WifiLock + 前台通知。这件事<b>和设置无关</b> ——
+     *       只要在守听就该保活，否则熄屏几分钟后心跳就掉了。</li>
+     * </ul>
+     * 之前把两者合成一个 30 分钟超时的 PARTIAL_WAKE_LOCK，结果是：
+     * 熄屏能听（CPU 没睡）但切后台会断（进程优先级没提），
+     * 而且那个「保持屏幕常亮」的开关其实一点也没让屏幕亮着。
+     */
     private void syncAwake() {
-        if (!Prefs.awake(this)) { releaseWake(); return; }
-        acquireWake();
-    }
-
-    private void acquireWake() {
-        if (wakeLock != null && wakeLock.isHeld()) return;
-        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
-        if (pm == null) return;
-        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "beacon:listen");
-        wakeLock.setReferenceCounted(false);
-        try { wakeLock.acquire(30 * 60 * 1000L); } catch (Exception ignore) { }
-    }
-
-    private void releaseWake() {
-        if (wakeLock != null) {
-            try { if (wakeLock.isHeld()) wakeLock.release(); } catch (Exception ignore) { }
-            wakeLock = null;
+        if (Prefs.awake(this)) {
+            getWindow().addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         }
+        syncKeepAlive();
+    }
+
+    /** 起 / 停保活服务，并刷新通知文案。 */
+    private void syncKeepAlive() {
+        String text = keepAliveText();
+        if (KeepAliveService.isRunning()) {
+            KeepAliveService.update(this, text);
+        } else {
+            KeepAliveService.start(this, text);
+        }
+    }
+
+    /** 通知上那一行：尽量说清「现在在干什么」。 */
+    private String keepAliveText() {
+        if (muted) return "已静音 · 仍在守听";
+        if (curTg > 0) {
+            String name = nameOf(curTg);
+            StringBuilder sb = new StringBuilder();
+            sb.append(name == null ? "TG " + curTg : name + " · " + curTg);
+            if (!curCall.isEmpty()) sb.append("  ").append(curCall);
+            else if (curSrc > 0) sb.append("  ID ").append(curSrc);
+            return sb.toString();
+        }
+        int n = sentSubs.length;
+        return n > 0 ? "守听中 · " + n + " 个话组" : "守听中";
+    }
+
+    /**
+     * Android 13+ 要运行时申请通知权限。
+     *
+     * <p>不给也不会崩 —— 服务照样跑、音频照样出，只是那条常驻通知不显示。
+     * 但通知是这个 App 唯一的「我还在后台工作」的提示，所以值得问一次。
+     */
+    private void ensureNotifPermission() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                == PackageManager.PERMISSION_GRANTED) return;
+        try {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_NOTIF);
+        } catch (Throwable ignored) { }
     }
 
     /* ==================== 列表 ==================== */
