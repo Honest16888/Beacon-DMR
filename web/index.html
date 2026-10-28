@@ -1800,6 +1800,14 @@ body.dragging .dghint{display:block}
     </div>
 <div class="txcard">
       <h3>🖐 PTT 按钮</h3>
+      <!-- ★ v2.6.3 两种 PTT 手势。
+           按住说话适合手持、边说边看屏幕；点击切换适合单手、或者需要把手机
+           放在桌上边说边做事（按住不放会累，而且长按期间手指挡着屏幕）。 -->
+      <div class="fld"><label>PTT 模式</label>
+        <select id="setPttMode">
+          <option value="hold" selected>按住说话（按住不放才发，松手即停）</option>
+          <option value="toggle">点击切换（点一下开始，再点一下结束）</option>
+        </select></div>
       <div class="rxrow tog">
         <div class="rxlbl"><b>PTT 可拖动</b><span>开启后整颗钮能拖到屏幕任意位置，位置自动保存；关闭则回到右下角默认位</span></div>
         <label class="sw"><input type="checkbox" id="setPttDrag"><i></i></label>
@@ -1812,6 +1820,8 @@ body.dragging .dghint{display:block}
         PTT 默认悬浮在右下角，列表再长也按得到。拖动用的是「按住后移动超过 6px
         才判定为拖动」的判定：<b>点按</b>发一段短发射，<b>长按</b>边说边拖不动它，
         <b>拖动</b>则挪位置不发射 —— 三种手势互不打架。<br>
+        选了<b>点击切换</b>时，拖动和「点按发短句」都不生效（点一下就是开/关），
+        因为两种手势会互相误触 —— 那时按钮固定在右下角。<br>
         关掉开关或点「重置位置」都会让它回到右下角默认位。
       </div>
     </div>
@@ -19975,6 +19985,8 @@ const state = {
   rxOnlyTg:true, rxBlock:[], rxMuteTg:[],
   /* PTT 可拖动：开关 + 上次停放的坐标（视口坐标，null 表示回操作区中央） */
   pttDrag:false, pttPos:null,
+  /* 'hold' 按住说话（默认）| 'toggle' 点击切换。见 #setPttMode */
+  pttMode:'hold',
   /* 首页操作区（网络切换 + 发射条）是否被手动收起。只收 .home-op，
      分栏条和折叠按钮留着 —— 收起后还得能切列表、能再展开。 */
   htCollapsed:false,
@@ -24318,6 +24330,15 @@ function pttClamp(x,y){
   return {x,y};
 }
 function pttOnDown(e){
+  /* ★ v2.6.3 点击切换模式：按下就切换，松手什么都不做。
+   *
+   * 这个分支必须排在拖动之前 —— 否则「点一下 → 180ms 内没动 → 当成短发射
+   * 250ms」，用户点一下只发半秒就停，而他要的是「一直发到再点一下」。 */
+  if(state.pttMode==='toggle'){
+    if(e&&e.cancelable)e.preventDefault();
+    if(TX.pttHeld)txPttUp(e); else txPttDown(e);
+    return;
+  }
   if(!state.pttDrag){ txPttDown(e); return; }
   if(e&&e.button&&e.button!==0)return;
   pttArmed=true; pttDragging=false;
@@ -24344,6 +24365,8 @@ function pttOnMove(e){
   b.style.left=c.x+'px'; b.style.top=c.y+'px';
 }
 function pttOnUp(e){
+  /* 点击切换模式下松手不算结束 —— 结束由下一次点击触发。 */
+  if(state.pttMode==='toggle')return;
   if(!state.pttDrag){ txPttUp(e); return; }
   if(e&&e.type==='pointerleave' && !pttDragging)return; /* 拖动有捕获，忽略误触的 leave */
   if(!pttArmed)return;
@@ -24449,6 +24472,17 @@ window.onDmrEvent=function(json){
       TX.txing=!!ev.on;
       /* 发射起始时刻，给顶部那个「已经说了几秒」用 */
       TX.startAt=ev.on?Date.now():0;
+      /* ★ v2.6.3 原生说「发射结束了」，但我们这边 pttHeld 还挂着 —— 复位。
+       *
+       * 两种模式都会遇到：
+       *   · 按住说话：主站提前终止（超时/被拒/网络断），手指还按着；
+       *   · 点击切换：更严重 —— 按钮一直亮着「发射中」，用户再点一下
+       *     本该是「结束」，结果代码走到「开始」分支，越点越乱。
+       * 这里以**原生的实际状态**为准，界面的按键状态跟着它走。 */
+      if(!ev.on&&TX.pttHeld){
+        TX.pttHeld=false;
+        const pp=txEl('txPtt'); if(pp)pp.classList.remove('live');
+      }
       txPill('txPillTx','发射',ev.on?'发射中':(ev.reason||'待机'),ev.on?'bad':'');
       if(!ev.on){
         const m=txEl('txMeter'); if(m)m.style.width='0%';
@@ -24861,6 +24895,7 @@ function renderSet(){
   const sp=q('setSimple');     if(sp)sp.checked=!!state.simple;
   const ac=q('setAutoConn');   if(ac)ac.checked=!!state.autoConn;
   const pd=q('setPttDrag');    if(pd)pd.checked=!!state.pttDrag;
+  const pm=q('setPttMode');    if(pm)pm.value=state.pttMode==='toggle'?'toggle':'hold';
   pttApplyState();             /* 同步 PTT 拖动开关 + 上次停放位置 */
   const sr=q('setScanResume'); if(sr)sr.checked=!!state.scanResume;
   const an=q('setAutoN');      if(an)an.value=state.scan.autoN;
@@ -24977,6 +25012,16 @@ $('#setPttDrag').addEventListener('change',e=>{
   pttApplyState();
   toast(state.pttDrag?'PTT 可拖动已开启 · 按住后拖动即可挪位置':'PTT 已回到右下角默认位');
 });
+$('#setPttMode').addEventListener('change',e=>{
+  const v=e.target.value==='toggle'?'toggle':'hold';
+  /* 切换模式时如果正在发射，先停掉 —— 否则「按住」切到「点击」之后，
+   * 手指已经抬起、pttHeld 还挂着 true，界面上按钮亮着却没人管它。 */
+  if(TX.pttHeld)txPttUp();
+  state.pttMode=v; store.set('pttMode',v);
+  toast(v==='toggle'?'点击切换：点一下开始发射，再点一下结束'
+                    :'按住说话：按住不放才发射，松手即停');
+});
+
 $('#setPttReset').addEventListener('click',()=>{
   state.pttPos=null; store.set('pttPos',null); pttApplyState();
   toast('PTT 位置已重置');
@@ -25624,6 +25669,7 @@ function boot(){
   state.view=store.get('view','listen');
   state.mcol=Number(store.get('mcol',0))||0;
   state.pttDrag=!!store.get('pttDrag',false);
+  state.pttMode=store.get('pttMode','hold')==='toggle'?'toggle':'hold';
   state.pttPos=store.get('pttPos',null);
   state.htCollapsed=store.get('htCollapsed',false)===true;
   /* ★ v2.4.8 简洁模式：开着的时候操作区一律先收起 —— 这就是它存在的意义。
