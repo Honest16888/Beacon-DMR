@@ -18,8 +18,8 @@ android {
         applicationId "net.beacon.dmr"
         minSdk 26          // Android 8.0：自适应图标 + 现代 WebView 基线
         targetSdk 34
-        versionCode 34
-        versionName "2.5.8"
+        versionCode 35
+        versionName "2.5.9"
 
         // 只编这两个 ABI：jniLibs 下只有对应的两份声码器插件，
         // 多编一个 ABI 只是白白增大 APK。

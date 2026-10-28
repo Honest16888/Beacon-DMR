@@ -22015,7 +22015,12 @@ function renderVu(){
    * 旁边空着的 dB 就格外显眼（用户报「只有波形了」）。
    * Audio_.level 本来就是 RMS，20·log10 就是 dBFS，顺手补上。
    * 只在「HOSE 在播」这个分支写，和 rxlevel 互斥，不会两边抢同一个节点。 */
-  if(!Q.rxing&&state.current){
+  /* ★ v2.5.9 加 `!TX.txing`。
+   *
+   * 发射时的 dB 由原生 level 事件直接写（见 case 'level'）—— 那是电平的源头，
+   * 上报频率和音频帧同步。这里如果再写一遍，两边会按不同节奏互相覆盖，
+   * 看起来就是「数字在跳/有时空白」。 */
+  if(!TX.txing&&!Q.rxing&&state.current){
     const el=$('#npDb');
     if(el){
       el.textContent=isFinite(db)?(db.toFixed(1)+' dB'):'—';
@@ -24378,6 +24383,10 @@ window.onDmrEvent=function(json){
            直接清成「—」等于把刚测到的东西扔了 */
         const d=txEl('txLevelDb');
         if(d){ d.classList.remove('on'); d.classList.add('off'); }
+        /* 顶部那格同样变暗：读数保留（用户常想回头看一眼刚才峰值），
+         * 但不能还是亮着假装「正在测」。 */
+        const npd=$('#npDb');
+        if(npd)npd.dataset.lv='idle';   /* idle = 变暗（opacity .65），和接收结束同一套 */
         /* ★ v2.5.0 自己那一句的收尾兜底。
            BM 一般会把自己的音频连同 CALL_START / CALL_END 一起回传，
            但有些网络只回音频不回 CALL_END —— 那时录音会一直挂着等
@@ -24488,6 +24497,21 @@ window.onDmrEvent=function(json){
           d.textContent=db.toFixed(1)+' dB';
           d.classList.add('on'); d.classList.remove('off');
         }
+      }
+      /* ★ v2.5.9 顶部播报条那格 dB 也要写。
+       *
+       * 原来这里只更新设置页的 #txLevelDb，顶部 #npDb 只在两个地方被写：
+       * 原生「接收」的 rxlevel 事件、以及 HOSE 在播时的 renderVu。
+       * 而自己发射时这两条都不成立 —— state.current 是 null（自己那句走
+       * renderNowTx，不进 current），于是顶部那格一直是上一次的值或者「—」。
+       * 用户看到的就是「我自己发言 dB 有概率不显示，有时候又显示」。
+       *
+       * 发射和接收天然互斥，两边不会抢同一个节点。 */
+      const np=$('#npDb');
+      if(np&&isFinite(db)&&db>-110){
+        np.textContent=db.toFixed(1)+' dB';
+        np.dataset.lv=db>-12?'hot':(db>-30?'ok':'low');
+        np.title='发射音频电平 '+db.toFixed(1)+' dBFS（麦克风增益之后）';
       }
       break;
     }
