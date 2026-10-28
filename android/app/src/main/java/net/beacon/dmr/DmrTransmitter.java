@@ -366,6 +366,23 @@ public final class DmrTransmitter {
         long inSamples, inClip;        // 采集阶段：样本总数 / 贴满量程的样本数
         long limSamples, limHits;      // 限幅级：样本总数 / 触发软限幅的样本数
         float outPeakDb = -120f;       // 本次发射的峰值（dBFS），送进编码器之前
+
+        /* ---- AGC 自述（v2.4.6）----
+         *
+         * 对方录回来的音频只能证明「开口比后面响十几 dB」，但**没法区分**
+         * 下面两件事 —— 它们在波形上长得一模一样，修法却完全相反：
+         *   ① 开口真的冲上去了（增益在静音期被顶高，开口来不及压）
+         *   ② 后面一直压得太轻（稳态远低于目标，开口只是回到了正常）
+         * 猜错一次就是白改一版。所以让 AGC 把自己的增益报出来：
+         *   agcFirst  首个过门限帧的增益 —— 远大于 1 就是 ① 的铁证
+         *   agcLo/Hi  全程增益范围
+         *   overDb    每帧「增益 × 实测 rms」相对目标的最大超出量
+         *   steadyDb  过门限帧的平均输出电平（真正的稳态电平，不受开口拖累） */
+        float agcFirst = -1f;          // < 0 表示本次发射一句话都没过门限
+        float agcLo = 99f, agcHi = -1f;
+        float overDb = -120f;
+        double steadySum;
+        long steadyN;
     }
 
     private void txLoop(MmdvmSession session, int rate, boolean resample) {
@@ -702,11 +719,33 @@ public final class DmrTransmitter {
                 "\n  电平    ：送出声码器最高 %.1f dBFS（短时 RMS，−16 附近正常）", st.outPeakDb));
         sb.append(String.format(java.util.Locale.US,
                 "\n  削波    ：采集 %.2f%%（前级）· 限幅 %.2f%%（后级）", inPct, limPct));
+
+        /* ---- AGC 自述（v2.4.6）----
+         * 这两行是给「对方说还炸」准备的。以前只能靠对方录音反推，
+         * 而录音里「开口冲」和「稳态轻」看起来一模一样 —— 现在直接看数：
+         *   开口首帧 ≫ 1   → 静音期增益被顶高了，是开口冲
+         *   稳态 ≪ −18      → 平时就压太轻，开口只是回到了正常
+         * 两者都不是，才轮到往声码器/接收机方向查。 */
+        final float steadyDb = st.steadyN > 0 ? (float) (st.steadySum / st.steadyN) : -120f;
+        sb.append(String.format(java.util.Locale.US,
+                "\n  自动电平：增益 %.2f~%.2f× · 开口首帧 %s · 稳态 %.1f dBFS",
+                st.agcHi < 0f ? 1f : st.agcLo,
+                st.agcHi < 0f ? 1f : st.agcHi,
+                st.agcFirst < 0f ? "—" : String.format(java.util.Locale.US, "%.2f×", st.agcFirst),
+                steadyDb));
+        sb.append(String.format(java.util.Locale.US,
+                "\n  开口过冲：%+.1f dB（超出 AGC 目标的最大值）%s",
+                st.overDb, st.overDb > 6f ? "  ⚠ 压不住" : ""));
+
         sb.append("\n  判断    ：").append(
                 inPct >= 0.20f
                         ? "⚠ 麦克风输入本身已削波 —— 手机 MIC 过载，调增益救不回来，请离话筒远一点、说话轻一点"
                         : limPct >= 2.0f
                         ? "⚠ 软限幅在持续介入 —— 把麦克风增益往左调，这次会真的少失真而不只是变小声"
+                        : st.overDb > 6f
+                        ? "⚠ 开口瞬间超出目标 6 dB 以上 —— 静音期增益被顶高了，需要继续提门限"
+                        : st.steadyN > 0 && steadyDb < -26f
+                        ? "稳态电平偏低（远低于 −18）—— 不是开口冲，是平时就压太轻，该抬增益下限"
                         : st.outPeakDb < -30f
                         ? "输入电平偏低（离得远或说话轻）—— 增益可以往右抬"
                         : "电平正常，失真不在电平这一级（往低频 / 声码器方向查）");
@@ -940,6 +979,20 @@ public final class DmrTransmitter {
      *  这种十几 dB 的跃变才碰得到。 */
     private static final float AGC_JUMP_OUT = 2.0f;
 
+    /** 输出电平的**无条件**天花板（v2.4.6）。
+     *
+     *  <p>jump 和 slew 都是「有条件的」：jump 要超出 6 dB 才触发，slew 每帧只走
+     *  35%。只要有一帧没赶上，过冲就会漏进编码器 —— 而 AMBE 一旦把削平的波形
+     *  编进去，对方那边再怎么调音量都救不回来。
+     *
+     *  <p>所以再加一道不管来路的硬夹：只要当前帧过了门限，就用**实测 rms**
+     *  反算一个增益上限，保证这一帧的输出最多到目标 +6 dB。稳态下
+     *  `agcGain × rms ≈ target`，cap 远大于 agcGain，永远不会碰到。
+     *
+     *  <p>★ 这条的价值不在「多压了一点」，而在于它把过冲**从概率变成有界**：
+     *  不管前面发生过什么、增益现在是多少，输出都超不过目标 +6 dB。 */
+    private static final float AGC_CEIL = 2.0f;
+
     /** 电平归一化（不是压缩器）。
      *
      *  手机 MIC 源的电平差异能到 20 dB：同样正常说话，有的设备 RMS 800，
@@ -990,8 +1043,8 @@ public final class DmrTransmitter {
          *
          * 为什么不等等 slew 慢慢降：静音期增益可能已经被顶到 AGC_MAX，
          * 开口那一帧的 rmsAvg 还停在低位，want 算出来仍然偏大，按 0.35 的
-         * 系数要 7~8 帧（140~160 ms）才收敛。这段的输出比正常高 12~14 dB，
-         * 对方听到的就是「一开口特别冲」。
+         * 系数要 7~8 帧（140~160 ms）才收敛（v2.4.6 已把压增益的系数提到 0.55）。
+         * 这段的输出比正常高 12~14 dB，对方听到的就是「一开口特别冲」。
          *
          * 为什么用当前帧 rms 而不是 rmsAvg：rmsAvg 是平滑值，这时候还挂着
          * 静音期的小数，拿它算 want 依然偏高 —— 复位了等于没复位。
@@ -1021,8 +1074,49 @@ public final class DmrTransmitter {
              * 信号变轻 → 慢慢提上来（≈250 ms，免得把底噪抽上来）。
              * 提得慢这件事本来也不吃亏：电平检测器已经做成「上升快、
              * 下降慢」，它自己就记住了说话的峰值电平。 */
-            float k = (want < agcGain) ? 0.35f : 0.08f;
+            float k = (want < agcGain) ? 0.55f : 0.08f;
             agcGain += (want - agcGain) * k;
+        }
+
+        /* ---- AGC 自述：把内部状态记下来，发射结束后打给用户看 ----
+         *
+         * ★ 必须记在**天花板之前**。夹完再记的话，输出恒 ≤ 目标 +6 dB，
+         * 那行「⚠ 压不住」就永远不会出现 —— 统计成了恒真命题，等于没测。
+         * 记夹之前的值，才能看出「AGC 本来打算放多大」：
+         * 数值 > 6 dB 说明这一帧确实被硬夹住了，也就是静音期增益真的被顶高了。
+         *
+         * 这段不改任何音频，只做统计。它的意义在于：下次「对方说还炸」时，
+         * 不用再猜是「开口冲」还是「稳态轻」—— 两个数直接摊在屏幕上。 */
+        if (rms > AGC_GATE_RMS) {
+            if (st.agcFirst < 0f) st.agcFirst = agcGain;
+            if (agcGain < st.agcLo) st.agcLo = agcGain;
+            if (agcGain > st.agcHi) st.agcHi = agcGain;
+            final float ratio = agcGain * rms / AGC_TARGET_RMS;
+            final float over = 20f * (float) Math.log10(Math.max(ratio, 1e-6f));
+            if (over > st.overDb) st.overDb = over;
+            st.steadySum += dbOfRms(agcGain * rms);
+            st.steadyN++;
+        }
+
+        /* ★ 无条件天花板（v2.4.6）—— 见 {@link #AGC_CEIL}。
+         *
+         * jump 只在「会超出目标 6 dB」时触发，slew 每帧只走 55%，
+         * 两条路都可能漏一帧。这里不再判断来路，直接按当前帧的实测 rms
+         * 算一个输出增益上限，把过冲从「大概率不发生」变成「有界」。
+         *
+         * ★ 只夹**这一帧的输出**，不改写 agcGain。
+         *
+         * 一开始写的是 `agcGain = cap`，仿真里立刻看出问题：爆破音那一帧
+         * 被硬压到 0.4，下一帧回到正常电平，可增益要按 0.08 的系数爬回来
+         * —— 要 250 ms 才追上。听感就是「每说一个字抽一下气」。
+         *
+         * 夹输出则没有这个代价：agcGain 照它自己的慢轨迹继续收敛，
+         * 天花板只是拦在出口上。过冲被挡住，恢复速度一点没变。 */
+        float outGain = agcGain;
+        if (rms > AGC_GATE_RMS) {
+            float cap = AGC_TARGET_RMS * AGC_CEIL / rms;
+            if (cap < AGC_MIN) cap = AGC_MIN;
+            if (outGain > cap) outGain = cap;
         }
 
         /* ★ 用户增益并进同一个乘数，而且必须在限幅**之前**。
@@ -1033,7 +1127,7 @@ public final class DmrTransmitter {
          *
          * 并进这个乘数之后，调小增益 = 送进限幅的信号本来就小 = 限幅不介入
          * = 失真跟着消失。这才是滑块该有的行为。 */
-        final float g = agcGain * micGain;
+        final float g = outGain * micGain;
 
         /* 总增益基本是 1 倍就别白算一遍。注意判的是**乘积**而不是 agcGain ——
          * 只判 agcGain 的话，agcGain≈1 且用户增益 −12 dB 时会直接跳过，

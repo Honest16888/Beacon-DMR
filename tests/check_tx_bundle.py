@@ -157,7 +157,7 @@ def main():
     agc_body = strip_comments(m2.group(0)) if m2 else ''
     ok('能定位到 agc 方法体', bool(agc_body))
 
-    gpos = agc_body.find('agcGain * micGain')
+    gpos = agc_body.find('* micGain')
     ok('用户增益并进 AGC 的输出乘数', gpos >= 0,
        '单独在 agc 之外乘，就是「限幅之后再乘」的老路')
     kpos = agc_body.find('KNEE')
@@ -189,6 +189,28 @@ def main():
        re.search(r'AGC_TARGET_RMS\s*/\s*rms\b', agc_body) is not None,
        '用平滑值 rmsAvg 算出来的 want 仍偏高，复位等于没复位')
     ok('复位走 jump 分支而不是只靠 slew', 'jump' in agc_body and 'agcGain = w' in agc_body)
+
+    print('\n=== 9. AGC 自述与无条件天花板（v2.4.6）===')
+    # 对方第二段录音（11.52 s）的过冲和第一段一模一样，而仿真里 v2.4.5
+    # 的过冲恒 ≤ 0 dB —— 说明录音里那 13 dB 要么不是这个版本发的，
+    # 要么根本不在 AGC 这一级。猜不动了，改成让发射端自己报数。
+    ok('有 AGC_CEIL 常量', 'AGC_CEIL' in strip_comments(src),
+       '没有硬天花板，过冲只能靠 jump/slew「大概率」兜住，不是有界')
+    ok('天花板夹的是 outGain 而不是 agcGain',
+       'outGain' in agc_body and 'agcGain = cap' not in agc_body,
+       '改写 agcGain 会让爆破音之后的音节爬不回来，听感「每字抽一下气」')
+    ok('乘数用的是 outGain', re.search(r'outGain\s*\*\s*micGain', agc_body) is not None,
+       '夹了 outGain 却仍用 agcGain 相乘，天花板就是死代码')
+    cpos = agc_body.find('AGC_CEIL')
+    mpos = agc_body.find('* micGain')
+    ok('天花板在乘数之前生效', cpos >= 0 and mpos >= 0 and cpos < mpos)
+    ok('过冲统计在夹之前采样',
+       agc_body.find('st.overDb') < cpos if cpos >= 0 else False,
+       '夹完再统计，输出恒 ≤ 目标 +6 dB，「压不住」永远不触发，等于没测')
+    ok('小结里有「开口过冲」一行', '开口过冲' in src,
+       '没有这行，下次「对方说还炸」还是只能靠录音反推')
+    ok('小结里有「自动电平」一行', '自动电平' in src,
+       '稳态电平和开口过冲必须同时可见，才能分清「开口冲」和「稳态轻」')
 
     print(f'\n================  {passed} 通过 / {failed} 失败  ================')
     return 0 if failed == 0 else 1

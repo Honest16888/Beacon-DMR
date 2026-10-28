@@ -33,7 +33,8 @@ def db(v):
 class Agc:
     """复刻 DmrTransmitter.agc() 的增益决策部分（不含 PCM 处理）。"""
 
-    def __init__(self, gate=GATE, gmax=GMAX, jump_out=None, jump_ratio=None):
+    def __init__(self, gate=GATE, gmax=GMAX, jump_out=None, jump_ratio=None,
+                 ceil=None, kdown=0.35):
         self.gain = 1.0
         self.rms_avg = 0.0
         self.frames = 0
@@ -42,6 +43,10 @@ class Agc:
         # jump_out：输出超过目标的多少倍就复位（None = 关闭瞬态复位）
         self.jump_out = jump_out
         self.jump_ratio = jump_ratio
+        # ceil：v2.4.6 的无条件天花板（输出最多到目标 × ceil）
+        self.ceil = ceil
+        self.kdown = kdown
+        self.capped = 0          # 被天花板夹住的帧数
         self.trace = []
 
     def step(self, rms):
@@ -75,10 +80,19 @@ class Agc:
         if jump:
             self.gain = want
         else:
-            k = 0.35 if want < self.gain else 0.08
+            k = self.kdown if want < self.gain else 0.08
             self.gain += (want - self.gain) * k
 
-        out = rms * self.gain
+        # ★ 天花板只夹这一帧的输出，不改写 gain ——
+        # 改写 gain 会让爆破音之后的音节爬不回来（听感「抽气」）
+        out_gain = self.gain
+        if self.ceil is not None and rms > self.gate:
+            cap = max(TARGET * self.ceil / rms, GMIN)
+            if out_gain > cap:
+                out_gain = cap
+                self.capped += 1
+
+        out = rms * out_gain
         self.trace.append((rms, self.gain, out))
         return out
 
@@ -125,8 +139,10 @@ def main():
     report('=== v2.4.4：门限 100（−50 dBFS）、最大提升 8×（+18 dB）===')
     report('=== 只把门限提到 260（−42 dBFS）===', gate=260.0)
     report('=== 只加瞬态复位（输出超目标 2 倍就复位）===', jump_out=2.0)
-    report('=== 修复后：门限 260 + 最大 6× + 瞬态复位 ===',
+    report('=== v2.4.5：门限 260 + 最大 6× + 瞬态复位 ===',
            gate=260.0, gmax=6.0, jump_out=2.0)
+    report('=== v2.4.6：上面全部 + 压增益 0.55 + 无条件天花板 2× ===',
+           gate=260.0, gmax=6.0, jump_out=2.0, ceil=2.0, kdown=0.55)
 
     print('\n结论：')
     print('  · 门限 100 时，底噪只要超过 −50 dBFS，静音期增益就一路顶到 8×，')
@@ -134,6 +150,24 @@ def main():
     print('  · 单靠提门限只能挡住安静环境，嘈杂环境（底噪 500）照样顶满；')
     print('  · 单靠复位能压住过冲，但静音期仍在白爬增益，白白浪费余量；')
     print('  · 三条一起上，首帧就落在目标附近，回落 1 帧完成。')
+    print('  · 天花板把最坏情况钉死在 +6 dB —— 这是「有界」而不是「大概率」，')
+    print('    前面所有修复都是概率性的，只有它是数学保证。')
+
+    # 天花板会不会误伤稳态？用一段正常起伏的语音喂进去看输出抖动
+    print('\n=== 天花板对稳态的影响（语音 RMS 在 3000±3 dB 随机起伏，60 帧）===')
+    import random
+    random.seed(7)
+    for tag, kw in (('无天花板', dict(gate=260.0, gmax=6.0, jump_out=2.0, kdown=0.55)),
+                    ('有天花板', dict(gate=260.0, gmax=6.0, jump_out=2.0, kdown=0.55, ceil=2.0))):
+        agc = Agc(**kw)
+        outs = []
+        for _ in range(30):
+            agc.step(3000.0)
+        for _ in range(60):
+            outs.append(agc.step(3000.0 * 10 ** (random.uniform(-3, 3) / 20.0)))
+        dev = [db(o / TARGET) for o in outs]
+        print('  %-8s 输出相对目标：均 %+5.1f dB · 最大 %+5.1f dB · 最小 %+5.1f dB · 被夹 %d 帧'
+              % (tag, sum(dev) / len(dev), max(dev), min(dev), agc.capped))
 
 
 if __name__ == '__main__':
