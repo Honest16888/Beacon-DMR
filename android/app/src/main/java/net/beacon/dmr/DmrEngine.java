@@ -110,6 +110,24 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
      */
     private static final int STREAM_HOLD_MS = 400;
 
+    /* ---- 「话组忙」上报去重 ----
+     *
+     * 原来 onDmrd 里每个包都 emit 一次 busy，而 DMR 一个包是 60 ms ——
+     * 页面那边就会把「话组 46001 有电台 4615978 正在讲话」刷十几遍一秒。
+     * 一段十几秒的通联能把整个日志冲得什么都看不见，用户真正想看的
+     * 「发射小结」「错误」全被埋掉。
+     *
+     * 现在只在三种情况下上报：换了讲话人、换了目标话组、或者「你是否在发射」
+     * 变了。三种都不满足时，再用 BUSY_REPEAT_MS 兜一个「还在讲」的刷新。
+     *
+     * 这个兜底不能省：如果只在变化时上报，一条讲三分钟的流中途就再也不出声，
+     * 用户会以为提示坏了。也不能设太短 —— 短于 STREAM_HOLD_MS 就退化成刷屏。 */
+    private static final int BUSY_REPEAT_MS = 3000;
+    private int busySrc = 0;
+    private int busyDst = 0;
+    private boolean busyTxing = false;
+    private long busyAtMs = 0;
+
     public DmrEngine(Context ctx, Callback cb) {
         this.ctx = ctx.getApplicationContext();
         this.cb = cb;
@@ -557,11 +575,24 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
             }
         }
 
-        /* 只有落在我当前关注的话组上，才算「话组忙」—— 界面据此提示别抢话 */
+        /* 只有落在我当前关注的话组上，才算「话组忙」—— 界面据此提示别抢话。
+         *
+         * ★ 每个包都发会把日志刷爆（见 BUSY_REPEAT_MS 的说明），
+         * 这里做去重：讲话人 / 话组 / 发射状态三者任一变化才发，
+         * 否则至少隔 BUSY_REPEAT_MS 才重复一次。 */
         int watch = txDstId;
         if (watch > 0 && dstId == watch) {
-            emit("busy", "srcId", srcId, "dstId", dstId, "slot", slot,
-                    "txing", transmitter.isTransmitting());
+            final boolean txingNow = transmitter.isTransmitting();
+            final boolean changed = (srcId != busySrc) || (dstId != busyDst)
+                    || (txingNow != busyTxing);
+            if (changed || now - busyAtMs >= BUSY_REPEAT_MS) {
+                busySrc = srcId;
+                busyDst = dstId;
+                busyTxing = txingNow;
+                busyAtMs = now;
+                emit("busy", "srcId", srcId, "dstId", dstId, "slot", slot,
+                        "txing", txingNow);
+            }
         }
     }
 

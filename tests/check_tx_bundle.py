@@ -56,6 +56,21 @@ def find_src():
     return None
 
 
+ENGINE_CANDIDATES = [
+    os.path.join(HERE, '..', 'android', 'app', 'src', 'main', 'java',
+                 'net', 'beacon', 'dmr', 'DmrEngine.java'),
+    r'F:\Users\ThinkPink\beacon-dmr-android\app\src\main\java\net\beacon\dmr\DmrEngine.java',
+]
+
+
+def find_engine():
+    for p in ENGINE_CANDIDATES:
+        p = os.path.abspath(p)
+        if os.path.exists(p):
+            return p
+    return None
+
+
 def strip_comments(s):
     """去掉 /* */ 与 // 注释，保留换行。
 
@@ -211,6 +226,35 @@ def main():
        '没有这行，下次「对方说还炸」还是只能靠录音反推')
     ok('小结里有「自动电平」一行', '自动电平' in src,
        '稳态电平和开口过冲必须同时可见，才能分清「开口冲」和「稳态轻」')
+
+    print('\n=== 10. 噪声门的最大衰减（v2.4.7）===')
+    # 对方听完三段录音的原话是「像开启了降噪的」。实测：短停顿底噪 −50 dBFS，
+    # 长停顿掉到 −62~−74，压了 12~24 dB —— 而门的上限只有 14 dB，
+    # 多出来的那 10 dB 是 AMBE 自己的静音检测。两级级联，所以要守住上限。
+    m4 = re.search(r'NG_MAX_CUT_DB\s*=\s*([0-9.]+)f', strip_comments(src))
+    cut = float(m4.group(1)) if m4 else -1
+    ok('噪声门最大衰减 ≤ 8 dB', 0 < cut <= 8,
+       f'现在是 {cut} dB。超过 8 dB 会把长停顿压进声码器的静音判据，'
+       '两级一起关，听感就是「降噪开到底」')
+    ok('门限倍数没有被同时放大', 'NG_THR_MULT = 2.8f' in strip_comments(src),
+       '改衰减量的同时抬门限，会把轻声的声母一起吃掉，问题从一个变成两个')
+
+    print('\n=== 11. 接收侧「话组忙」日志去重（v2.4.7）===')
+    eng = find_engine()
+    ok('能定位到 DmrEngine.java', eng is not None,
+       '检查需要读接收侧源码，路径两处都找不到')
+    if eng:
+        esrc = strip_comments(open(eng, encoding='utf-8').read())
+        ok('有 busy 去重的时间常量', 'BUSY_REPEAT_MS' in esrc,
+           '没有兜底刷新的话，长通联中途再也不提示，用户会以为提示坏了')
+        # 找 emit("busy"...) 之前是否先做了 changed 判断
+        mi = esrc.find('emit("busy"')
+        ok('busy 上报被条件包住',
+           mi > 0 and 'changed' in esrc[max(0, mi - 900):mi],
+           '每个包（60 ms）都上报会把日志刷爆，一次通联能冲掉十几行')
+        ok('上报后会记住本次讲话人',
+           mi > 0 and 'busySrc = srcId' in esrc[max(0, mi - 300):mi + 400],
+           '不记住的话 changed 永远为真，等于没去重')
 
     print(f'\n================  {passed} 通过 / {failed} 失败  ================')
     return 0 if failed == 0 else 1

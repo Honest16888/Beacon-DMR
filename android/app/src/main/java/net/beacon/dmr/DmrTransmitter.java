@@ -1198,8 +1198,22 @@ public final class DmrTransmitter {
     private static final int NG_HOLD_FRAMES = 30;
     /** 关门 ≈ 200 ms。慢到不会切掉词尾的气音 */
     private static final float NG_CLOSE = 0.10f;
-    /** 最大衰减 14 dB。再多就不像「安静」而像「断线」了 */
-    private static final float NG_MAX_CUT_DB = 14f;
+    /** 最大衰减 7 dB。
+     *
+     *  <p>★ v2.4.7 从 14 dB 降到这里。原来那句注释写「再多就不像安静而像断线」，
+     *  方向是对的，但 14 dB 本身就已经越线了 —— 对方听完三段录音的原话是
+     *  「像开启了降噪的」。
+     *
+     *  <p>实测（11:42 三段录音，按停顿长短分组看底噪）：
+     *  短停顿（<200 ms，门还没关）底噪稳定在 −50 dBFS；长停顿掉到 −62~−74。
+     *  也就是说门关到底时压掉了 12~24 dB，而我们的上限只有 14 dB。
+     *
+     *  <p>多出来的那 10 dB 不是我们的：是 **AMBE 声码器自己的静音检测**。
+     *  两级是级联的 —— 我们先把信号压到 −64，这个电平已经低于声码器的静音判据，
+     *  它就跟着切到静音帧。所以真正要做的不是「少压一点」，而是
+     *  <b>别把信号压进声码器的静音门里</b>。7 dB 让长停顿停在 −57 附近，
+     *  仍在声码器的「有声音」判据之上。 */
+    private static final float NG_MAX_CUT_DB = 7f;
 
     private void noiseGate(short[] pcm, float frameRms) {
         /* 噪声底：下降快跟（0.35 ≈ 60 ms），上升极慢（0.0004 ≈ 50 s）。
