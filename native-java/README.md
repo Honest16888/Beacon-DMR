@@ -10,6 +10,7 @@
 | applicationId | `net.beacon.dmr` | `net.beacon.dmr.java` |
 | 界面 | 单文件 HTML（`web/index.html`） | 系统 View + XML |
 | 收听 | JS WebSocket + WebAudio | `WsClient` + `AudioTrack` |
+| 收发 | Java UDP + JNI（界面在 JS 里） | `MmdvmSession` + 同一条 `AudioTrack` |
 | 出包 | `bash tools/build_apk.sh` | `bash tools/build_java.sh` |
 
 applicationId 故意不同 —— 重写期间旧版还能正常用。等新版对齐后再改回
@@ -23,7 +24,7 @@ WebView 版把「同一个声音」实现了两遍：
 |---|---|---|
 | 传输 | JS WebSocket | Java UDP 62031 |
 | 解码 | JS μ-law + WebAudio | Java `DmrRx` |
-| 输出 | AudioWorklet 环形缓冲 | AudioTrack |
+| 输出 | AudioWorklet 环形缓冲 | AudioTrack（**另一条**） |
 
 v2.4.x～v2.5.x 修的「噼啪」「两条路叠着放」「刷新后没声音」全都来自这个分裂。
 纯 Java 版里，收听和收发共用同一条 `AudioTrack`，这些成因**根本不存在**：
@@ -32,16 +33,18 @@ v2.4.x～v2.5.x 修的「噼啪」「两条路叠着放」「刷新后没声音�
 - 没有 AudioWorklet 异步建不起来 → 没有「等 1.2 秒看门狗」
 - 没有自动播放策略 → 不需要「轻触屏幕开始收听」
 - 没有 DOM/JS 桥 → 可以放心开 R8
+- **只有一个播放队列** → 两路音频同时出声在物理上做不到
 
-体积也从 2.18 MB 降到 **93 KB**（没有 WebView 资源、没有前端数据岛；
-其中 15 KB 是两套色板和 134 条国家前缀表）。
+体积 2.18 MB → **1.28 MB**。省的这 0.9 MB 全是前端资源（单文件 HTML 里
+15,529 行呼号库数据岛、CSS、图标）；六份 .so 两边一样大，
+`libc++_shared.so` 一个就占 2.4 MB（压缩后约 1 MB）。
 
 ## 目录
 
 ```
 app/src/main/java/net/beacon/dmr/
 ├── App.java                 Application：崩溃堆栈落盘 filesDir/last_crash.txt
-├── MainActivity.java        三页壳（收听 / 看板 / 设置）+ 两条链路调度
+├── MainActivity.java        三页壳（收听 / 看板 / 设置）+ 三条链路调度
 ├── core/
 │   ├── MsgPack.java         MessagePack 编解码（零依赖，够用就好）
 │   ├── MuLaw.java           G.711 μ-law 查表，与 WebView 版逐项一致
@@ -57,6 +60,14 @@ app/src/main/java/net/beacon/dmr/
 │   ├── LhClient.java        BrandMeister LH 活动流（Socket.IO 套 Engine.IO）
 │   ├── LiveStore.java       纯 Java 统计：活跃会话 / 走势 / Top10 / 通联记录
 │   └── MasterRepo.java      主站表（40 条，7 天缓存）
+├── mmdvm/                   ← Phase 3：从 android/ 搬过来的，只改了 package 行
+│   ├── MmdvmSession.java    UDP 62031 握手 / 心跳 / MSTNAK 重试（纯 java.net）
+│   ├── DmrTransmitter.java  麦克风 → AGC → AMBE → DMRD（AudioRecord）
+│   ├── DmrRx.java           DMRD 载荷 → 解交织 → AMBE → PCM（纯 Java）
+│   ├── DmrTx.java           DMRD 帧组装（JNI 到 dmrtx_jni.cpp 的 FEC 链）
+│   ├── DmrDirectory.java    DMR ID ⇄ 呼号（database.radioid.net）
+│   ├── DmrLink.java         ★ 新写的接线层（替代 DmrEngine + DmrAudio）
+│   └── vocoder/Vocoder.java 声码器插件封装（JNI 到 libbeaconvoc.so）
 ├── audio/
 │   ├── AudioChain.java      软限幅 → 增益 → 高通180 → presence → 软削波
 │   └── AudioOut.java        AudioTrack 8 kHz 直出 + 抖动缓冲
@@ -65,7 +76,7 @@ app/src/main/java/net/beacon/dmr/
     ├── WaveView.java        RMS 柱状波形
     ├── LineChartView.java   Canvas 自绘走势折线
     ├── DashPage.java        看板：6 数字卡 + 走势 + 实时活动 + 4×Top10 + 记录
-    └── SettingsPage.java    设置：外观 / 收听与音频 / 扫描 / 关于
+    └── SettingsPage.java    设置：外观 / 音频 / 扫描 / 收发 / 关于
 ```
 
 **零第三方依赖**：没有 androidx、没有 OkHttp。所有能力都用框架自带的。
@@ -146,6 +157,68 @@ attr 一起换。**必须在 `super.onCreate()` 之前调** —— 窗口背景�
 
 改任何一级增益都要重跑 `tests/AudioChainTest.java`。
 
+## 收发（Phase 3）：搬了什么、没搬什么
+
+从 `android/` 搬过来的六个类**只改了 `package` 那一行**，一行逻辑没动：
+
+| 类 | 依赖 | 说明 |
+|---|---|---|
+| `MmdvmSession` | 纯 `java.net` | UDP 62031 握手、心跳、MSTNAK 重试链 |
+| `DmrTransmitter` | `AudioRecord` | 麦克风 → 高通/峰值/AGC/噪声门 → AMBE → DMRD |
+| `DmrRx` | 纯 Java | DMRD 载荷 → 解交织 → AMBE → PCM |
+| `DmrTx` | JNI | DMRD 帧组装（RS + BPTC + Golay + Hamming + CRC） |
+| `DmrDirectory` | `HttpURLConnection` | DMR ID ⇄ 呼号 |
+| `vocoder/Vocoder` | JNI | 声码器插件（dlopen + dlsym） |
+
+**没搬 `DmrEngine` 和 `DmrAudio`。** 这是本轮最重要的决定：
+
+```
+WebView 版                        纯 Java 版
+─────────────────────────         ─────────────────────────
+HOSE   → WebAudio (48 kHz)        HOSE  μ-law ─┐
+MMDVM  → DmrAudio (另一条 Track)  MMDVM AMBE  ─┴→ AudioOut（同一个队列）
+```
+
+`DmrAudio` 是**第二条 AudioTrack**。搬它进来就等于把「两条路叠着放」
+那个问题的架构前提又装回去。所以只搬协议与 DSP，接线自己写
+（`mmdvm/DmrLink.java`）：AMBE 解出来的 PCM 按 160 采样切帧，
+喂进和 HOSE 完全相同的那个 `AudioOut`。于是：
+
+- 队列只有一个 → **物理上不可能两路同时出声**
+- 音量 / 高通 / presence / 软削波只有一份 → 不存在「哪条链的增益没跟上」
+- 半双工闸门只剩一个动作：发射时 `audio.flush()`
+
+`DmrLink` 保留的是 `DmrEngine` 里真正有信息量的部分：**过滤与去重策略**
+（黑名单 / 静音话组 / 单流锁定 / 话组忙去重），把「拼 JSON 抛给 WebView」
+换成类型化回调。
+
+### HOSE 什么时候让位
+
+判据是 `DmrLink.isNativeRx()` = **最近 500 ms 收到过语音帧**，不是「已连接」。
+
+按「已连接」掐掉 HOSE 会变成「连上主站反而什么都听不见」—— 手机当热点时
+主站并不一定往这边推音频（MMDVM 的接收取决于主站路由）。
+按「正在收」判断则两边都不丢：原生在放的时候 HOSE 让位（一个队列不能插两路），
+原生没在放的时候 HOSE 照常工作。**任何时刻都不会出现全静音。**
+
+### native 库从哪来
+
+`app/src/main/jniLibs/` 下六份 .so（两个 ABI × `libbeaconvoc` /
+`libdsvocoder` / `libc++_shared`），**从 v2.5.5 正式包里解出来的**，
+逐字节相同。这样 native-java 保持「纯 Java + 预编译 .so」的形态，
+出包不经过 CMake。
+
+改了 `android/app/src/main/cpp/` 之后才需要：
+
+```bash
+bash tools/build_vocoder.sh     # 在 ASCII 镜像里重编，只拷 libbeaconvoc.so 回来
+```
+
+**`.so` 不许 strip**（`packaging { jniLibs { keepDebugSymbols += '**/libdsvocoder.so' } }`）。
+`libdsvocoder.so` 是第三方预编译插件，我们既没有源码也没有它的构建脚本，
+削它等于赌 dlsym 要的符号恰好都在 `.dynsym` 里 —— 赔率是「装完发不出去、
+而且没有任何报错」。`useLegacyPackaging = true` 也一样，和 WebView 版逐项一致。
+
 ## 看板口径
 
 数字必须和 WebView 版 `dashData()` 对得上（用户两个版本来回切）：
@@ -169,7 +242,7 @@ LH 实测 **9 条/秒**。`onEvent` 回调在 WebSocket 读线程上，
 ## 测试
 
 ```bash
-bash native-java/tests/run.sh      # 105 项，桌面 JDK 直接跑，不需要设备
+bash native-java/tests/run.sh      # 125 项，桌面 JDK 直接跑，不需要设备
 ```
 
 - **第一组 37 项**（`CoreSelfTest`）只覆盖不依赖 Android 的两个类
@@ -186,8 +259,13 @@ bash native-java/tests/run.sh      # 105 项，桌面 JDK 直接跑，不需要�
   增益爬坡不跳变、presence 开关不影响直流
 - **`StatsTest` 30 项** —— `LiveStore` 的 30 分钟窗口、去重、Top10 排序、
   通联记录裁剪、走势自适应
+- **`DmrRxTest` 20 项** —— 交织 / 解交织**位级**往返。测试里用 Java 抄了一份
+  `dmrtx_jni.cpp` 的 `interleave_ambe()`，逐字对应。这一组最重要的一条是
+  「同步码 + 嵌入信令在场的 64 轮往返全部一致」：同步码写在 p[13] 低半字节和
+  p[19] 高半字节，正好和 AMBE 抢同一批位 —— 取错半字节的表现是
+  「每 6 帧（360 ms）坏一次」，而不是报错
 
-合计 **105 项**。
+合计 **125 项**。
 
 ## 进度
 
@@ -195,23 +273,25 @@ bash native-java/tests/run.sh      # 105 项，桌面 JDK 直接跑，不需要�
 - [x] **Phase 0.5** 话组表三级来源（内置 47 / 缓存 / 在线 1845）+ 搜索 + 只看订阅 + 手动加组
 - [x] **Phase 1** 看板（6 数字卡 / 走势 / 实时活动 / 4×Top10 / 通话构成 / 通联记录）
 - [x] **Phase 2** 设置（外观三档 / 音量 / 增强 / 窄带 / 保持唤醒 / 扫描 / 音频自检 / 关于）
-- [ ] Phase 3 收发（把 `android/` 里的 `MmdvmSession` / `DmrRx` / `DmrTransmitter`
-      搬过来 —— 那几个类本来就是纯框架 Java，一行不用改；届时才需要 NDK 编声码器）
+- [x] **Phase 3** 收发（MMDVM 会话 + 声码器 + FEC 链 + 按住说话 + 收发设置卡 + 三份自检）
 - [ ] Phase 4 录音 / 呼号库 / 国内 radiowo 链路
 - [ ] Phase 5 对齐后改回 `net.beacon.dmr`，替代 WebView 版
 
 ## 已知的待办
 
 - **没有前台服务**：切后台后 Activity 还在，音频能继续，但被系统回收就断。
-  Phase 3 做收发时一并加 `DmrKeepAliveService`。
+  发射中尤其不能被回收 —— 下一个包做 `DmrKeepAliveService`。
 - **没有呼号解析**：现在显示 `ID 1234567`，Phase 4 接 `cnData` 那张表
-  （`web/index.html` 里 15,529 行的那段）。
+  （`web/index.html` 里 15,529 行的那段）。`DmrDirectory` 已经搬过来了，
+  但只在「添加屏蔽名单」时才该调它（radioid.net 建议控制频率）。
 - 国内话组只有 33 个，取自 WebView 版 `cnTgData`（2026-10-26）。
   真正的实时源是 `860.radiowo.com/api/v1/talkgroups`，Phase 4 再接。
 - **「自动录音」开关只存值，不生成文件** —— 录音本身归 Phase 4，设置页已标注。
 - **窄带增强（presence）默认关，v2.5.5 默认开**。因为当前音频链路刚被验收
   「声音是对的」，默认加 2.6 kHz +2.5 dB 会改音色。要不要跟旧版一致，
   等真机试听后定。
-- **这 900 多行 UI 一次都没在屏幕上跑过**（本机 SDK 没有 emulator，`adb devices` 空）。
-  所以加了 `App.java` 崩溃捕获：堆栈落 `filesDir/last_crash.txt`，
-  下次启动弹对话框。看到闪退请把那一屏截图发来。
+- **原生接收只做「正在收时 HOSE 让位」**，不做 per-TG 归属（v2.5.5 的
+  `RXG.dropTg`）。共用一个队列之后 per-TG 归属没有意义了 —— 同一时刻只能放一路。
+- **这 1300 多行 UI + 9000 行搬过来的协议代码一次都没在屏幕上跑过**
+  （本机 SDK 没有 emulator，`adb devices` 空）。所以加了 `App.java` 崩溃捕获：
+  堆栈落 `filesDir/last_crash.txt`，下次启动弹对话框。看到闪退请截图发来。

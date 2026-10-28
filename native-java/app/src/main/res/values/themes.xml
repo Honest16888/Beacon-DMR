@@ -122,6 +122,21 @@
         <item name="android:textSize">11sp</item>
     </style>
 
+    <!-- 设置页的输入框（主站地址、DMR ID、密码…） -->
+    <style name="SetInput">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">40dp</item>
+        <item name="android:layout_marginTop">6dp</item>
+        <item name="android:background">@drawable/bg_inner</item>
+        <item name="android:paddingStart">11dp</item>
+        <item name="android:paddingEnd">11dp</item>
+        <item name="android:textColor">?attr/cText</item>
+        <item name="android:textColorHint">?attr/cDim</item>
+        <item name="android:textSize">12.5sp</item>
+        <item name="android:singleLine">true</item>
+        <item name="android:fontFamily">monospace</item>
+    </style>
+
     <!-- 底栏的标签 -->
     <style name="TabButton">
         <item name="android:layout_width">0dp</item>

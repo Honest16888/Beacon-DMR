@@ -134,6 +134,132 @@ public final class Prefs {
         sp(c).edit().putBoolean("scan.resume", on).apply();
     }
 
+    /* ==================== 收发（MMDVM / BrandMeister） ==================== */
+
+    /**
+     * 主站地址。要的是 <b>Master</b>（UDP 62031），不是收听用的
+     * {@code hose.brandmeister.network} —— 这两个是完全不同的服务，
+     * 填错了表现是「连上了但收发全不通」。
+     *
+     * <p>默认给 BrandMeister 的中国主站。国内用户多半该改成
+     * {@code 8600.radiowo.com}，那台的延迟低得多。
+     */
+    public static String host(Context c) {
+        String v = sp(c).getString("tx.host", DEF_HOST);
+        return v == null ? DEF_HOST : v.trim();
+    }
+
+    public static void setHost(Context c, String v) {
+        sp(c).edit().putString("tx.host", v == null ? "" : v.trim()).apply();
+    }
+
+    public static final String DEF_HOST = "4602.master.brandmeister.network";
+
+    /** 主站 UDP 端口，MMDVM 协议固定 62031，几乎不用改。 */
+    public static int port(Context c) {
+        int v = sp(c).getInt("tx.port", 62031);
+        return (v < 1 || v > 65535) ? 62031 : v;
+    }
+
+    public static void setPort(Context c, int v) {
+        sp(c).edit().putInt("tx.port", (v < 1 || v > 65535) ? 62031 : v).apply();
+    }
+
+    /** 本机 DMR ID（7 位左右）。0 = 还没填，此时不允许发射。 */
+    public static int dmrId(Context c) { return sp(c).getInt("tx.id", 0); }
+
+    public static void setDmrId(Context c, int v) {
+        sp(c).edit().putInt("tx.id", Math.max(0, v)).apply();
+    }
+
+    /**
+     * 热点别名 ID（ESSID），0~99。0 = 不使用别名，直接用裸 DMR ID 登录。
+     *
+     * <p>同一个 DMR ID 已经有一台热点在线时，必须靠它才能并存 ——
+     * 主站按「ID + ESSID」区分设备，裸 ID 撞了会被踢。
+     */
+    public static int essid(Context c) {
+        int v = sp(c).getInt("tx.essid", 0);
+        return (v < 0 || v > 99) ? 0 : v;
+    }
+
+    public static void setEssid(Context c, int v) {
+        sp(c).edit().putInt("tx.essid", Math.max(0, Math.min(v, 99))).apply();
+    }
+
+    /** 主站密码（BrandMeister 是 selfcare 里设的那串）。 */
+    public static String password(Context c) {
+        String v = sp(c).getString("tx.pwd", "");
+        return v == null ? "" : v;
+    }
+
+    public static void setPassword(Context c, String v) {
+        sp(c).edit().putString("tx.pwd", v == null ? "" : v).apply();
+    }
+
+    /** 呼号，随 RPTL 上报，主站据此建台站记录。 */
+    public static String callsign(Context c) {
+        String v = sp(c).getString("tx.call", "");
+        return v == null ? "" : v.trim().toUpperCase(java.util.Locale.ROOT);
+    }
+
+    public static void setCallsign(Context c, String v) {
+        sp(c).edit().putString("tx.call", v == null ? "" : v.trim()).apply();
+    }
+
+    /** 默认时隙：1 或 2。国内话组基本都在 TS2。 */
+    public static int slot(Context c) {
+        int v = sp(c).getInt("tx.slot", 2);
+        return v == 1 ? 1 : 2;
+    }
+
+    public static void setSlot(Context c, int v) {
+        sp(c).edit().putInt("tx.slot", v == 1 ? 1 : 2).apply();
+    }
+
+    /** 色码 0~15。国内基本是 1。 */
+    public static int colorCode(Context c) {
+        int v = sp(c).getInt("tx.cc", 1);
+        return (v < 0 || v > 15) ? 1 : v;
+    }
+
+    public static void setColorCode(Context c, int v) {
+        sp(c).edit().putInt("tx.cc", Math.max(0, Math.min(v, 15))).apply();
+    }
+
+    /** 麦克风增益 dB，−24 ~ +12。0 = 不增不减。 */
+    public static float micGainDb(Context c) {
+        float v = sp(c).getFloat("tx.mic", 0f);
+        return (v < -24f || v > 12f) ? 0f : v;
+    }
+
+    public static void setMicGainDb(Context c, float db) {
+        sp(c).edit().putFloat("tx.mic", Math.max(-24f, Math.min(db, 12f))).apply();
+    }
+
+    /** 原生接收开关。关掉就只发不收（省电，也避免听见绕回来的自己）。 */
+    public static boolean rxOn(Context c) { return sp(c).getBoolean("tx.rxOn", true); }
+
+    public static void setRxOn(Context c, boolean on) {
+        sp(c).edit().putBoolean("tx.rxOn", on).apply();
+    }
+
+    /** 只收当前话组。主站同时推多路时不混音。 */
+    public static boolean onlyWatchTg(Context c) {
+        return sp(c).getBoolean("tx.onlyWatch", false);
+    }
+
+    public static void setOnlyWatchTg(Context c, boolean on) {
+        sp(c).edit().putBoolean("tx.onlyWatch", on).apply();
+    }
+
+    /** 当前关注 / 发射目标的话组。0 = 还没选。 */
+    public static int watchTg(Context c) { return sp(c).getInt("tx.watchTg", 0); }
+
+    public static void setWatchTg(Context c, int tg) {
+        sp(c).edit().putInt("tx.watchTg", Math.max(0, tg)).apply();
+    }
+
     /* ==================== 界面状态 ==================== */
 
     /** 上次停在哪一页：listen / dash / settings。 */

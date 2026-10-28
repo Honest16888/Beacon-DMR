@@ -184,4 +184,64 @@
         android:divider="@null"
         android:dividerHeight="0dp"
         android:scrollbars="vertical" />
+
+    <!--
+      ============ 按住说话 ============
+
+      放在这一页的最下面，而不是做成悬浮圆钮：悬浮钮会盖住话组列表的最后一两行，
+      而且在这个 LinearLayout 里做「贴底悬浮」要靠 FrameLayout 再套一层。
+      参考设备（ESP32 随身对讲）也是底部一条，按住说话、松开收听。
+
+      左侧那颗「TG 91」是**当前发射目标**，点一下换话组 —— 和收听是同一个概念，
+      用户不需要理解「发射话组」和「收听话组」是两件事。
+    -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:paddingStart="12dp"
+        android:paddingEnd="12dp"
+        android:paddingTop="6dp"
+        android:paddingBottom="8dp"
+        android:background="?attr/cPanel">
+
+        <TextView
+            android:id="@+id/pttTg"
+            android:layout_width="wrap_content"
+            android:layout_height="38dp"
+            android:minWidth="66dp"
+            android:gravity="center"
+            android:background="@drawable/bg_inner"
+            android:paddingStart="10dp"
+            android:paddingEnd="10dp"
+            android:text="TG —"
+            android:textColor="?attr/cMuted"
+            android:textSize="12.5sp"
+            android:fontFamily="monospace" />
+
+        <Button
+            android:id="@+id/pttBtn"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:minWidth="0dp"
+            android:text="按住说话"
+            android:textSize="15sp"
+            android:textStyle="bold"
+            android:textAllCaps="false"
+            android:background="@drawable/bg_btn" />
+
+        <TextView
+            android:id="@+id/pttState"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="10dp"
+            android:text="未连接"
+            android:textColor="?attr/cDim"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:maxLines="2" />
+    </LinearLayout>
 </LinearLayout>

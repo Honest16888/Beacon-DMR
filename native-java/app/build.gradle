@@ -23,8 +23,11 @@ android {
         applicationId "net.beacon.dmr.java"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "3.0.0-alpha1"
+        versionCode 3
+        /* alpha1 = Phase 0/0.5/1/2（收听 + 话组表 + 看板 + 设置）
+         * alpha3 = Phase 3（收发：MMDVM + 声码器 + FEC）—— 版本号直接跟 Phase 对齐，
+         *          用户报问题时说「alpha3」我立刻知道是哪一版。 */
+        versionName "3.0.0-alpha3"
     }
 
     signingConfigs {
@@ -50,6 +53,31 @@ android {
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
+    }
+
+    /*
+     * 和 WebView 版**逐项一致**的打包方式 —— 那一套已经在用户手机上跑通了，
+     * 没有理由换一套再赌一次。
+     */
+    packaging {
+        jniLibs {
+            /*
+             * .so 解压到 nativeLibraryDir，让 dlopen(绝对路径) 必然成功。
+             * 代价是安装后多占 1~2 MB，换来的是完全不依赖 linker namespace 的加载路径。
+             * DmrLink.vocoderLibPath() 就是按这个假设写的：能找到绝对路径就用，
+             * 找不到才退回短名交给 linker。
+             */
+            useLegacyPackaging = true
+
+            /*
+             * libdsvocoder.so 是**第三方预编译**插件（DroidStar 的 imbe_vocoder
+             * + mbelib 封装），我们既没有源码也没有它的构建脚本。
+             * 默认的 stripReleaseDebugSymbols 会把它从 378 KB 削到 211 KB ——
+             * 改动一个来路不明的二进制等于在赌「dlsym 要的符号恰好都在 .dynsym 里」，
+             * 赔率是「装完发不出去而且没有任何报错」。不值得为 300 KB 去赌。
+             */
+            keepDebugSymbols += '**/libdsvocoder.so'
+        }
     }
 }
 

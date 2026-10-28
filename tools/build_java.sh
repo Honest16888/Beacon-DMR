@@ -8,9 +8,16 @@
 #   WebView 版 applicationId = net.beacon.dmr
 #   Java  版 applicationId = net.beacon.dmr.java
 #
-# ⚠ 这一份**没有 NDK / CMake**（Phase 0 只做收听，不需要声码器），
-#   所以不存在「中文路径把 CMake 搞崩」那个坑，可以直接在工程目录里编。
-#   等做到收发、要把 vocoder 的 .so 引进来时，再照 build_apk.sh 那套镜像逻辑办。
+# ⚠ 这一份**不挂 NDK / CMake**：声码器与 FEC 的 native 库是**预编译产物**，
+#   放在 native-java/app/src/main/jniLibs/ 下直接打包（六份：两个 ABI ×
+#   libbeaconvoc / libdsvocoder / libc++_shared，与 v2.5.5 正式包逐字节相同）。
+#   所以这里不存在「中文路径把 CMake 搞崩」那个坑，可以直接在工程目录里编。
+#   改了 android/app/src/main/cpp/ 下的 .cpp/.h 之后，先跑
+#       bash tools/build_vocoder.sh
+#   在纯 ASCII 镜像目录里重编并把 .so 拷回来，再跑本脚本出包。
+#
+#   ★ jniLibs 里的 .so 一律不许 strip（见 app/build.gradle 的 packaging 段）——
+#     libdsvocoder.so 是第三方预编译插件，改它的二进制等于赌 dlsym 的符号还在。
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

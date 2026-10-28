@@ -1,6 +1,10 @@
 package net.beacon.dmr;
 
+import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
@@ -8,6 +12,7 @@ import android.os.PowerManager;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.LayoutInflater;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
@@ -29,6 +34,8 @@ import net.beacon.dmr.hose.HoseClient;
 import net.beacon.dmr.live.LhClient;
 import net.beacon.dmr.live.LiveStore;
 import net.beacon.dmr.live.MasterRepo;
+import net.beacon.dmr.mmdvm.DmrLink;
+import net.beacon.dmr.mmdvm.MmdvmSession;
 import net.beacon.dmr.ui.DashPage;
 import net.beacon.dmr.ui.SettingsPage;
 import net.beacon.dmr.ui.Ui;
@@ -42,19 +49,25 @@ import java.util.Locale;
 import java.util.Set;
 
 /**
- * 三页壳：主页（收听） / 看板 / 设置。
+ * 三页壳：主页（收听 + 按住说话） / 看板 / 设置。
  *
- * <p>两条链路各管一摊，互不干扰：
+ * <p>三条链路各管一摊，互不干扰：
  * <ul>
  *   <li>{@link HoseClient} —— HOSE 收听，只推我订阅的那几个话组，出声</li>
  *   <li>{@link LhClient} —— Last Heard 实时活动，全球所有通联，<b>不出声</b>，
  *       只喂看板</li>
+ *   <li>{@link DmrLink} —— MMDVM 收发（UDP 62031），<b>和 HOSE 共用同一条
+ *       {@link AudioOut}</b></li>
  * </ul>
- * 把两件事分开是刻意的：看板要的是「全球在发生什么」，收听要的是「我要听哪几个组」。
- * WebView 版里这两条链路还互相影响过（原生接收让位那一段），纯 Java 版不存在这个问题。
+ * 第三条是本工程和 WebView 版最本质的区别：那边 HOSE 走 WebAudio、
+ * MMDVM 走另一条 AudioTrack，两条路叠着放的成因就在那里。这里只有一个队列。
+ *
+ * <p>闸门：{@link DmrLink#isNativeRx()} 为真时 HOSE 的帧直接丢掉（原生接管）。
+ * 判据是 {@code rxOn && 已连接} —— <b>两个都成立</b>才算，否则「只发不收」的用户
+ * 会遇到原生不播、HOSE 也让位的全静音。
  */
 public final class MainActivity extends Activity
-        implements HoseClient.Listener, LhClient.Listener {
+        implements HoseClient.Listener, LhClient.Listener, DmrLink.Listener {
 
     /* ==================== 界面 ==================== */
     private Palette pal;
@@ -70,6 +83,9 @@ public final class MainActivity extends Activity
     private EditText search;
     private CheckBox ckOnlySub;
     private ListView tgList;
+
+    private Button pttBtn;
+    private TextView pttTg, pttState;
 
     private DashPage dashPage;
     private SettingsPage settingsPage;
@@ -87,6 +103,7 @@ public final class MainActivity extends Activity
     private HoseClient hose;
     private AudioOut audio;
     private LhClient lh;
+    private DmrLink link;
 
     private String view = "listen";
     private int tgSource = TalkgroupRepo.SRC_BUILTIN;
@@ -99,6 +116,23 @@ public final class MainActivity extends Activity
 
     private boolean muted;
     private PowerManager.WakeLock wakeLock;
+
+    /** PTT 当前是否按着。用来防重复下发（DOWN 事件可能来两次） */
+    private boolean pttDown;
+    /** 上一次请求录音权限的时机，避免连续弹窗 */
+    private long permAskedAt = 0;
+    private static final int REQ_MIC = 1001;
+
+    /* ---- 原生链路的界面状态 ---- */
+    /** 主卡片现在显示的是原生接收的那一路（句子结束时据此收回） */
+    private boolean nativeRxOn;
+    private volatile float lastRxDb = -120f;
+    private volatile int txLevel;
+    private volatile float txDb = -120f;
+    /** 「话组忙」提示只弹一次，别每个包弹一遍 */
+    private boolean busyWarned;
+    /** 原生链路的日志尾巴，点「自检」时一起显示 */
+    private final java.util.ArrayDeque<String> txLog = new java.util.ArrayDeque<>();
 
     /** 上次发给 HOSE 的订阅数组。用来判「要不要重发」。 */
     private int[] sentSubs = new int[0];
@@ -140,6 +174,15 @@ public final class MainActivity extends Activity
         audio.setPresence(Prefs.presence(this));
         audio.setMuted(muted);
         if (!audio.start()) stateText.setText("音频输出初始化失败");
+
+        /* 收发链路。注意它拿的是**同一个** audio —— 这是整个重写的核心，
+         * 不是随手传的。见类注释。 */
+        link = new DmrLink(this, audio, this);
+        link.setWatchTg(Prefs.watchTg(this));
+        link.setRxOn(Prefs.rxOn(this));
+        link.setRxOnlyWatchTg(Prefs.onlyWatchTg(this));
+        link.setMicGainDb(Prefs.micGainDb(this));
+        renderPttTg();
 
         TalkgroupRepo.load(this, (all, source) -> ui.post(() -> applyTgs(all, source)));
         MasterRepo.load(this, () -> ui.post(() -> { /* 主站表到了，下次刷看板就会用上 */ }));
@@ -206,6 +249,7 @@ public final class MainActivity extends Activity
     @Override
     protected void onDestroy() {
         ui.removeCallbacksAndMessages(null);
+        if (link != null) link.disconnect();
         if (hose != null) hose.stop();
         if (lh != null) lh.stop();
         if (audio != null) audio.stop();
@@ -243,6 +287,10 @@ public final class MainActivity extends Activity
         ckOnlySub = findViewById(R.id.ckOnlySub);
         tgCount = findViewById(R.id.tgCount);
         tgList = findViewById(R.id.tgList);
+
+        pttBtn = findViewById(R.id.pttBtn);
+        pttTg = findViewById(R.id.pttTg);
+        pttState = findViewById(R.id.pttState);
 
         Ui.tintSeek(seekVol, pal);
     }
@@ -284,6 +332,143 @@ public final class MainActivity extends Activity
 
         btnMute.setOnClickListener(v -> setMuted(!muted));
         renderMute();
+
+        bindPtt();
+    }
+
+    /* ==================== 按住说话 ==================== */
+
+    /**
+     * PTT 用 {@code OnTouchListener} 而不是 {@code OnClickListener}：
+     * 对讲要的是「按下开始、松开结束」，点击事件只有「抬起」这一个时刻，
+     * 拿不到按住时长。这也是所有对讲 App 的做法。
+     *
+     * <p>三个动作都要处理：{@code ACTION_CANCEL} 在手指滑出按钮、来电打断、
+     * 系统回收触摸流时都会来 —— 不处理就会出现「松手了还在发」，
+     * 那是能占死话组的故障。
+     */
+    private void bindPtt() {
+        if (pttBtn == null) return;
+
+        pttBtn.setOnTouchListener((v, e) -> {
+            switch (e.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    startPtt();
+                    return true;
+                case MotionEvent.ACTION_UP:
+                case MotionEvent.ACTION_CANCEL:
+                    stopPtt("松开");
+                    /* 消费掉，否则 UP 之后还会走一次 click */
+                    return true;
+                default:
+                    return false;
+            }
+        });
+
+        pttTg.setOnClickListener(v -> pickPttTg());
+        renderPttTg();
+    }
+
+    private void startPtt() {
+        if (link == null || pttDown) return;
+        if (!ensureMicPermission()) return;
+
+        int tg = Prefs.watchTg(this);
+        if (tg <= 0) {
+            Toast.makeText(this, "先点左边那颗「TG —」选一个话组", Toast.LENGTH_SHORT).show();
+            return;
+        }
+
+        String err = link.ptt(true, tg, Prefs.slot(this), Prefs.colorCode(this), false);
+        if (err != null) {
+            Toast.makeText(this, err, Toast.LENGTH_SHORT).show();
+            return;
+        }
+        pttDown = true;
+        pttBtn.setText("松开结束");
+        pttBtn.setTextColor(pal.bad);
+    }
+
+    private void stopPtt(String reason) {
+        if (link == null || !pttDown) return;
+        pttDown = false;
+        link.ptt(false, 0, 0, 0, false);
+        pttBtn.setText("按住说话");
+        pttBtn.setTextColor(pal.text);
+        pttBtn.getPaint().setFakeBoldText(true);
+        pttBtn.invalidate();
+    }
+
+    /** 点「TG —」换发射目标。只列已订阅的组 + 手动输入的入口。 */
+    private void pickPttTg() {
+        final List<Integer> ids = new ArrayList<>(subs);
+        if (ids.isEmpty()) {
+            Toast.makeText(this, "还没有订阅任何话组，先在下面的列表里勾一个",
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        String[] labels = new String[ids.size()];
+        for (int i = 0; i < ids.size(); i++) {
+            int id = ids.get(i);
+            String n = nameOf(id);
+            labels[i] = (n == null ? "TG " + id : n + "  ·  " + id);
+        }
+        int cur = Prefs.watchTg(this);
+        int checked = ids.indexOf(cur);
+
+        new AlertDialog.Builder(this)
+                .setTitle("发射到哪个话组")
+                .setSingleChoiceItems(labels, checked, (d, which) -> {
+                    int tg = ids.get(which);
+                    Prefs.setWatchTg(this, tg);
+                    if (link != null) link.setWatchTg(tg);
+                    renderPttTg();
+                    d.dismiss();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
+    private void renderPttTg() {
+        if (pttTg == null) return;
+        int tg = Prefs.watchTg(this);
+        if (tg <= 0) {
+            pttTg.setText("TG —");
+            pttTg.setTextColor(pal.dim);
+            return;
+        }
+        String n = nameOf(tg);
+        pttTg.setText(n == null ? "TG " + tg : n);
+        pttTg.setTextColor(pal.text);
+    }
+
+    /* ==================== 录音权限 ==================== */
+
+    /**
+     * Android 6+ 要运行时申请。返回 false 表示「这次不能发」，
+     * 但已经把申请弹窗挂出去了，用户同意后下次按就会成功。
+     */
+    private boolean ensureMicPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true;
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                == PackageManager.PERMISSION_GRANTED) {
+            return true;
+        }
+        long now = System.currentTimeMillis();
+        if (now - permAskedAt > 1500) {
+            permAskedAt = now;
+            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, REQ_MIC);
+        }
+        return false;
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int req, String[] perms, int[] granted) {
+        super.onRequestPermissionsResult(req, perms, granted);
+        if (req != REQ_MIC) return;
+        boolean ok = granted.length > 0 && granted[0] == PackageManager.PERMISSION_GRANTED;
+        Toast.makeText(this, ok ? "麦克风权限已授予，可以按住说话了"
+                : "没有麦克风权限，只能收听不能发射", Toast.LENGTH_LONG).show();
     }
 
     /* ==================== 页面切换 ==================== */
@@ -334,6 +519,8 @@ public final class MainActivity extends Activity
             have.add(t.id);
         }
         rebuildShown();
+        /* 话组表到了，PTT 那颗按钮上的组名才能从「TG 46001」换成「中国」 */
+        renderPttTg();
         if (source == TalkgroupRepo.SRC_ONLINE) {
             Toast.makeText(this, "话组表已更新：" + allTgs.size() + " 个", Toast.LENGTH_SHORT).show();
         }
@@ -487,6 +674,10 @@ public final class MainActivity extends Activity
 
     @Override
     public void onCallStart(int srcId, int tg) {
+        /* 原生链路正在出声时，HOSE 的帧已经被丢掉了（见 onAudio），
+         * 这里如果还更新卡片，就会出现「卡片写着 A、耳朵里是 B」。
+         * 注意只在这个窗口内让位 —— 判据是「正在收」，不是「已连接」。 */
+        if (link != null && link.isNativeRx()) return;
         curTg = tg;
         curSrc = srcId;
         curCall = "";
@@ -499,6 +690,7 @@ public final class MainActivity extends Activity
 
     @Override
     public void onCallEnd(int tg) {
+        if (link != null && link.isNativeRx()) return;
         if (tg != 0 && tg != curTg) return;
         curStart = 0;
         curTg = 0;
@@ -511,6 +703,7 @@ public final class MainActivity extends Activity
 
     @Override
     public void onAlias(int tg, String alias) {
+        if (link != null && link.isNativeRx()) return;
         if (alias == null || alias.isEmpty()) return;
         String[] p = alias.trim().split("\\s+", 3);
         if (p.length > 0 && p[0].matches("[A-Z0-9/]{3,}")) {
@@ -526,6 +719,16 @@ public final class MainActivity extends Activity
     @Override
     public void onAudio(byte[] ulaw) {
         if (muted || audio == null) return;
+        /* ★ 半双工闸门的第二半：原生链路在收的时候，HOSE 让位。
+         *
+         * 判据是 link.isNativeRx()（= rxOn && 已连接），两个条件都得成立 ——
+         * 「只发不收」的用户关掉了 rxOn，那时原生不播，如果 HOSE 还让位，
+         * 就是全静音。v2.5.x 在 WebView 版里踩过这个坑，注释写在 DmrLink 类头。
+         *
+         * 注意这里丢的是「帧」而不是「压增益」：两条链共用同一个 AudioOut 队列，
+         * 所以不存在「两句叠着放」，也就完全不需要在句子中间做归属判断。 */
+        if (link != null && link.isNativeRx()) return;
+
         short[] pcm = new short[ulaw.length];
         MuLaw.decode(ulaw, 0, ulaw.length, pcm);
         audio.feed(pcm, ulaw.length);
@@ -583,6 +786,125 @@ public final class MainActivity extends Activity
                 live.activeCount(), sentSubs.length));
     }
 
+    /* ==================== DmrLink.Listener ==================== */
+
+    /**
+     * 原生链路的事件都在**收包线程 / 发射线程**上，所以这里一律
+     * {@code ui.post} 再碰 View。频率不高（只在句子边界、状态变化时来），
+     * 不像 LH 那样每秒十几条，所以 post 是安全的。
+     */
+    @Override
+    public void onState(MmdvmSession.State s, String detail) {
+        final String label = DmrLink.describe(s)
+                + (detail == null || detail.isEmpty() ? "" : " · " + detail);
+        final boolean ok = s == MmdvmSession.State.CONNECTED;
+        final boolean bad = s == MmdvmSession.State.ERROR;
+        ui.post(() -> {
+            if (pttState != null) {
+                pttState.setText(s == MmdvmSession.State.CONNECTED
+                        ? "已连接" : DmrLink.describe(s));
+                pttState.setTextColor(ok ? pal.ok : bad ? pal.bad : pal.dim);
+            }
+            if (settingsPage != null) {
+                settingsPage.setTxConnected(ok);
+                settingsPage.setTxState(label, ok);
+            }
+            updateTxDiag();
+        });
+    }
+
+    @Override
+    public void onLog(String line) {
+        if (line == null || line.isEmpty()) return;
+        ui.post(() -> {
+            txLog.addLast(line);
+            while (txLog.size() > 40) txLog.removeFirst();
+        });
+    }
+
+    @Override
+    public void onTx(boolean on, int dstId, String reason) {
+        ui.post(() -> {
+            if (on) {
+                pttBtn.setText("发射中…");
+                pttBtn.setTextColor(pal.bad);
+            } else {
+                pttBtn.setText("按住说话");
+                pttBtn.setTextColor(pal.text);
+                if (reason != null && !"松开 PTT".equals(reason)) {
+                    Toast.makeText(this, "发射结束：" + reason, Toast.LENGTH_SHORT).show();
+                }
+            }
+            updateTxDiag();
+        });
+    }
+
+    @Override
+    public void onRx(boolean on, int srcId, int dstId, int slot, boolean priv) {
+        if (!on) return;
+        ui.post(() -> {
+            nativeRxOn = true;
+            curTg = dstId;
+            curSrc = srcId;
+            curCall = "";
+            curName = priv ? "个呼" : "";
+            curStart = System.currentTimeMillis();
+            wave.reset();
+            /* 主卡片改成显示原生这一路 —— 用户不需要知道「谁在放声音」，
+             * 只要看到「现在谁在说」。 */
+            npTg.setText((nameOf(dstId) == null ? "TG " + dstId : nameOf(dstId))
+                    + " · " + dstId + " · TS" + slot);
+            npCaller.setText("ID " + srcId + (priv ? "  ·  个呼" : ""));
+        });
+    }
+
+    @Override
+    public void onRxLevel(float dbfs) {
+        lastRxDb = dbfs;
+    }
+
+    @Override
+    public void onTxLevel(int level, float dbfs) {
+        ui.post(() -> {
+            txLevel = level;
+            txDb = dbfs;
+        });
+    }
+
+    @Override
+    public void onBusy(int srcId, int dstId, boolean txing) {
+        ui.post(() -> {
+            if (txing) {
+                /* 自己在发，同时这个组有人在讲 —— 会互相盖住，提醒一句 */
+                if (!busyWarned) {
+                    busyWarned = true;
+                    Toast.makeText(this, "TG " + dstId + " 有人正在讲话（ID " + srcId
+                            + "），你现在发射会互相盖住", Toast.LENGTH_LONG).show();
+                }
+            } else {
+                busyWarned = false;
+            }
+        });
+    }
+
+    @Override
+    public void onBlocked(int srcId, int dstId) {
+        ui.post(() -> Toast.makeText(this, "已屏蔽 ID " + srcId + "（TG " + dstId + "）",
+                Toast.LENGTH_SHORT).show());
+    }
+
+    /** 原生接收这一句说完了 → 把主卡片收回「守听中」。 */
+    private void clearNativeRx() {
+        nativeRxOn = false;
+        curStart = 0;
+        curTg = 0;
+        curSrc = 0;
+        curCall = "";
+        curName = "";
+        renderNow();
+        npTime.setText("");
+    }
+
     /* ==================== tick ==================== */
 
     private final Runnable tick = new Runnable() {
@@ -601,13 +923,19 @@ public final class MainActivity extends Activity
                 live.prune();
                 if ("dash".equals(view) && dashPage != null) dashPage.refresh();
                 renderLiveState();
+                /* 原生那一句说完了就把主卡片收回去。判据在 DmrLink 里：
+                 * 360 ms 没有新包 = 一句结束，和 DmrAudio 的 GAP_MS 一致。 */
+                if (nativeRxOn && link != null && link.pollRxSentenceEnded()) clearNativeRx();
             }
 
             /* 3 秒：重算一次生效订阅（扫描会自动跟进新冒出来的活跃组） */
             if (tickCount % 6 == 0 && Prefs.scanOn(MainActivity.this)) syncSubs();
 
-            /* 4 秒：音频自检读数 */
-            if (tickCount % 8 == 0) updateAudioDiag();
+            /* 4 秒：音频自检读数 + 收发读数 */
+            if (tickCount % 8 == 0) {
+                updateAudioDiag();
+                updateTxDiag();
+            }
 
             ui.postDelayed(this, 500);
         }
@@ -615,14 +943,41 @@ public final class MainActivity extends Activity
 
     private void updateAudioDiag() {
         if (settingsPage == null || audio == null) return;
+        String gate = (link != null && link.isNativeRx()) ? "原生" : "HOSE";
         settingsPage.setAudioDiag(String.format(Locale.US,
-                "环=%s · 8kHz · 队列=%d · 丢帧=%d · 音量=%d%% · 增强=%d× · 窄带=%s",
+                "环=%s · 闸=%s · 8kHz · 队列=%d · 丢帧=%d · 音量=%d%% · 增强=%d× · 窄带=%s",
                 audio.isRunning() ? "on" : "off",
+                gate,
                 audio.getQueuedFrames(),
                 audio.getDroppedFrames(),
                 Prefs.volume(this),
                 Prefs.gain(this),
                 Prefs.presence(this) ? "开" : "关"));
+    }
+
+    /** 收发那一行的读数。2 秒刷一次，别跟着每个包跳。 */
+    private void updateTxDiag() {
+        if (settingsPage == null || link == null) return;
+        StringBuilder sb = new StringBuilder();
+        if (link.isConnected()) {
+            sb.append("已连接 ").append(Prefs.host(this))
+              .append(':').append(Prefs.port(this)).append('\n');
+            sb.append("登录 ID ").append(link.getLoginId());
+            if (link.getEssid() > 0) sb.append("（别名 ESSID ").append(link.getEssid()).append('）');
+            sb.append(" · pong ").append(link.getPongCount()).append('\n');
+            sb.append("收 ").append(link.getRxPackets()).append(" 包 · 丢 ")
+              .append(String.format(Locale.US, "%.1f%%", link.getRxLoss()))
+              .append(" · 电平 ").append(String.format(Locale.US, "%.1f dBFS", lastRxDb));
+            if (link.isTransmitting()) {
+                sb.append("\n发射中 · 输入 ").append(txLevel).append("% · ")
+                  .append(String.format(Locale.US, "%.1f dBFS", txDb));
+            }
+        } else {
+            sb.append("未连接。填好主站、DMR ID、密码后点「连接主站」。");
+        }
+        sb.append("\n声码器：").append(link.isVocoderReady() ? "就绪" : "未加载");
+        settingsPage.setTxState(sb.toString(), link.isConnected());
+        settingsPage.setTxConnected(link.isConnected());
     }
 
     /* ==================== 设置回调 ==================== */
@@ -660,7 +1015,106 @@ public final class MainActivity extends Activity
                     Prefs.scanOn(MainActivity.this) ? "扫描已开启" : "扫描已关闭",
                     Toast.LENGTH_SHORT).show();
         }
+
+        @Override public void onTxConnect() {
+            if (link == null) return;
+            if (link.isConnected()) {
+                /* 断开要 join 发射线程（最多 600 ms），也放后台，别冻界面 */
+                new Thread(() -> {
+                    link.disconnect();
+                    ui.post(() -> {
+                        Toast.makeText(MainActivity.this, "已断开主站",
+                                Toast.LENGTH_SHORT).show();
+                        updateTxDiag();
+                    });
+                }, "dmr-disconnect").start();
+                return;
+            }
+
+            String host = Prefs.host(MainActivity.this);
+            int id = Prefs.dmrId(MainActivity.this);
+            if (host.isEmpty()) {
+                Toast.makeText(MainActivity.this, "先填主站地址", Toast.LENGTH_SHORT).show();
+                return;
+            }
+            if (id < 1000) {
+                Toast.makeText(MainActivity.this, "DMR ID 至少要 4 位（一般是 7 位）",
+                        Toast.LENGTH_LONG).show();
+                return;
+            }
+            if (!ensureMicPermission()) return;
+
+            Toast.makeText(MainActivity.this, "正在登录 " + host, Toast.LENGTH_SHORT).show();
+
+            /* ★ 必须放后台线程。
+             * MmdvmSession.connect() 里第一件事是 InetAddress.getAllByName() ——
+             * DNS 解析，域名拼错或者当前没网时会阻塞好几秒。
+             * 在主线程调它，表现就是「点了连接，界面卡住不动，过一会儿弹一句超时」，
+             * 用户会以为按钮没生效而反复点。 */
+            new Thread(() -> {
+                link.connect(host, Prefs.port(MainActivity.this), id,
+                        Prefs.essid(MainActivity.this), Prefs.password(MainActivity.this),
+                        Prefs.callsign(MainActivity.this), "", "");
+                ui.post(MainActivity.this::updateTxDiag);
+            }, "dmr-connect").start();
+            updateTxDiag();
+        }
+
+        @Override public void onTxSelfTest() {
+            if (link == null) return;
+            Toast.makeText(MainActivity.this, "正在自检…", Toast.LENGTH_SHORT).show();
+            /* 自检要 dlopen 声码器插件、跑 FEC 链、跑 216 次单 bit 往返，
+             * 放主线程会有明显卡顿。放后台，跑完再弹窗。 */
+            new Thread(() -> {
+                String report;
+                try {
+                    report = "=== 声码器 ===\n" + link.loadVocoder()
+                            + "\n=== FEC 链（发射帧组装）===\n" + link.fecSelfTest()
+                            + "\n=== 接收链（交织往返 + 解码）===\n" + link.rxSelfTest();
+                } catch (Throwable t) {
+                    report = "自检抛异常：" + t;
+                }
+                final String body = report + "\n=== 最近日志 ===\n"
+                        + (txLog.isEmpty() ? "（无）" : String.join("\n", txLog));
+                ui.post(() -> {
+                    updateTxDiag();
+                    showLongText("收发自检", body);
+                });
+            }, "dmr-selftest").start();
+        }
+
+        @Override public void onTxOptionChanged() {
+            if (link == null) return;
+            link.setRxOn(Prefs.rxOn(MainActivity.this));
+            link.setRxOnlyWatchTg(Prefs.onlyWatchTg(MainActivity.this));
+            link.setMicGainDb(Prefs.micGainDb(MainActivity.this));
+            updateTxDiag();
+        }
     };
+
+    /**
+     * 弹一屏可滚动的长文本。
+     *
+     * <p>自检报告动辄四五十行，{@code AlertDialog.setMessage} 会把它挤成一坨；
+     * 这里套一个 ScrollView + 等宽字体，用户能直接长按选中复制发给我。
+     */
+    private void showLongText(String title, String text) {
+        TextView tv = new TextView(this);
+        tv.setText(text);
+        tv.setTextSize(10f);
+        tv.setTextIsSelectable(true);
+        tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+        tv.setTextColor(pal.text);
+        int p = Ui.dpI(this, 12);
+        tv.setPadding(p, p, p, p);
+        android.widget.ScrollView sv = new android.widget.ScrollView(this);
+        sv.addView(tv);
+        new AlertDialog.Builder(this)
+                .setTitle(title)
+                .setView(sv)
+                .setPositiveButton("知道了", null)
+                .show();
+    }
 
     /* ==================== WakeLock ==================== */
 

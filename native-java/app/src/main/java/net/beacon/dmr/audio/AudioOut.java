@@ -128,10 +128,24 @@ public final class AudioOut {
 
     /** 喂一帧 PCM（160 样本）。队列满了丢最旧的。 */
     public void feed(short[] pcm, int len) {
-        if (!running || len <= 0) return;
+        feed(pcm, 0, len);
+    }
+
+    /**
+     * 喂一帧 PCM，带源偏移。
+     *
+     * <p>存在的理由是 AMBE 解码一次出 480 采样（60 ms），而队列里的「一帧」
+     * 定义为 20 ms —— 上层要把它切成三段喂进来，有了偏移就不必每段先拷一份。
+     *
+     * @param off 源数组起始下标
+     * @param len 采样数
+     */
+    public void feed(short[] pcm, int off, int len) {
+        if (!running || len <= 0 || pcm == null) return;
+        if (off < 0 || off + len > pcm.length) return;
         if (muted) return;                       // 静音期间连队列都不进，恢复时不会放旧语音
         short[] copy = new short[len];
-        System.arraycopy(pcm, 0, copy, 0, len);
+        System.arraycopy(pcm, off, copy, 0, len);
         synchronized (lock) {
             if (queue.size() >= MAX_QUEUE) {
                 queue.pollFirst();
@@ -166,6 +180,24 @@ public final class AudioOut {
     }
 
     public boolean isMuted() { return muted; }
+
+    /**
+     * 抖动缓冲的垫底厚度，单位「帧」（1 帧 = 20 ms）。
+     *
+     * <p>HOSE 用 {@link #PRE_ROLL}（4 帧 = 80 ms）就够：BrandMeister 的
+     * HOSE 服务端推送节奏很稳。原生 MMDVM 链路要厚一些（240 ms）——
+     * 那是 WebView 版 {@code DmrAudio} 实测调出来的值，别凭感觉改小。
+     *
+     * <p>只在垫底阶段生效（见 {@link #loop()}）：已经在播的时候改它不会
+     * 立刻改变延迟，要等下一次 {@link #flush()} 之后重新垫底。
+     */
+    public void setPreRollFrames(int n) {
+        if (n < 1) n = 1;
+        if (n > MAX_QUEUE - 1) n = MAX_QUEUE - 1;
+        jitterFrames = n;
+    }
+
+    public int getPreRollFrames() { return jitterFrames; }
 
     public long getDroppedFrames() { return dropped; }
     public long getWrittenFrames() { return written; }

@@ -1,9 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  设置。按「外观 / 收听与音频 / 扫描 / 关于」四张卡片排。
-
-  发收与主站那些（声码器、DMR ID、密码、端口）**不在这里** ——
-  它们属于 Phase 3，纯 Java 版还没有收发链路，现在摆出来只会让人填了没反应。
+  设置。按「外观 / 收听与音频 / 扫描 / 收发 / 关于」五张卡片排。
 
   分段控件（主题、音量增强）的按钮由 SettingsPage 用代码建，
   因为「选中态」要同时改背景和文字色，写在 XML 里要两套 selector，
@@ -392,6 +389,330 @@
                     android:layout_height="wrap_content"
                     android:layout_marginStart="10dp" />
             </LinearLayout>
+        </LinearLayout>
+
+        <!-- ==================== 收发（MMDVM / BrandMeister） ==================== -->
+        <LinearLayout style="@style/Card">
+
+            <TextView
+                style="@style/CardTitle"
+                android:text="📡 收发（MMDVM）" />
+
+            <TextView
+                style="@style/SetHint"
+                android:text="这一块填的是 Master（UDP 62031），不是收听用的 hose.brandmeister.network —— 填错了表现是「连上了但收发全不通」。国内用户建议改成 8600.radiowo.com，延迟低得多。" />
+
+            <TextView
+                style="@style/SetLabel"
+                android:layout_marginTop="10dp"
+                android:text="主站地址" />
+
+            <EditText
+                android:id="@+id/txHost"
+                style="@style/SetInput"
+                android:hint="4602.master.brandmeister.network"
+                android:inputType="textUri" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:layout_marginTop="10dp"
+                        android:text="端口" />
+
+                    <EditText
+                        android:id="@+id/txPort"
+                        style="@style/SetInput"
+                        android:hint="62031"
+                        android:inputType="number" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="10dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:layout_marginTop="10dp"
+                        android:text="本机 DMR ID" />
+
+                    <EditText
+                        android:id="@+id/txId"
+                        style="@style/SetInput"
+                        android:hint="7 位数字"
+                        android:inputType="number" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:layout_marginTop="10dp"
+                        android:text="ESSID 别名" />
+
+                    <EditText
+                        android:id="@+id/txEssid"
+                        style="@style/SetInput"
+                        android:hint="0 = 不用"
+                        android:inputType="number" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_marginStart="10dp"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:layout_marginTop="10dp"
+                        android:text="呼号" />
+
+                    <EditText
+                        android:id="@+id/txCall"
+                        style="@style/SetInput"
+                        android:hint="如 BH6RGQ"
+                        android:inputType="textCapCharacters" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <TextView
+                style="@style/SetLabel"
+                android:layout_marginTop="10dp"
+                android:text="主站密码" />
+
+            <TextView
+                style="@style/SetHint"
+                android:text="BrandMeister 在 selfcare 里设的那串；国内 radiowo 一般是设备密码" />
+
+            <EditText
+                android:id="@+id/txPwd"
+                style="@style/SetInput"
+                android:hint="密码"
+                android:inputType="textPassword" />
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <TextView
+                style="@style/SetLabel"
+                android:text="时隙" />
+
+            <LinearLayout
+                android:id="@+id/segSlot"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:orientation="horizontal"
+                android:background="@drawable/bg_inner"
+                android:padding="3dp" />
+
+            <TextView
+                style="@style/SetLabel"
+                android:layout_marginTop="12dp"
+                android:text="色码" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <SeekBar
+                    android:id="@+id/seekCc"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="15"
+                    android:progress="1" />
+
+                <TextView
+                    android:id="@+id/setCcVal"
+                    style="@style/Mono"
+                    android:layout_width="30dp"
+                    android:gravity="end"
+                    android:text="1" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <TextView
+                style="@style/SetLabel"
+                android:text="麦克风增益" />
+
+            <TextView
+                style="@style/SetHint"
+                android:text="作用点在 AGC 之后、软限幅之前 —— 所以调小是真的「少失真」，不只是「变小声」。发射时对着手机正常说话，看「发射电平」读数：−16 附近正常，超过 −6 就快削波了" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <SeekBar
+                    android:id="@+id/seekMic"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:max="36"
+                    android:progress="24" />
+
+                <TextView
+                    android:id="@+id/setMicVal"
+                    style="@style/Mono"
+                    android:layout_width="46dp"
+                    android:gravity="end"
+                    android:text="0 dB" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:text="接收（原生链路）" />
+
+                    <TextView
+                        style="@style/SetHint"
+                        android:text="关掉就只发不收。注意：关掉之后收听会自动回到 HOSE —— 这是有意的，否则会出现「原生不播、HOSE 也让位」的全静音" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/swRxOn"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp" />
+            </LinearLayout>
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="10dp"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/SetLabel"
+                        android:text="只收当前话组" />
+
+                    <TextView
+                        style="@style/SetHint"
+                        android:text="主站可能同时推多路，全塞进一个缓冲就是一锅粥。开着只放当前话组；个呼（点名呼你）永远放行" />
+                </LinearLayout>
+
+                <Switch
+                    android:id="@+id/swOnlyWatch"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="10dp" />
+            </LinearLayout>
+
+            <View
+                android:layout_width="match_parent"
+                android:layout_height="1dp"
+                android:layout_marginTop="12dp"
+                android:layout_marginBottom="12dp"
+                android:background="?attr/cBorder" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
+
+                <Button
+                    android:id="@+id/btnConnect"
+                    android:layout_width="0dp"
+                    android:layout_height="42dp"
+                    android:layout_weight="1"
+                    android:minWidth="0dp"
+                    android:text="连接主站"
+                    android:textSize="13sp"
+                    android:textAllCaps="false"
+                    android:background="@drawable/bg_btn" />
+
+                <Button
+                    android:id="@+id/btnSelfTest"
+                    android:layout_width="0dp"
+                    android:layout_height="42dp"
+                    android:layout_weight="1"
+                    android:layout_marginStart="8dp"
+                    android:minWidth="0dp"
+                    android:text="自检"
+                    android:textSize="13sp"
+                    android:textAllCaps="false"
+                    android:background="@drawable/bg_btn" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/txState"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:background="@drawable/bg_inner"
+                android:padding="9dp"
+                android:text="未连接"
+                android:textColor="?attr/cMuted"
+                android:textSize="11sp"
+                android:fontFamily="monospace"
+                android:lineSpacingMultiplier="1.6" />
         </LinearLayout>
 
         <!-- ==================== 关于 ==================== -->

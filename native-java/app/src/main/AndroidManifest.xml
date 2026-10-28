@@ -5,6 +5,11 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 守听时持 WakeLock：熄屏后 AudioTrack 的喂数不被掐断 -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 按住说话要采麦克风。运行时还要再申请一次（Android 6+） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+
+    <!-- 声码器插件是 arm 的预编译产物，x86 设备装了也用不了发射 -->
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
 
     <application
         android:name=".App"
