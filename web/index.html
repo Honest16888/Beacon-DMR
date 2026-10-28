@@ -87,6 +87,11 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
   border-bottom:1px solid var(--border);min-height:62px;flex-wrap:wrap}
 html[data-theme="dark"] .nowbar{background:var(--panel2)}
 .nowbar.live{background:linear-gradient(90deg,var(--tx2),transparent 62%);border-bottom-color:color-mix(in srgb,var(--tx) 35%,var(--border))}
+/* 发射中：左边压一道实红，和「接收中」一眼分开 —— 自己正在说话，
+   这时候最需要的是「确认我确实发出去了」，不能和听别人长得一样。 */
+.nowbar.txing{border-left:3px solid var(--tx);padding-left:13px}
+.nowbar.txing .lamp{background:var(--tx);box-shadow:0 0 0 3px color-mix(in srgb,var(--tx) 22%,transparent)}
+.nowbar.txing .np-call{color:var(--tx)}
 .np-idle{color:var(--dim);font-size:12.5px;display:flex;align-items:center;gap:8px}
 .np-main{display:flex;align-items:center;gap:14px;min-width:0;flex:1}
 .np-meta{display:flex;flex-direction:column;gap:1px;min-width:0}
@@ -19959,6 +19964,15 @@ const RXG={
   dropTg:0,
   dropAt:0,
   DROP_MS:90000,
+  /* ★ v2.4.9 让位给原生、但**仍然要录**的那一组。
+   *
+   * 录音走的是 HOSE 的帧（μ-law → PCM 直接进 Rec），原生那条路
+   * （DMRD → 声码器 → AudioTrack）录不到。按句让位之后如果连帧一起丢，
+   * 录音就整个没了 —— 用户看到的是「以前能录，现在不行」。
+   * 所以让位只是「不出声」，不是「不处理」：帧照收、照解码、照进录音，
+   * 只是不进播放队列。静音组和自己回传不录（一个是不想听，一个录了也是自己）。
+   */
+  recTg:0,
   LOST_MS:15000    // 占用的组这么久没声音 = CALL_END 丢了，兜底释放
 };
 /* 这一句该不该由 HOSE 播。
@@ -19966,29 +19980,34 @@ const RXG={
  * 两条音频路径同时在放同一句话，是「听两遍」和「重叠压制」的总根源：
  *   · Hoseline（WebSocket → WebAudio）：页面能控
  *   · 原生 MMDVM 接收（DMRD → 声码器 → AudioTrack）：页面控不到
- * 只要 MMDVM 连着、声码器就绪、接收开着，主站推给我们的同一句就会被
- * 原生那边放一遍。所以**一句话只能归一条路**，从第一帧就定死。
+ * 所以**一句话只能归一条路**，从第一帧就定死。
  *
- * 归属规则（没有开关，全自动）：
- *   1. 原生没在收（没连 / 声码器没就绪 / 接收关了 / 用户静音）→ HOSE 播。
- *   2. 「只收当前话组」开着 → 原生只放 watchTg 那一路，
- *      所以 HOSE 播「不是 watchTg」的组，watchTg 的让给原生。
- *   3. 「只收当前话组」关着 → 原生什么组都放，HOSE 全部让位。
- *      （宁可让 HOSE 全退，也不要两条路叠在一起 —— 叠起来是没法听的。）
+ * ★ 让位必须「见过才让」。
+ * 早先的版本按配置推断「原生会收这个组」：只要 MMDVM 连着、
+ * 「只收当前话组」开着，就把 watchTg 让出去。这是错的 ——
+ * 热点从主站能收到哪些组，取决于主站在它那一侧给我们订阅了什么，
+ * 和 HOSE 的订阅列表毫无关系。推断错了，HOSE 把用户真正在听的组整句丢掉，
+ * 结果既没声音、顶部也没有呼号，看起来像「收不到」。
+ *
+ * 现在只认证据：原生真的在这个组上收到过（Q.seenTg 有记录，且没过期），
+ * 才把这一组让给它。没见过的组一律 HOSE 照播。
+ * 代价是「同一个组」的第一句可能两条路都放一遍 —— 那一次由 hdGate
+ * 按「同一话组」掐掉 HOSE，只丢半句，之后就一直走原生。
  */
 function nativeRxLive(){
   return !!(TX.conn && TX.voc && state.rxOn && state.audioOn);
 }
+const NATIVE_TG_TTL_MS=120000;      // 原生 2 分钟内在这个组上收到过 → 认定它会收
+function nativeSeenTg(tg){
+  tg=Number(tg)||0;
+  if(!tg)return false;
+  const at=Q.seenTg&&Q.seenTg[tg];
+  return !!(at&&Date.now()-at<NATIVE_TG_TTL_MS);
+}
 function hoseOwnsTg(tg){
   if(!state.audioOn)return false;
   if(!nativeRxLive())return true;          // 原生没在收，只能靠 HOSE
-  if(!state.rxOnlyWatchTg)return false;    // 原生全收 → HOSE 全让位
-  /* 个呼模式下原生侧门限是 0（不过滤，见 qRenderTg 里那段说明），
-     也就是什么都放 —— 这种时候没法按话组切分，HOSE 整体让位。 */
-  const pv=document.getElementById('txPriv');
-  if(pv&&pv.value==='1')return false;
-  const watch=qCurTg();                    // 原生侧只放这一路
-  return !(watch>0&&Number(tg)===watch);
+  return !nativeSeenTg(tg);
 }
 /* 现在是否被别的组占着。返回占用的 tg，0 表示可以接。
    ★ 严格配对：只有「占用组的 CALL_END 到了」（rxRelease）或「它 15 秒没声音」
@@ -20821,13 +20840,18 @@ function handleSpotter(m){
          不标记归属的话，这一段会被当成「上一组说的」照常播出去。 */
       RXG.attrTg=nTg;
       RXG.dropTg=nTg; RXG.dropAt=Date.now();
+      /* 让位给原生的那一句「不出声但仍要录」；静音组和自己回传连录都不录。
+         录音吃的是 HOSE 的帧，原生那条路（AudioTrack）录不到 ——
+         如果这里连帧一起丢，录音就整个停了。 */
+      RXG.recTg=yieldToNative?nTg:0;
+      if(yieldToNative)Rec.begin({ srcId, tg:nTg, alias:'', start:Date.now() });
       state.active.set(tg,{ tg, srcId, alias:'', start:Date.now(), at:Date.now() });
       activeSweep();
       renderMine(); renderTab(); renderLive(true);
       return;
     }
     /* 走到这里就是「归 HOSE 播」的正常通话，把归属覆盖和丢弃标记清掉 */
-    RXG.attrTg=0; RXG.dropTg=0; RXG.dropAt=0;
+    RXG.attrTg=0; RXG.dropTg=0; RXG.dropAt=0; RXG.recTg=0;
     /* 别的组还在说 → 这一句让路。不切 current、不 silence，
        正在听的声音和界面上的呼号都不动。但 active 照样记下来，
        「实时活动」里能看到它在呼叫，想切过去点一下就行。 */
@@ -20890,8 +20914,15 @@ function handleSpotter(m){
        放在最前面，先于 audioAllowed / rxHold —— 那两条是「播的时候怎么排」，
        这条是「压根不播」，语义更靠前。dropAt 兜底：CALL_END 丢了也不会永久挡。 */
     if(RXG.dropTg&&atg===RXG.dropTg){
-      if(Date.now()-RXG.dropAt>RXG.DROP_MS){ RXG.dropTg=0; RXG.attrTg=0; }
-      else return;
+      if(Date.now()-RXG.dropAt>RXG.DROP_MS){ RXG.dropTg=0; RXG.attrTg=0; RXG.recTg=0; }
+      else{
+        /* 让位给原生的那一句：不出声，但录音要继续 ——
+           录音吃的是 HOSE 的帧，原生那条路录不到。 */
+        if(RXG.recTg&&RXG.recTg===atg&&state.recActive){
+          Rec.push(Audio_.decode(m[1]));
+        }
+        return;
+      }
     }
     /* 只在「知道这帧属于谁」时才拦。atg=0 说明既没有归属覆盖也没有 current
        （比如半路加入、CALL_START 丢了）—— 这种时候维持老行为，照播，
@@ -20911,7 +20942,11 @@ function handleSpotter(m){
        都误判，把坑位白白让出去，下一个组随便就能接管。 */
     const endTg=Number(m[3])||0;
     /* 被丢弃的那一组说完了 → 归属覆盖和丢弃标记一起撤掉，
-       否则后面正常的组会被一直挡着。 */
+       否则后面正常的组会被一直挡着。让位组还要把录音收尾。 */
+    if(endTg&&RXG.recTg===endTg){
+      RXG.recTg=0;
+      if(state.recActive)Rec.finish();
+    }
     if(endTg&&RXG.dropTg===endTg){ RXG.dropTg=0; RXG.dropAt=0; }
     if(endTg&&RXG.attrTg===endTg)RXG.attrTg=0;
     const cur=state.current;
@@ -21192,6 +21227,15 @@ let nowView=null;
 
 function renderNow(){
   const bar=$('#nowbar');
+  /* ★ v2.4.9 自己发射时，顶部也要显示「谁在说、发到哪」。
+   *
+   * 这块以前只接接收侧（原生接收 / Hoseline 当前），而发射期间两者都是空的：
+   * 原生那条路自己在发（`!transmitter.isTransmitting()` 挡住了它的接收），
+   * HOSE 又被 hdGate 静音 —— 于是明明自己正在说话，顶部一路挂着「暂无通话」。
+   * v2.4.x 早期那版「对讲页」上有这块显示，整页拆掉之后就没接回来。
+   */
+  if(TX.txing){ renderNowTx(); return; }
+  bar.classList.remove('txing');
   /* 优先级：原生接收 > Hoseline 当前 > 上一通。
      原生在播时 Hoseline 已被 hdGate 静音，界面必须显示「真正在响的那个」，
      否则又会出现「听的是 A、看的是 B」。 */
@@ -21241,6 +21285,47 @@ function renderNow(){
   }
   renderRecBtn(); renderHtSum();
 }
+/* 自己的呼号。发射配置里填的那个优先，没填就按 DMR ID 去库里查。 */
+function selfCall(){
+  const el=document.getElementById('txCall');
+  const s=String((el&&el.value)||'').trim().toUpperCase();
+  if(s)return s;
+  const id=parseInt((document.getElementById('txId')||{}).value,10)||0;
+  return id?(resolveId(id).call||''):'';
+}
+/* 发射中的顶部主显示。
+   和接收那一路刻意分开写：接收显示的是「对方是谁」，发射显示的是「我是谁、
+   发到哪个组」。字段来源也不同（呼号取发射配置，不取 ID 库），硬塞进
+   renderNow 那一套会让两边互相污染。 */
+function renderNowTx(){
+  const bar=$('#nowbar');
+  $('#npIdle').style.display='none';
+  $('#npMain').style.display='';
+  bar.classList.add('live','txing');
+  const idEl=txEl('txId');
+  const selfId=parseInt((idEl&&idEl.value)||'',10)||0;
+  const call=selfCall()||'我';
+  const hi=state.ham[call];
+  const pv=txEl('txPriv');
+  const priv=!!(pv&&pv.value==='1');
+  const tg=qCurTg();
+  nowView={ srcId:selfId, tg, priv, self:true };
+  $('#npCall').textContent=call;
+  $('#npCall').classList.add('hot');
+  $('#npCall').dataset.click='1';
+  $('#npName').textContent=(hi&&hi.name)?hi.name
+    :(selfId?('发射中 · 自己 DMR ID '+selfId):'发射中');
+  $('#npTg').textContent=tg>0?String(tg):'—';
+  const lbl=$('#npTgLbl'); if(lbl)lbl.textContent=priv?'个呼':'话组';
+  const tgBox=$('.np-tg'); if(tgBox)tgBox.classList.toggle('priv',priv);
+  const tn=priv?'':tgName(tg);
+  $('#npTgName').innerHTML=tn?((tgCountry(tg)?flagHtml(tg)+' ':'')+esc(tn)):'';
+  /* 「回复」在发射时没有意义（回的就是自己），收起来 */
+  const rb=$('#npReply'); if(rb)rb.style.display='none';
+  const t=$('#npTime');
+  if(t)t.textContent=TX.startAt?(((Date.now()-TX.startAt)/1000).toFixed(1)+'s'):'';
+  renderRecBtn(); renderHtSum();
+}
 /* 「回复」按钮：把发射目标一键切到刚才呼叫我的那个人，并置成个呼。
  *
  * 不复用 txSetTarget() —— 那个函数会 rxReset() 把收听占用让出去，
@@ -21269,6 +21354,8 @@ function wireNowbar(){
   const cl=$('#npCall');
   if(cl)cl.addEventListener('click',()=>{
     const c=nowView; if(!c)return;
+    /* 发射时显示的是自己，点它没有「切过去」的意义，给个回执就够 */
+    if(c.self){ toast('你正在发射 · '+(selfCall()||'本机')); return; }
     if(c.tg>0&&!c.priv){ txSetTarget(c.tg); return; }
     if(c.srcId>0){
       const r=resolveId(c.srcId);
@@ -21291,6 +21378,13 @@ function renderVu(){
   }
 }
 function renderNowTimer(){
+  /* ★ v2.4.9 发射时也要走秒 —— 这块原来只认 state.current（接收），
+     自己说话时计时器一直是 0.0s 不动，看不出到底发出去了几秒。 */
+  if(TX.txing){
+    const t=$('#npTime');
+    if(t)t.textContent=TX.startAt?(((Date.now()-TX.startAt)/1000).toFixed(1)+'s'):'0.0s';
+    return;
+  }
   if(!state.current)return;
   $('#npTime').textContent=((Date.now()-state.current.start)/1000).toFixed(1)+'s';
 }
@@ -21316,7 +21410,7 @@ function renderHtSum(){
      摘要条必须跟着「真正在响的那个」走，否则又变成「听的是个呼、看的是话组」。 */
   const nx=qNative(), cur=state.current, lr=state.lastRx;
   let live=false, txing=false, priv=false, s='守听中';
-  if(TX.txing){ txing=true; s='发射中'; }
+  if(TX.txing){ txing=true; const sc=selfCall(); s='发射中'+(sc?' · '+sc:''); }
   else if(nx){ live=true; priv=nx.priv; s=(nx.priv?'个呼 ':'')+nx.call+' 正在说'; }
   else if(cur){ live=true; s=resolveAlias(cur).call+' 正在说'; }
   else if(!state.audioOn){ s='已静音'; }
@@ -22060,6 +22154,8 @@ function goTx(){
 /* ===================== 发射（MMDVM / Homebrew） ===================== */
 
 const TX={conn:false,voc:false,txing:false,pttHeld:false,resumeAfter:false,booted:false,lastReport:'',state:'IDLE',stateDetail:'',progNode:null,
+  /* 本次发射的起始时刻（ms）。0 = 没在发。给顶部「已经说了几秒」用 */
+  startAt:0,
   /* 「最近听到」的现场名单：[{srcId,dstId,at}]。不持久化，见 rxHeardPush */
   heard:[],
   /* 「最近话组」的现场名单：[dstId]。同样不持久化，见 rxTgPush */
@@ -22102,6 +22198,13 @@ const Q={
   rxing:false,     // 正在接收（主站推来的语音）
   hd:false,        // 半双工闸门当前是否由我们掐掉了 Hoseline
   last:null,       // 最近一次听到的 {srcId,dstId,slot,priv}
+  /* ★ v2.4.9 原生这条路上「亲眼见过」的话组：{tg: 最后收到的时间}。
+     用途只有一个 —— 判断某个话组该不该让位给原生（见 hoseOwnsTg）。
+     为什么不按 txTg / rxOnlyWatchTg 推断：热点的订阅集合（主站到底给我们
+     推哪些组）和 HOSE 的订阅列表是两套东西。按配置推断一旦推断错，
+     HOSE 会把用户真正在听的话组整句丢掉 —— 表现就是「没声音、
+     顶部连呼号都不显示」，比两条路重叠严重得多。 */
+  seenTg:{},
 };
 /* 常用话组兜底表。用户在「收听」页订阅过的话组会排在前面 ——
    相当于把电台的信道记忆做成「你订阅的 + 这几个常用组」。 */
@@ -22285,16 +22388,22 @@ function txMuteAll(on){
   renderHtSum();
 }
 function hdGate(){
-  /* ★ v2.4.9 归属已经按句判过了（hoseOwnsTg），HOSE 正在播的这一句
-   * **一定**不归原生。这时再因为 Q.rxing 去压增益，就是纯粹的截断 ——
-   * 用户听到的「重叠压制」正是这一下：前半句 HOSE、卡一下、后半句 MMDVM。
-   * 所以分三种情况：
-   *   · 自己在发射   → 一律静音（免得听见自己绕网络回来）
-   *   · HOSE 正在播它自己那一句 → 不因为原生在收就掐掉
-   *   · 其它（原生在收、HOSE 没在播）→ 照旧静音兜底
+  /* ★ v2.4.9 只有「同一句话」才让 HOSE 闭嘴。
+   *
+   * v2.4.8 的判据是 `TX.txing||Q.rxing` —— 只要原生在收就压掉 HOSE。
+   * 问题是原生和 HOSE 常常在收**不同**的话组：这时 HOSE 播的是一句完全
+   * 正常的话，被压掉就是纯粹的截断，用户听到的是「说到一半没声了」。
+   *
+   * 现在分三种：
+   *   · 自己在发射 → 一律静音（免得听见自己绕网络回来）
+   *   · 原生在收，且收的正好是 HOSE 正在播的那个话组 → 让位（同句不叠）
+   *   · 其余情况 → HOSE 照播，一个字都不动
    */
-  const own=!!(state.current&&hoseOwnsTg(Number(state.current.tg)||0));
-  txMuteAll(TX.txing||(Q.rxing&&!own));
+  if(TX.txing){ txMuteAll(true); return; }
+  const cur=state.current;
+  const same=!!(Q.rxing&&Q.last&&cur
+                &&Number(Q.last.dstId)===Number(cur.tg));
+  txMuteAll(same);
 }
 /* 接收参数下发到原生侧。原生那边很轻，改一次调一次即可 */
 function rxApply(){
@@ -23552,6 +23661,8 @@ window.onDmrEvent=function(json){
     }
     case 'tx':
       TX.txing=!!ev.on;
+      /* 发射起始时刻，给顶部那个「已经说了几秒」用 */
+      TX.startAt=ev.on?Date.now():0;
       txPill('txPillTx','发射',ev.on?'发射中':(ev.reason||'待机'),ev.on?'bad':'');
       if(!ev.on){
         const m=txEl('txMeter'); if(m)m.style.width='0%';
@@ -23572,12 +23683,24 @@ window.onDmrEvent=function(json){
       }
       hdGate();   /* 半双工闸门：发射时掐掉 HOSE，免得听见自己绕网络回来的声音 */
       txSync();
+      /* ★ v2.4.9 发射状态一变就刷顶部主显示。
+         以前这里只刷发射条，顶部那块压根没接 —— 自己说话时顶部一直挂着
+         「暂无通话」，看不出自己在发、发到哪个组。 */
+      renderNow();
       break;
     case 'rx':{
       /* 一句的开头 / 结尾。逐包上报太吵（每秒 17 条），原生侧只在句子边界报 */
       Q.rxing=!!ev.on;
       if(ev.on){
         Q.last={ srcId:ev.srcId|0, dstId:ev.dstId|0, slot:ev.slot|0, priv:!!ev.priv };
+        /* ★ v2.4.9 记下「原生确实在这个话组上收到过」。
+           这是 hoseOwnsTg 让位的唯一依据 —— 见过才让，见不到就不让。 */
+        if(Q.last.dstId>0&&!Q.last.priv){
+          Q.seenTg[Q.last.dstId]=Date.now();
+          /* 顺手清过期项：只增不减的话，挂机一天会攒一堆没用的组 */
+          const cut=Date.now()-NATIVE_TG_TTL_MS;
+          for(const k in Q.seenTg)if(Q.seenTg[k]<cut)delete Q.seenTg[k];
+        }
         /* 新的一句开始 → 峰值重新起算，否则上一通大声说话会把峰值一直顶住 */
         Q.dbPeak=null;
         const r=resolveId(Q.last.srcId);
@@ -23822,7 +23945,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.18';
+const PAGE_VER='2026.11.19';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';

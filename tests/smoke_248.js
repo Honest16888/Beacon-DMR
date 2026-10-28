@@ -397,91 +397,166 @@ const p3 = await ev(`/* 静音时连 buffer 都不建：静音期间来的帧不
   return {before,after};`);
 ok('静音期间 push 不排播放队列', p3.after === 0, p3);
 
-console.log('\n=== 10. v2.4.9 一句话只归一条路 ===');
-/* 两条路径同时放同一句 = 「听两遍」；先放半句再压增益 = 「重叠压制」。
-   现在归属在 CALL_START 一次定死，整句从第一帧丢到 CALL_END。 */
+console.log('\n=== 9b. v2.4.9 发射时顶部显示自己的呼号 ===');
+/* 顶部主显示以前只接接收侧：原生那条路自己在发（接收被 transmitter.isTransmitting()
+   挡住），HOSE 又被 hdGate 静音 —— 两者都是空的，于是自己正在说话，
+   顶部一路挂着「暂无通话」。这一节盯住发射分支。 */
+const t1 = await ev(`document.getElementById('txCall').value='BG6ABC';
+  document.getElementById('txId').value='4601234';
+  document.getElementById('txTg').value='91';
+  document.getElementById('txPriv').value='0';
+  state.current=null; Q.rxing=false; Q.last=null;
+  TX.txing=true; TX.startAt=Date.now();
+  renderNow();
+  const bar=document.getElementById('nowbar');
+  const o={call:document.getElementById('npCall').textContent,
+    name:document.getElementById('npName').textContent,
+    tg:document.getElementById('npTg').textContent,
+    tgLbl:document.getElementById('npTgLbl').textContent,
+    tgName:document.getElementById('npTgName').textContent,
+    idle:document.getElementById('npIdle').style.display,
+    main:document.getElementById('npMain').style.display,
+    txcls:bar.classList.contains('txing'),
+    live:bar.classList.contains('live'),
+    reply:document.getElementById('npReply').style.display,
+    time:document.getElementById('npTime').textContent,
+    sum:document.getElementById('hsTxt').textContent};
+  return o;`);
+ok('发射时顶部显示自己的呼号', t1.call === 'BG6ABC', t1);
+ok('发射时不显示「暂无通话」', t1.idle === 'none' && t1.main === '', t1);
+ok('发射时显示目标话组', t1.tg === '91', t1);
+ok('发射时标签是「话组」', t1.tgLbl === '话组', t1.tgLbl);
+ok('发射时带出话组名', (t1.tgName || '').length > 0, t1.tgName);
+ok('发射时整条加 txing 类（左侧红杠）', t1.txcls === true && t1.live === true, t1);
+ok('发射时收起「回复」按钮', t1.reply === 'none', t1);
+ok('发射时计时器在走', /^0\.\ds$/.test(t1.time || ''), t1.time);
+ok('折叠摘要也带自己的呼号', /BG6ABC/.test(t1.sum || ''), t1.sum);
+
+const t2 = await ev(`/* 发射结束 → 顶部回到接收/空闲状态 */
+  TX.txing=false; TX.startAt=0; state.current=null;
+  Q.rxing=false; Q.last=null;
+  renderNow();
+  const bar=document.getElementById('nowbar');
+  return {txcls:bar.classList.contains('txing'),
+    idle:document.getElementById('npIdle').style.display,
+    main:document.getElementById('npMain').style.display};`);
+ok('发射结束后去掉 txing 类', t2.txcls === false, t2);
+ok('发射结束后回到空闲显示', t2.idle === '' && t2.main === 'none', t2);
+
+const t3 = await ev(`/* 个呼模式：标签变「个呼」，呼号照旧是自己 */
+  document.getElementById('txPriv').value='1';
+  document.getElementById('txTg').value='4601234';
+  TX.txing=true; TX.startAt=Date.now(); renderNow();
+  const o={lbl:document.getElementById('npTgLbl').textContent,
+    tg:document.getElementById('npTg').textContent,
+    call:document.getElementById('npCall').textContent};
+  TX.txing=false; TX.startAt=0; document.getElementById('txPriv').value='0';
+  renderNow();
+  return o;`);
+ok('个呼发射时标签是「个呼」', t3.lbl === '个呼', t3);
+ok('个呼发射时目标显示对方 ID', t3.tg === '4601234', t3);
+ok('个呼发射时呼号仍显示自己', t3.call === 'BG6ABC', t3);
+
+console.log('\n=== 10. v2.4.9 一句话只归一条路（见过才让）===');
+/* 两条路径同时放同一句 = 「听两遍」；中途压增益 = 「重叠压制」。
+   但让位必须「见过才让」—— 按配置推断会让 HOSE 把用户真正在听的组
+   整句丢掉，表现就是「没声音、顶部也没呼号」。这一节把两种情况都按住。 */
 const o1 = await ev(`rxReset(); state.current=null; state.active.clear();
   state.audioOn=true; Audio_.setUserMute(false);
   state.rxOnlyWatchTg=true; TX.conn=true; TX.voc=true;
+  Q.seenTg={}; Q.rxing=false; Q.last=null;
   document.getElementById('txTg').value='91';
-  return {live:nativeRxLive(), owns91:hoseOwnsTg(91), owns46001:hoseOwnsTg(46001)};`);
+  return {live:nativeRxLive(), owns91:hoseOwnsTg(91), owns46001:hoseOwnsTg(46001),
+          seen91:nativeSeenTg(91)};`);
 ok('MMDVM 连着时 nativeRxLive() 为真', o1.live === true, o1);
-ok('原生在看 91 → HOSE 让出 91', o1.owns91 === false, o1);
-ok('原生不看 46001 → HOSE 仍然播 46001', o1.owns46001 === true, o1);
+ok('没有证据时 HOSE 照播 91（不能按配置瞎推断）', o1.owns91 === true, o1);
+ok('没有证据时 HOSE 照播 46001', o1.owns46001 === true, o1);
+ok('nativeSeenTg 默认 false', o1.seen91 === false, o1);
 
-const o2 = await ev(`/* 让位的话组：整句丢弃，不占坑位、不切 current */
-  state.current=null; state.active.clear(); rxReset();
-  Audio_.silence();          // nextTime 归零：断言读的是「这一句有没有排进队列」
+const o2 = await ev(`/* 原生真的在 91 上收到过 → 这一组才让位 */
+  Q.seenTg={}; Q.seenTg[91]=Date.now();
+  return {seen:nativeSeenTg(91), owns91:hoseOwnsTg(91), owns46001:hoseOwnsTg(46001)};`);
+ok('原生在 91 上收到过 → 认定它会收', o2.seen === true, o2);
+ok('原生收到过的 91 让位', o2.owns91 === false, o2);
+ok('没收到过的 46001 仍然 HOSE 播', o2.owns46001 === true, o2);
+
+const o3 = await ev(`/* 证据会过期：超过 NATIVE_TG_TTL_MS 就重新由 HOSE 播 */
+  Q.seenTg={}; Q.seenTg[91]=Date.now()-NATIVE_TG_TTL_MS-1000;
+  return {seen:nativeSeenTg(91), owns:hoseOwnsTg(91)};`);
+ok('过期证据不算数', o3.seen === false, o3);
+ok('过期后 HOSE 重新接管', o3.owns === true, o3);
+
+const o4 = await ev(`/* 让位的那一句：不播、不占坑位、不切 current，但**照录** */
+  Q.seenTg={}; Q.seenTg[91]=Date.now();
+  state.current=null; state.active.clear(); rxReset(); Audio_.silence();
+  state.recOn=true; state.recs=[]; state.recActive=false;
   handleSpotter([T.CALL_START, 0, 9100001, 91]);
-  const afterStart={cur:state.current?state.current.tg:null, drop:RXG.dropTg, attr:RXG.attrTg};
-  const n0=Audio_.nextTime;
+  const afterStart={cur:state.current?state.current.tg:null, drop:RXG.dropTg,
+                    attr:RXG.attrTg, rec:RXG.recTg, recOn:state.recActive};
+  const n0=Audio_.nextTime, len0=Rec.len;
   for(let i=0;i<5;i++) handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
-  const afterAudio={next:Audio_.nextTime, slot:RXG.tg};
+  const afterAudio={next:Audio_.nextTime, slot:RXG.tg, recLen:Rec.len-len0};
   handleSpotter([T.CALL_END, 0, 9100001, 91]);
-  return {afterStart, afterAudio, dropAfterEnd:RXG.dropTg, attrAfterEnd:RXG.attrTg};`);
-ok('让位的话组不切 current', o2.afterStart.cur === null, o2.afterStart);
-ok('让位的话组立起 dropTg', o2.afterStart.drop === 91, o2.afterStart);
-ok('让位的话组音频一帧都不播', o2.afterAudio.next === 0, o2.afterAudio);
-ok('让位的话组不占收听坑位', o2.afterAudio.slot === 0, o2.afterAudio);
-ok('CALL_END 撤掉 dropTg', o2.dropAfterEnd === 0, o2);
-ok('CALL_END 撤掉 attrTg', o2.attrAfterEnd === 0, o2);
+  return {afterStart, afterAudio, dropEnd:RXG.dropTg, recEnd:RXG.recTg};`);
+ok('让位的话组不切 current', o4.afterStart.cur === null, o4.afterStart);
+ok('让位的话组立起 dropTg', o4.afterStart.drop === 91, o4.afterStart);
+ok('让位的话组立起 recTg（仍要录音）', o4.afterStart.rec === 91, o4.afterStart);
+ok('让位的话组开了录音', o4.afterStart.recOn === true, o4.afterStart);
+ok('让位的话组音频一帧都不播', o4.afterAudio.next === 0, o4.afterAudio);
+ok('让位的话组不占收听坑位', o4.afterAudio.slot === 0, o4.afterAudio);
+ok('让位的话组照样进了录音缓冲', o4.afterAudio.recLen > 0, o4.afterAudio);
+ok('CALL_END 撤掉 dropTg', o4.dropEnd === 0, o4);
+ok('CALL_END 撤掉 recTg', o4.recEnd === 0, o4);
 
-const o3 = await ev(`/* 自己的回传：HOSE 上出现自己的 DMR ID → 整句丢弃 */
+const o5 = await ev(`/* 自己的回传：整句丢弃，而且**不录**（录了也是自己） */
   document.getElementById('txId').value='4601234';
-  TX.conn=false; TX.voc=false;          // 排除「让位给原生」的干扰
-  state.current=null; state.active.clear(); rxReset();
-  Audio_.silence();
+  TX.conn=false; TX.voc=false;
+  state.current=null; state.active.clear(); rxReset(); Audio_.silence();
+  state.recActive=false; state.recs=[];
   handleSpotter([T.CALL_START, 0, 4601234, 91]);
-  const cur=state.current?state.current.tg:null, drop=RXG.dropTg;
-  const n0=Audio_.nextTime;
+  const cur=state.current?state.current.tg:null, drop=RXG.dropTg, rec=RXG.recTg;
+  const len0=Rec.len;
   handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
-  const next=Audio_.nextTime;
-  handleSpotter([T.CALL_END, 0, 4601234, 91]);
-  return {cur, drop, next};`);
-ok('自己的回传不切 current', o3.cur === null, o3);
-ok('自己的回传立起 dropTg', o3.drop === 91, o3);
-ok('自己的回传不播', o3.next === 0, o3);
+  return {cur, drop, rec, next:Audio_.nextTime, recLen:Rec.len-len0};`);
+ok('自己的回传不切 current', o5.cur === null, o5);
+ok('自己的回传立起 dropTg', o5.drop === 91, o5);
+ok('自己的回传不录音', o5.rec === 0 && o5.recLen === 0, o5);
+ok('自己的回传不播', o5.next === 0, o5);
 
-const o4 = await ev(`/* 关掉「只收当前话组」→ 原生什么都放 → HOSE 全让位 */
-  TX.conn=true; TX.voc=true; state.rxOnlyWatchTg=false;
-  const owns=hoseOwnsTg(46001);
-  state.rxOnlyWatchTg=true;
-  return {owns};`);
-ok('「只收当前话组」关掉时 HOSE 全让位', o4.owns === false, o4);
+const o6 = await ev(`/* 静音的话组：整句丢弃，同样不录 */
+  TX.conn=false; TX.voc=false;
+  state.rxMuteTg=[91]; state.current=null; state.active.clear(); rxReset(); Audio_.silence();
+  state.recActive=false;
+  handleSpotter([T.CALL_START, 0, 9100001, 91]);
+  const r={drop:RXG.dropTg, rec:RXG.recTg};
+  state.rxMuteTg=[];
+  return r;`);
+ok('静音的话组立起 dropTg', o6.drop === 91, o6);
+ok('静音的话组不录音', o6.rec === 0, o6);
 
-const o5 = await ev(`/* 原生没在收（用户静音）→ 只能靠 HOSE */
-  TX.conn=true; TX.voc=true; state.rxOnlyWatchTg=true;
-  setPlay(false,true);
-  const owns=hoseOwnsTg(46001);
-  setPlay(true,true);
-  return {owns};`);
-ok('静音时 HOSE 也不播', o5.owns === false, o5);
-
-const o6 = await ev(`/* hdGate：HOSE 正在播它自己那一句时，原生在收也不许中途掐断 ——
-   那一下就是「重叠压制」（前半句 HOSE、卡一下、后半句 MMDVM）。 */
+const o7 = await ev(`/* hdGate：只有「同一话组」才让 HOSE 闭嘴 */
   TX.conn=true; TX.voc=true; state.rxOnlyWatchTg=true;
   document.getElementById('txTg').value='91';
-  document.getElementById('txId').value='4601234';
   state.subscribed=[46001,91]; state.current=null; state.active.clear(); rxReset();
-  Audio_.setMute(false);
-  handleSpotter([T.CALL_START,0,4601001,46001]);      // HOSE 自己播的那一路
-  Q.rxing=true; hdGate();
-  const ownMuted=Audio_.muted;                        // 期望 false：不掐
-  Q.rxing=false; hdGate();
-  /* 反过来：HOSE 没在播时，原生在收仍然要静音兜底 */
-  state.current=null; rxReset();
-  Q.rxing=true; hdGate();
-  const otherMuted=Audio_.muted;                      // 期望 true：兜底
-  /* 发射时无论谁在播都要静音 */
-  Q.rxing=false; state.current={srcId:4601001,tg:46001,alias:'',start:Date.now()};
-  TX.txing=true; hdGate();
-  const txMuted=Audio_.muted;                         // 期望 true
+  Audio_.setMute(false); Q.seenTg={};
+  /* ① HOSE 在播 46001，原生在收 91 → 不同话组，不许掐 */
+  handleSpotter([T.CALL_START,0,4601001,46001]);
+  Q.rxing=true; Q.last={srcId:9100001,dstId:91,slot:1,priv:false};
+  hdGate();
+  const diffMuted=Audio_.muted;
+  /* ② 原生收的正好是 HOSE 正在播的 46001 → 让位 */
+  Q.last={srcId:4601001,dstId:46001,slot:1,priv:false};
+  hdGate();
+  const sameMuted=Audio_.muted;
+  /* ③ 自己在发射 → 一律静音 */
+  Q.rxing=false; hdGate(); TX.txing=true; hdGate();
+  const txMuted=Audio_.muted;
   TX.txing=false; hdGate(); Audio_.setMute(false);
-  state.current=null; rxReset();
-  return {ownMuted, otherMuted, txMuted};`);
-ok('HOSE 播自己那句时不被原生掐断', o6.ownMuted === false, o6);
-ok('HOSE 没在播时原生在收仍然静音兜底', o6.otherMuted === true, o6);
-ok('发射时一律静音', o6.txMuted === true, o6);
+  state.current=null; rxReset(); Q.rxing=false; Q.last=null;
+  return {diffMuted, sameMuted, txMuted};`);
+ok('不同话组时 HOSE 不被掐', o7.diffMuted === false, o7);
+ok('同一话组时 HOSE 让位', o7.sameMuted === true, o7);
+ok('发射时一律静音', o7.txMuted === true, o7);
 await ev(`TX.conn=false; TX.voc=false; state.rxOnlyWatchTg=true; return 1;`);
 
 console.log('\n=== 11. 运行时错误 ===');

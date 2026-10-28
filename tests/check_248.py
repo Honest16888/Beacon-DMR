@@ -263,12 +263,12 @@ ok('设置页有自动登录开关', 'id="setAutoConn"' in html)
 
 # ============================================================
 print('\n=== 10. 版本号 ===')
-ok("PAGE_VER 是 2026.11.18", "PAGE_VER='2026.11.18'" in html)
+ok("PAGE_VER 是 2026.11.19", "PAGE_VER='2026.11.19'" in html)
 gp = os.path.join(REPO, 'android', 'app', 'build.gradle')
 if os.path.exists(gp):
     g = read(gp)
-    ok('build.gradle versionName = 2.4.9', 'versionName "2.4.9"' in g)
-    ok('build.gradle versionCode = 24', re.search(r'versionCode\s+24', g) is not None)
+    ok('build.gradle versionName = 2.4.10', 'versionName "2.4.10"' in g)
+    ok('build.gradle versionCode = 25', re.search(r'versionCode\s+25', g) is not None)
 else:
     ok('能读到 android/app/build.gradle', False)
 
@@ -298,17 +298,35 @@ ok('有 nativeRxLive()', 'function nativeRxLive(){' in html)
 ok('有 hoseOwnsTg()', 'function hoseOwnsTg(tg){' in html)
 seg = html[html.find('function hoseOwnsTg('):][:800]
 ok('原生没在收时 HOSE 才播', 'if(!nativeRxLive())return true;' in seg)
-ok('「只收当前话组」关掉时 HOSE 全让位', 'if(!state.rxOnlyWatchTg)return false;' in seg)
-ok('个呼模式（原生不过滤）HOSE 全让位', "if(pv&&pv.value==='1')return false;" in seg)
-ok('hoseOwnsTg 用 qCurTg() 对齐原生门限', 'const watch=qCurTg();' in seg)
+# ★ 让位必须「见过才让」：按 txTg / rxOnlyWatchTg 推断会让 HOSE 把用户
+# 真正在听的组整句丢掉，表现是「没声音、顶部连呼号都不显示」。
+ok('让位依据是「原生真在这个组上收到过」', 'return !nativeSeenTg(tg);' in seg)
+ok('不再按 rxOnlyWatchTg 推断', 'state.rxOnlyWatchTg' not in seg)
+ok('不再按 qCurTg 推断', 'qCurTg()' not in seg)
+ok('有 nativeSeenTg()', 'function nativeSeenTg(' in html)
+ok('证据有有效期', 'const NATIVE_TG_TTL_MS=' in html)
+ok('原生收到时记进 Q.seenTg', 'Q.seenTg[Q.last.dstId]=Date.now()' in html)
 # 反向：不能再有「先播半句再压增益」的中途切换
 ok('CALL_START 里不再调 hdGate 中途压增益',
    'hdGate()' not in html[html.find('function handleSpotter('):][:4000])
 i_hd = html.find('function hdGate(')
-seg_hd = html[i_hd:i_hd + 900] if i_hd > 0 else ''
-ok('hdGate 在 HOSE 播自己的句子时不掐断',
-   'hoseOwnsTg(Number(state.current.tg)||0)' in seg_hd)
-ok('hdGate 发射时一律静音', 'TX.txing||(Q.rxing&&!own)' in seg_hd)
+seg_hd = html[i_hd:i_hd + 1100] if i_hd > 0 else ''
+# hdGate 只在「原生收的正好是 HOSE 正在播的那个话组」时才让 HOSE 闭嘴。
+# 以前判据是 TX.txing||Q.rxing —— 两条路在收不同话组时，HOSE 播的是一句
+# 完全正常的话，被压掉就是纯粹的截断。
+ok('hdGate 按「同一话组」判定',
+   'Number(Q.last.dstId)===Number(cur.tg)' in seg_hd)
+ok('hdGate 发射时一律静音', 'if(TX.txing){ txMuteAll(true); return; }' in seg_hd)
+
+# ★ v2.4.9 发射时顶部显示自己的呼号
+ok('有 renderNowTx()', 'function renderNowTx(){' in html)
+ok('renderNow 先判发射态', 'if(TX.txing){ renderNowTx(); return; }' in html)
+ok('有 selfCall()', 'function selfCall(){' in html)
+i_txev = html.find("case 'tx':")
+ok('tx 事件会刷顶部', 'renderNow();' in html[i_txev:i_txev + 1400])
+ok('tx 事件记下发射起始时刻', 'TX.startAt=ev.on?Date.now():0;' in html)
+ok('发射中计时器也走秒', 'if(TX.txing){' in html[html.find('function renderNowTimer('):][:300])
+ok('折叠摘要带自己的呼号', "s='发射中'+(sc?' · '+sc:'')" in html)
 
 print('\n' + '=' * 18 + f'  {passed} 通过 / {failed} 失败  ' + '=' * 18)
 raise SystemExit(1 if failed else 0)
