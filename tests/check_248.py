@@ -218,7 +218,12 @@ ok('CALL_AUDIO 用 attrTg 判归属', 'RXG.attrTg||' in seg2 or 'RXG.attrTg ||' 
 ok('CALL_AUDIO 先判 dropTg 整句丢弃', 'atg===RXG.dropTg' in seg2)
 ok('归属未知时维持老行为（atg 为 0 不拦）', 'if(atg&&!audioAllowed(atg))' in seg2)
 i_end = html.find('type===T.CALL_END', i_start)
-seg3 = html[i_end:i_end + 800] if i_end > 0 else ''
+# 窗口按到下一个分支为止取，不写死长度 —— v2.5.0 给这段补了注释，
+# 原来 800 字符的窗口装不下，断言会假失败。
+_i_next = html.find("} else if(type===T.", i_end + 10)
+if _i_next < 0:
+    _i_next = i_end + 2400
+seg3 = html[i_end:_i_next] if i_end > 0 else ''
 ok('CALL_END 会撤掉 attrTg', 'RXG.attrTg===endTg' in seg3)
 i_ho = html.find('function rxHandoff(')
 seg4 = html[i_ho:i_ho + 900] if i_ho > 0 else ''
@@ -263,12 +268,12 @@ ok('设置页有自动登录开关', 'id="setAutoConn"' in html)
 
 # ============================================================
 print('\n=== 10. 版本号 ===')
-ok("PAGE_VER 是 2026.11.19", "PAGE_VER='2026.11.19'" in html)
+ok("PAGE_VER 是 2026.11.20", "PAGE_VER='2026.11.20'" in html)
 gp = os.path.join(REPO, 'android', 'app', 'build.gradle')
 if os.path.exists(gp):
     g = read(gp)
-    ok('build.gradle versionName = 2.4.10', 'versionName "2.4.10"' in g)
-    ok('build.gradle versionCode = 25', re.search(r'versionCode\s+25', g) is not None)
+    ok('build.gradle versionName = 2.5.0', 'versionName "2.5.0"' in g)
+    ok('build.gradle versionCode = 26', re.search(r'versionCode\s+26', g) is not None)
 else:
     ok('能读到 android/app/build.gradle', False)
 
@@ -327,6 +332,56 @@ ok('tx 事件会刷顶部', 'renderNow();' in html[i_txev:i_txev + 1400])
 ok('tx 事件记下发射起始时刻', 'TX.startAt=ev.on?Date.now():0;' in html)
 ok('发射中计时器也走秒', 'if(TX.txing){' in html[html.find('function renderNowTimer('):][:300])
 ok('折叠摘要带自己的呼号', "s='发射中'+(sc?' · '+sc:'')" in html)
+
+# ★ v2.5.0 「出不出声」和「留不留档」分开
+#
+# 自己发出去绕回来的那一句，v2.4.9/10 是 recTg=0 —— 既不出声也不留档。
+# 结果录音里没有自己、通联记录里没有自己、顶部「上一通」和就绪行的
+# 「回 xxx」也一直是空的。四处同一个根因：从来没走过 logCall。
+ok('RXG 有 recCall 字段', 'recCall:null,' in html)
+i_cs = html.find('function handleSpotter(')
+i_cs_drop = html.find('const keep=!!(self||!muted);', i_cs)
+ok('留档判定把自己算进去', i_cs_drop > 0)
+seg_keep = html[i_cs_drop:i_cs_drop + 1200] if i_cs_drop > 0 else ''
+ok('留档时开录音', 'if(keep)Rec.begin(call);' in seg_keep)
+ok('留档时记下 recTg', 'RXG.recTg=keep?nTg:0;' in seg_keep)
+ok('留档时记下 recCall', 'RXG.recCall=keep?call:null;' in seg_keep)
+# 「ID 12345」不是呼号，不能当 alias 传 —— 传了 resolveAlias 会拆成
+# call='ID' / name='12345'，列表里显示成光秃秃一个 "ID"。
+ok('alias 不收「ID xxx」', "!/^ID\\s/i.test(sc)" in seg_keep)
+# 关键：CALL_END 时要把这一条补进通联记录，否则录音和记录对不上
+ok('CALL_END 给 recCall 补记录', 'if(RXG.recCall)logCall(RXG.recCall);' in seg3)
+ok('CALL_END 清掉 recCall', 'RXG.recCall=null;' in seg3)
+# 超时兜底也要收尾，只清标记会让录音一直挂着
+i_drop = html.find('atg===RXG.dropTg', i_audio if 'i_audio' in dir() else 0)
+seg_drop = html[i_drop:i_drop + 1200] if i_drop > 0 else ''
+ok('丢弃超时兜底会收录音', 'if(state.recActive)Rec.finish();' in seg_drop)
+ok('丢弃超时兜底会补记录', 'if(RXG.recCall)logCall(RXG.recCall);' in seg_drop)
+# 自己发射松手后的收尾兜底（有些网络只回音频不回 CALL_END）
+ok('有 selfRecGuard()', 'function selfRecGuard(){' in html)
+ok('selfRecGuard 只收自己那一句', 'if(!cap||!cap.self)return;' in html)
+ok('selfRecGuard 按对象引用比对', 'if(RXG.recCall!==cap)return;' in html)
+i_txoff = html.find("if(!ev.on){", html.find("case 'tx':"))
+ok('松手时调 selfRecGuard', 'selfRecGuard();' in html[i_txoff:i_txoff + 900])
+
+# ★ v2.5.0 让路 / CALL_END 丢失时的记录补齐
+#
+# 让路的那一句不进 state.current，CALL_END 到的时候 cur 是「正在听的组」，
+# cur.tg===tg 永远不成立 → 既不播也不记，静默消失。
+# 多组同时有呼叫时就会漏，表现是「上一通 / 就绪 / 记录」有概率空着。
+ok('RXG 有 heldCall', 'heldCall:{},' in html)
+ok('让路时留待收尾记录',
+   "RXG.heldCall[tg]={ srcId, tg, alias:'', start:Date.now() };" in html)
+ok('让路记录会清过期项', 'RXG.HELD_MS' in html and 'delete RXG.heldCall[k]' in html)
+ok('CALL_END 补记让路句', 'if(!logged)logCall(RXG.heldCall[tg]);' in html)
+ok('CALL_END 清掉 heldCall 条目', 'delete RXG.heldCall[tg];' in html)
+# 让路之后又被 rxHandoff 接回来的情况：cur 已经记过，不能再记一遍
+ok('已由 cur 记过就不重复', 'logged=true;' in html)
+# 同组接续：上一句的 CALL_END 丢了，新 CALL_START 到了也要补记
+ok('CALL_START 同组接续也记上一句',
+   'prev.srcId!==srcId||Date.now()-prev.start>1000' in html)
+ok('rxReset 清 heldCall', 'RXG.heldCall={};' in html)
+ok('rxReset 清 recCall', 'RXG.recCall=null;' in html)
 
 print('\n' + '=' * 18 + f'  {passed} 通过 / {failed} 失败  ' + '=' * 18)
 raise SystemExit(1 if failed else 0)

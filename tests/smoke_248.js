@@ -508,20 +508,109 @@ ok('让位的话组照样进了录音缓冲', o4.afterAudio.recLen > 0, o4.after
 ok('CALL_END 撤掉 dropTg', o4.dropEnd === 0, o4);
 ok('CALL_END 撤掉 recTg', o4.recEnd === 0, o4);
 
-const o5 = await ev(`/* 自己的回传：整句丢弃，而且**不录**（录了也是自己） */
+const o5 = await ev(`/* 自己的回传：不出声，但要留档 —— 录音 + 通联记录 + 顶部「上一通」。
+   以前这里是「录了也是自己，干脆不录」，结果用户自己的发言在录音里、
+   通联记录里、顶部「上一通」和就绪行的「回 xxx」里全都找不到。 */
   document.getElementById('txId').value='4601234';
   TX.conn=false; TX.voc=false;
-  state.current=null; state.active.clear(); rxReset(); Audio_.silence();
+  state.current=null; state.active.clear(); state.calls=[]; state.lastRx=null;
+  rxReset(); Audio_.silence();
   state.recActive=false; state.recs=[];
   handleSpotter([T.CALL_START, 0, 4601234, 91]);
   const cur=state.current?state.current.tg:null, drop=RXG.dropTg, rec=RXG.recTg;
   const len0=Rec.len;
   handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
-  return {cur, drop, rec, next:Audio_.nextTime, recLen:Rec.len-len0};`);
+  const recLen=Rec.len-len0, nxt=Audio_.nextTime;
+  handleSpotter([T.CALL_END, 0, 4601234, 91]);
+  return {cur, drop, rec, next:nxt, recLen,
+          calls:state.calls.length,
+          lastRxCall:state.lastRx?state.lastRx.call:null,
+          lastRxTg:state.lastRx?state.lastRx.tg:null,
+          recAfter:state.recActive};`);
 ok('自己的回传不切 current', o5.cur === null, o5);
 ok('自己的回传立起 dropTg', o5.drop === 91, o5);
-ok('自己的回传不录音', o5.rec === 0 && o5.recLen === 0, o5);
+ok('自己的回传也录音', o5.rec === 91 && o5.recLen > 0, o5);
 ok('自己的回传不播', o5.next === 0, o5);
+ok('自己的回传进通联记录', o5.calls === 1, o5);
+ok('自己的回传设了「上一通」', o5.lastRxTg === 91 && !!o5.lastRxCall, o5);
+ok('自己的回传 CALL_END 收掉录音', o5.recAfter === false, o5);
+
+const o5b = await ev(`/* 松手兜底：有些网络只回音频、不回 CALL_END。
+   不收尾的话录音会一直挂着等下一句 CALL_START 顶掉，记录也永远不落地。 */
+  TX.conn=false; TX.voc=false;
+  state.current=null; state.active.clear(); state.calls=[]; state.lastRx=null;
+  state.recActive=false; state.recs=[];
+  document.getElementById('txId').value='4601234';
+  handleSpotter([T.CALL_START, 0, 4601234, 91]);
+  handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
+  const before={recTg:RXG.recTg, calls:state.calls.length};
+  selfRecGuard();                       /* 模拟松手 */
+  await new Promise(r=>setTimeout(r,2800));
+  return {before, recTg:RXG.recTg, calls:state.calls.length,
+          lastRx:state.lastRx?state.lastRx.tg:null};`);
+ok('松手兜底前还在录、还没记', o5b.before.recTg === 91 && o5b.before.calls === 0, o5b);
+ok('松手兜底后 recTg 归零', o5b.recTg === 0, o5b);
+ok('松手兜底补上通联记录', o5b.calls === 1, o5b);
+ok('松手兜底设了「上一通」', o5b.lastRx === 91, o5b);
+
+const o5c = await ev(`/* CALL_END 先到 → 兜底不该再记一遍 */
+  TX.conn=false; TX.voc=false;
+  state.current=null; state.active.clear(); state.calls=[]; state.lastRx=null;
+  state.recActive=false; state.recs=[];
+  document.getElementById('txId').value='4601234';
+  handleSpotter([T.CALL_START, 0, 4601234, 91]);
+  handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
+  handleSpotter([T.CALL_END, 0, 4601234, 91]);   /* 真实的 CALL_END 先到 */
+  selfRecGuard();
+  await new Promise(r=>setTimeout(r,2800));
+  return {calls:state.calls.length};`);
+ok('CALL_END 先到时不重复记录', o5c.calls === 1, o5c);
+
+const o10 = await ev(`/* 让路的那一句也要进通联记录。
+   以前它不进 state.current，CALL_END 到的时候 cur 是「正在听的组」，
+   认不到它 → 不播也不记，静默消失。多组同时有呼叫时就会漏。 */
+  TX.conn=false; TX.voc=false;
+  state.current=null; state.active.clear(); state.calls=[]; state.lastRx=null;
+  rxReset(); Audio_.silence(); state.recActive=false;
+  state.subscribed=[91,46001];
+  /* A 组先占住坑位 */
+  handleSpotter([T.CALL_START,0,9100001,91]);
+  handleSpotter([T.CALL_AUDIO,new Uint8Array(160).fill(128)]);
+  const aCur=state.current?state.current.tg:null;
+  /* B 组来呼叫 → 让路 */
+  handleSpotter([T.CALL_START,0,4601001,46001]);
+  const heldTg=Object.keys(RXG.heldCall).map(Number);
+  const curAfter=state.current?state.current.tg:null;
+  const callsMid=state.calls.length;
+  /* B 组说完 */
+  handleSpotter([T.CALL_END,0,4601001,46001]);
+  return {aCur, heldTg, curAfter, callsMid,
+          calls:state.calls.length,
+          lastTg:state.calls[0]?state.calls[0].tg:null,
+          lastSrc:state.calls[0]?state.calls[0].srcId:null,
+          left:Object.keys(RXG.heldCall).length};`);
+ok('让路前 A 组占着', o10.aCur === 91, o10);
+ok('让路不切 current', o10.curAfter === 91, o10);
+ok('让路记进 heldCall', o10.heldTg.includes(46001), o10);
+ok('让路时不急着记', o10.callsMid === 0, o10);
+ok('让路的 CALL_END 补上记录', o10.calls === 1, o10);
+ok('补的正是让路那一组', o10.lastTg === 46001 && o10.lastSrc === 4601001, o10);
+ok('补完清掉 heldCall', o10.left === 0, o10);
+
+const o11 = await ev(`/* 同组接续：上一句的 CALL_END 丢了，新 CALL_START 到了也要补记 */
+  TX.conn=false; TX.voc=false;
+  state.current=null; state.active.clear(); state.calls=[]; state.lastRx=null;
+  rxReset(); Audio_.silence(); state.recActive=false;
+  handleSpotter([T.CALL_START,0,9100001,91]);
+  handleSpotter([T.CALL_AUDIO,new Uint8Array(160).fill(128)]);
+  /* 故意不送 CALL_END，同组直接来第二个人 */
+  handleSpotter([T.CALL_START,0,9100002,91]);
+  return {calls:state.calls.length,
+          first:state.calls[0]?state.calls[0].srcId:null,
+          cur:state.current?state.current.srcId:null};`);
+ok('同组接续补记上一句', o11.calls === 1, o11);
+ok('补记的是上一个人', o11.first === 9100001, o11);
+ok('current 换成新的', o11.cur === 9100002, o11);
 
 const o6 = await ev(`/* 静音的话组：整句丢弃，同样不录 */
   TX.conn=false; TX.voc=false;

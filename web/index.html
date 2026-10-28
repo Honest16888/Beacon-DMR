@@ -19970,9 +19970,36 @@ const RXG={
    * （DMRD → 声码器 → AudioTrack）录不到。按句让位之后如果连帧一起丢，
    * 录音就整个没了 —— 用户看到的是「以前能录，现在不行」。
    * 所以让位只是「不出声」，不是「不处理」：帧照收、照解码、照进录音，
-   * 只是不进播放队列。静音组和自己回传不录（一个是不想听，一个录了也是自己）。
+   * 只是不进播放队列。
+   *
+   * ★ v2.5.0 「出不出声」和「留不留档」彻底分开：
+   *   自己发出去绕回来的那一句，以前既不出声也不留档 —— 于是录音里、
+   *   通联记录里、顶部「上一通」和「就绪 · 回 xxx」全都没有自己。
+   *   现在只要这一句该留档，就照收照录照记，只是不播。
    */
   recTg:0,
+  /* ★ v2.5.0 正在「录了但不播」的那一句的元信息（自己回传 / 让位给原生）。
+   *
+   * 为什么需要单独存：HOSE 播的那些句由 state.current 承载，CALL_END 时
+   * 靠 cur.tg===tg 记进通联记录。而这一句从头到尾不进 state.current
+   * （进去了界面就会被它顶掉），所以收尾时必须有个地方能拿到 srcId/tg/start。
+   * 没有它 → 录音里有声音、记录里没这一条，两边对不上。
+   */
+  recCall:null,
+  /* ★ v2.5.0 让路（别的组正在说，这一句不播）时留一条待收尾的记录。
+   *
+   * 让路的那一句从头到尾不进 state.current —— 进了界面就会被它顶掉。
+   * 可 CALL_END 只带 tg，到的时候 state.current 里是「正在听的那个组」，
+   * `cur.tg===tg` 永远不成立，于是这一句既不播、也不记，静默消失。
+   *
+   * 多组同时有呼叫时（91 全国组 + 本地组很常见），被让路的那些句子就
+   * 一条条漏掉 —— 表现正是用户说的「顶部上一通、就绪行的回 xxx、
+   * 通联记录，有概率不显示」。概率取决于同时有几个人在说。
+   *
+   * 按 tg 存：CALL_END 只带 tg，没别的键可用。
+   */
+  heldCall:{},
+  HELD_MS:120000,   // 这么久还没等到 CALL_END，就当它丢了，别一直留着
   LOST_MS:15000    // 占用的组这么久没声音 = CALL_END 丢了，兜底释放
 };
 /* 这一句该不该由 HOSE 播。
@@ -20061,7 +20088,13 @@ function activeSweep(){
     if(now-(a.at||a.start||0)>60000)state.active.delete(k);
   }
 }
-function rxReset(){ RXG.tg=0; RXG.at=0; RXG.muteUntil=0; RXG.attrTg=0; }
+function rxReset(){
+  RXG.tg=0; RXG.at=0; RXG.muteUntil=0; RXG.attrTg=0;
+  /* ★ v2.5.0 断线重连时这些「按句」的标记全部作废 ——
+     留着的话，重连后的第一句会被上一轮的 dropTg / heldCall 误认领。 */
+  RXG.dropTg=0; RXG.dropAt=0; RXG.recTg=0; RXG.recCall=null;
+  RXG.heldCall={};
+}
 /* 订阅同步 —— 两条链路协议完全不同，这里做分派：
      BM(HOSE)  增量：[GROUP_JOIN,[ids]] / [GROUP_LEAVE,[ids]]
      CN(radiowo) 全量：{action:'subscribe',talkgroups:[全部]}  */
@@ -20840,24 +20873,49 @@ function handleSpotter(m){
          不标记归属的话，这一段会被当成「上一组说的」照常播出去。 */
       RXG.attrTg=nTg;
       RXG.dropTg=nTg; RXG.dropAt=Date.now();
-      /* 让位给原生的那一句「不出声但仍要录」；静音组和自己回传连录都不录。
-         录音吃的是 HOSE 的帧，原生那条路（AudioTrack）录不到 ——
-         如果这里连帧一起丢，录音就整个停了。 */
-      RXG.recTg=yieldToNative?nTg:0;
-      if(yieldToNative)Rec.begin({ srcId, tg:nTg, alias:'', start:Date.now() });
+      /* ★ v2.5.0 「出不出声」和「留不留档」是两件事，这里分开判。
+       *
+       * 录音吃的是 HOSE 的帧，原生那条路（DMRD → 声码器 → AudioTrack）
+       * 在 Java 层，页面拿不到 —— 所以只要这一句要留档，就必须在 HOSE
+       * 这边把帧收下来，哪怕它不出声。
+       *
+       *   自己发出去绕回来的那一句 → 不出声（原生侧已经放过），留档
+       *   让位给原生的那一句       → 不出声（原生放），留档
+       *   用户静音的那一组         → 不出声，不留档（明确不想听）
+       *
+       * v2.4.10 只做了第二行，自己那一句仍然是 recTg=0 —— 于是录音里、
+       * 通联记录里、顶部「上一通」、就绪行的「回 xxx」全都没有自己。
+       * 自己发的话永远留档：那是主动发射，跟「听不听这一组」无关。 */
+      const keep=!!(self||!muted);
+      const sc=self?String(selfCall()||''):'';
+      const call={ srcId, tg:nTg,
+                   /* 「ID 12345」不是呼号，别当 alias 传下去 ——
+                      传了 resolveAlias 会拆成 call='ID'、name='12345'，
+                      列表里显示成光秃秃一个 "ID"。留空让它走 ID 查询。 */
+                   alias:(sc&&!/^ID\s/i.test(sc))?sc:'',
+                   start:Date.now(), self };
+      RXG.recTg=keep?nTg:0;
+      RXG.recCall=keep?call:null;
+      if(keep)Rec.begin(call);
       state.active.set(tg,{ tg, srcId, alias:'', start:Date.now(), at:Date.now() });
       activeSweep();
       renderMine(); renderTab(); renderLive(true);
       return;
     }
     /* 走到这里就是「归 HOSE 播」的正常通话，把归属覆盖和丢弃标记清掉 */
-    RXG.attrTg=0; RXG.dropTg=0; RXG.dropAt=0; RXG.recTg=0;
+    RXG.attrTg=0; RXG.dropTg=0; RXG.dropAt=0; RXG.recTg=0; RXG.recCall=null;
     /* 别的组还在说 → 这一句让路。不切 current、不 silence，
        正在听的声音和界面上的呼号都不动。但 active 照样记下来，
        「实时活动」里能看到它在呼叫，想切过去点一下就行。 */
     const held=rxHold(tg);
     if(held){
       state.active.set(tg,{ tg, srcId, alias:'', start:Date.now(), at:Date.now() });
+      /* ★ v2.5.0 这一句不进 state.current，但必须留个记号 ——
+         否则它的 CALL_END 到了没人认领，整句静默消失（不播也不记）。 */
+      RXG.heldCall[tg]={ srcId, tg, alias:'', start:Date.now() };
+      for(const k in RXG.heldCall){
+        if(Date.now()-RXG.heldCall[k].start>RXG.HELD_MS)delete RXG.heldCall[k];
+      }
       /* 让路不等于静默：同一组 20 秒内只提示一次，别把界面刷爆。
          不提示的话用户会以为「91 根本没收到」，其实是听到了但没播。 */
       const n=state.holdNotice;
@@ -20870,12 +20928,22 @@ function handleSpotter(m){
       return;
     }
     const prev=state.current;
-    if(prev&&prev.tg!==tg){
+    /* ★ v2.5.0 上一句没等到 CALL_END 就来了新的 CALL_START。
+     *
+     * 以前这里只在「换了话组」时才把上一句记进通联记录。同组紧接着下一句
+     * 时（最常见的情况），上一句就那么蒸发了 —— 顶部「上一通」、
+     * 就绪行的「回 xxx」、通联记录三处同时空着，而且看起来是随机的。
+     *
+     * 能收到新的 CALL_START，本身就说明上一句已经结束了（松 PTT 必有
+     * CALL_END，丢了才会走到这里）。1 秒内同一 srcId 的重复 CALL_START
+     * 不当成新的一句，免得服务端重发把一句拆成两条。
+     */
+    if(prev&&(prev.srcId!==srcId||Date.now()-prev.start>1000)){
       logCall(prev);
       /* 换组：静默 200ms，让在途的旧帧先过去。
          不这么做的话，新组的第一帧会和上一组的尾巴叠在一起，
          听感就是「切过去了但声音还是刚才那个」。 */
-      RXG.muteUntil=Date.now()+200;
+      if(prev.tg!==tg)RXG.muteUntil=Date.now()+200;
     }
     state.current={ srcId, tg, alias:'', start:Date.now() };
     state.active.set(tg,{ tg, srcId, alias:'', start:Date.now(), at:Date.now() });
@@ -20914,9 +20982,18 @@ function handleSpotter(m){
        放在最前面，先于 audioAllowed / rxHold —— 那两条是「播的时候怎么排」，
        这条是「压根不播」，语义更靠前。dropAt 兜底：CALL_END 丢了也不会永久挡。 */
     if(RXG.dropTg&&atg===RXG.dropTg){
-      if(Date.now()-RXG.dropAt>RXG.DROP_MS){ RXG.dropTg=0; RXG.attrTg=0; RXG.recTg=0; }
+      if(Date.now()-RXG.dropAt>RXG.DROP_MS){
+        /* 超时兜底：CALL_END 丢了。录音和记录都要跟着收尾 ——
+           只清标记不收尾的话，录音会一直挂在那儿等下一句 CALL_START 顶掉，
+           记录里也少一条。 */
+        if(RXG.recTg){
+          if(state.recActive)Rec.finish();
+          if(RXG.recCall)logCall(RXG.recCall);
+        }
+        RXG.dropTg=0; RXG.attrTg=0; RXG.recTg=0; RXG.recCall=null;
+      }
       else{
-        /* 让位给原生的那一句：不出声，但录音要继续 ——
+        /* 这一句不归 HOSE 出声，但该留档的照样把帧收下来 ——
            录音吃的是 HOSE 的帧，原生那条路录不到。 */
         if(RXG.recTg&&RXG.recTg===atg&&state.recActive){
           Rec.push(Audio_.decode(m[1]));
@@ -20946,14 +21023,33 @@ function handleSpotter(m){
     if(endTg&&RXG.recTg===endTg){
       RXG.recTg=0;
       if(state.recActive)Rec.finish();
+      /* ★ v2.5.0 这一句是「录了但没让 HOSE 播」的（自己回传 / 让位给原生）。
+       *
+       * HOSE 播的那些句由下面 cur.tg===tg 分支记，而这一句从头到尾没进
+       * state.current，所以从来没被 logCall 过 —— 录音里有声音、通联记录里
+       * 没这一条，顶部「上一通」和就绪行的「回 xxx」也一直是空的。
+       *
+       * logCall 自带 lastLogKey 去重（srcId@tg@start），不会记两遍。 */
+      if(RXG.recCall)logCall(RXG.recCall);
+      RXG.recCall=null;
     }
     if(endTg&&RXG.dropTg===endTg){ RXG.dropTg=0; RXG.dropAt=0; }
     if(endTg&&RXG.attrTg===endTg)RXG.attrTg=0;
     const cur=state.current;
     const tg=endTg||(cur?cur.tg:0);      // 老格式没带 tg 时退回 current
+    let logged=false;
     if(cur&&cur.tg===tg){
       if(state.recActive)Rec.finish();
       logCall(cur);
+      logged=true;
+    }
+    /* ★ v2.5.0 这一句刚才是被让路的（别的组正在说，它没播）。
+     * 它没进 state.current，上面那个分支认不到它 —— 不在这里补记，
+     * 整句就静默消失：不播、不记，三处显示同时空着。
+     * 已经由 cur 记过的就别再记一遍（让路之后又被 rxHandoff 接回来的情况）。 */
+    if(tg&&RXG.heldCall[tg]){
+      if(!logged)logCall(RXG.heldCall[tg]);
+      delete RXG.heldCall[tg];
     }
     if(tg)state.active.delete(tg);
     if(cur&&(!tg||cur.tg===tg)){
@@ -20969,6 +21065,30 @@ function handleSpotter(m){
   } else if(type===T.SYSTEM_RESCUE){
     toast('服务器要求重连，正在恢复…'); spotterClose(); setTimeout(ensureSpotter,800);
   }
+}
+/* ★ v2.5.0 自己那一句的收尾兜底。
+ *
+ * 自己发射时，BM 会把音频连同 CALL_START / CALL_END 一起回传给我们自己的
+ * HOSE 订阅 —— 这正是以前「一句话回传两遍」的来源。v2.4.9 起这句不再出声，
+ * v2.5.0 起照收照录照记。
+ *
+ * 但「不出声」不影响收尾：如果某个网络只回音频不回 CALL_END，recTg 会一直
+ * 立着，录音等到下一句 CALL_START 才被顶掉，通联记录里则一条都没有。
+ * 所以松手后给 2.5 秒等真实的 CALL_END，等不到就自己收尾。
+ *
+ * 用对象引用比对，不比对时间：期间如果已经收尾（CALL_END 先到，recCall
+ * 被清成 null），或者用户马上又按了一次（新 CALL_START 把 recCall 换掉），
+ * 这里都会安静退出，不会误收下一句。
+ */
+function selfRecGuard(){
+  const cap=RXG.recCall;
+  if(!cap||!cap.self)return;
+  setTimeout(function(){
+    if(RXG.recCall!==cap)return;
+    if(state.recActive)Rec.finish();
+    logCall(cap);
+    RXG.recTg=0; RXG.recCall=null;
+  },2500);
 }
 /* ★ v2.4.8 通联记录：只留最近 50 条、且不超过 24 小时。
    原来是 120 条、没有时间上限 —— 挂机一整天之后记录里一半是昨天的，
@@ -23670,6 +23790,11 @@ window.onDmrEvent=function(json){
            直接清成「—」等于把刚测到的东西扔了 */
         const d=txEl('txLevelDb');
         if(d){ d.classList.remove('on'); d.classList.add('off'); }
+        /* ★ v2.5.0 自己那一句的收尾兜底。
+           BM 一般会把自己的音频连同 CALL_START / CALL_END 一起回传，
+           但有些网络只回音频不回 CALL_END —— 那时录音会一直挂着等
+           下一句顶掉，记录也永远不落地。给 2.5 秒等真实的 CALL_END。 */
+        selfRecGuard();
       }else{
         /* 按下 PTT = 新一次测量开始。原生侧峰值是从这次发射起算的，
            界面必须同步清空，否则会短暂显示上一通的峰值，让人以为一开口就这么响。 */
@@ -23945,7 +24070,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.19';
+const PAGE_VER='2026.11.20';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';

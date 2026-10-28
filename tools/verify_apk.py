@@ -103,7 +103,10 @@ if assets:
     print('  ---- v2.4.9 ----')
     for k in ['userMuted', 'applyGain()', 'setUserMute', 'nativeRxLive', 'hoseOwnsTg',
               'dropTg', 'state.rxOn&&state.audioOn', 'renderNowTx', 'nativeSeenTg',
-              'recTg', '2026.11.19']:
+              'recTg']:
+        print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
+    print('  ---- v2.5.0 ----')
+    for k in ['recCall', 'heldCall', 'selfRecGuard', 'logged=true', '2026.11.20']:
         print('  %s  assets 含 %r' % ('OK ' if k in txt else 'MISS', k))
 else:
     print('  !! 没找到 index.html')
