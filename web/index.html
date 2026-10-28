@@ -149,7 +149,8 @@ html[data-theme="dark"] .np-reply{background:color-mix(in srgb,var(--tx) 16%,var
 .np-db[data-lv="low"]{color:var(--muted)}
 .np-db[data-lv="ok"]{color:var(--ok)}
 .np-db[data-lv="hot"]{color:var(--tx)}
-.np-db[data-lv="idle"]{color:var(--dim);opacity:.55}
+/* idle 不要压太淡 —— 没有读数时那一位也得看得见，否则看起来像「坏了」 */
+.np-db[data-lv="idle"]{color:var(--muted);opacity:.65}
 .np-time{font-family:var(--mono);font-size:12.5px;color:var(--dim);min-width:42px;text-align:right;
   font-variant-numeric:tabular-nums}
 /* 录音：默认只是一枚素描边小按钮；录制中改「描边 + 闪烁红点」。
@@ -529,10 +530,13 @@ canvas{display:block;width:100%}
   .np-row{display:flex;align-items:center;gap:8px;min-width:0}
   .np-call{font-size:17px}
   .np-name{max-width:none;font-size:11px}
-  /* 波形保留（用户明确要），缩窄但不隐藏；dB 和计时靠右 */
+  /* 波形保留（用户明确要），缩窄但不隐藏；dB 和计时靠右。
+     ⚠ min-width 不能给 0：没有读数时内容是「—」，宽度会塌成几个像素，
+     再叠上 idle 的淡色就彻底看不见了（用户报「db 数值无法显示」）。
+     固定一个下限，读数有无都占住位置，数字变化时也不会左右抖。 */
   .vu{width:50px;height:20px;flex:none;align-self:flex-start;margin-top:1px}
-  .np-db{margin-left:auto;font-size:11.5px;min-width:0}
-  .np-time{min-width:0;font-size:12.5px;text-align:right}
+  .np-db{margin-left:auto;font-size:11.5px;min-width:46px}
+  .np-time{min-width:34px;font-size:12.5px;text-align:right}
   /* chip 吃掉剩余宽度，组名才有地方显示；录音钮靠右 */
   .np-r2 .np-tg{flex:1 1 auto;min-width:0;padding:3px 8px;font-size:11.5px}
   #npTgName{flex:0 1 auto;min-width:0;max-width:150px}
@@ -1403,7 +1407,7 @@ body.dragging .dghint{display:block}
         </div>
       </div>
       <div class="setrow">
-        <div class="setlbl"><b>音量增强</b><span>放大倍数。越大小信号越听得见，也越容易破音</span></div>
+        <div class="setlbl"><b>音量增强</b><span>1× 不改变信号，是默认值；往上会把本来就接近满刻度的语音推过软限幅，声音变「炸」</span></div>
         <div class="seg" id="segGain">
           <button data-val="1">1×</button>
           <button data-val="2">2×</button>
@@ -19391,13 +19395,16 @@ const Audio_ = {
       for(let i=0;i<F;i++)f[i]*=i/F;
       this.broken=false;
     }
-    /* 软限幅：gain 默认 2 倍，μ-law 满刻度信号很容易被削平，
-       硬削波的高次谐波在 8 kHz 带宽里全叠回语音，听起来「炸」。
-       只在 0.92 以上压，正常电平一个样本都不动。 */
+    /* 软限幅：只防真正的过载，不动正常语音。
+       ★ v2.5.2 阈值从 0.92 提到 0.96。
+       μ-law 解码出来的语音峰值本来就贴着满刻度，0.92 会把正常说话的
+       峰顶全部压平 —— 而增益默认改成 1× 之后，这里再压就是纯粹的损失：
+       录音（不经过这里）清晰、播放却发闷发炸，差的就是这一段。
+       现在只留 4% 余量兜突发过载。 */
     for(let i=0;i<n;i++){
       const x=f[i];
-      if(x>0.92)f[i]=0.92+0.08*(1-Math.exp(-(x-0.92)/0.08));
-      else if(x<-0.92)f[i]=-0.92-0.08*(1-Math.exp(-(-x-0.92)/0.08));
+      if(x>0.96)f[i]=0.96+0.04*(1-Math.exp(-(x-0.96)/0.04));
+      else if(x<-0.96)f[i]=-0.96-0.04*(1-Math.exp(-(-x-0.96)/0.04));
     }
     this.play(f);
   },
@@ -19570,7 +19577,11 @@ const state = {
   scan:{ on:false, list:[], skip:[], hold:null, cur:null, auto:false, autoN:8, picked:[], sig:'' },
   /* 收听默认打开：进来就守听，想安静自己点右上角静音。
      上一次手动静音过的，这次保持静音 —— 那是用户的选择，不该被覆盖。 */
-  audioOn:true, volume:0.8, gain:2, theme:'auto',
+  /* ★ v2.5.2 接收增益默认从 2× 改成 1×。
+     μ-law 解码出来的语音峰值本来就接近满刻度，再乘 2 几乎每个峰值都会
+     撞上软限幅被压平 —— 听感就是「喇叭发炸」，而录音（不经过这道增益）
+     却是清晰的。1× 才是「不改变信号」的那一档，要更响再自己往上调。 */
+  audioOn:true, volume:0.8, gain:1, theme:'auto',
   awakeOn:true, scanResume:true,
   /* 通联（对讲页）的接收参数 —— 独立于「收听」页那套，因为走的是另一条链路 */
   rxOn:true, rxVol:1, rxJit:240,
@@ -21180,7 +21191,13 @@ function callsPrune(){
 function logCall(c){
   if(!c||!c.tg)return;
   const key=c.srcId+'@'+c.tg+'@'+c.start;
-  if(state.lastLogKey===key)return;
+  /* ★ v2.5.2 去重只在「记录还在」时生效。
+   *
+   * 清空记录之后 lastLogKey 还留着上一句的 key，而 calls 已经空了 ——
+   * 这时同一句的 CALL_END 再走一次（CALL_END 重发、松手兜底和真实
+   * CALL_END 撞车）就会被当成重复跳过，用户看到的是「清空后新的一句
+   * 没记上」。calls 为空说明那条记录已经不在了，没有去重的必要。 */
+  if(state.lastLogKey===key&&state.calls&&state.calls.length)return;
   state.lastLogKey=key;
   const a=resolveAlias(c);
   const priv=!!c.priv;
@@ -21573,12 +21590,30 @@ function renderVu(){
    * −50 dB 当底噪起点，−6 dB 当满格 —— 正常说话落在 −30 ~ −12，
    * 正好占中间一大段，起伏看得出来。
    */
+  /* ★ 两条路统一到 dBFS 再映射，波形高度才一致 ——
+     以前 HOSE 用 level*3.2、原生用 dB 区间，同一句话在两条路上
+     画出来的高度差一倍多，看着像两套刻度。 */
+  let db=NaN;
+  if(Q.rxing&&isFinite(state.rxDb))db=state.rxDb;
+  else if(state.current&&Audio_.level>0.0005)db=20*Math.log10(Audio_.level);
+
   let lvl=0;
-  /* 原生正在收 → 用原生报的 dBFS；否则用 HOSE 解码电平。
-     两边都按「此刻谁在出声」取，不混用，免得原生停了之后
-     还拿着它最后一帧的值画波形。 */
-  if(Q.rxing&&isFinite(state.rxDb))lvl=Math.max(0,Math.min(1,(state.rxDb+50)/44));
-  else if(state.current)lvl=Math.min(1,Audio_.level*3.2);
+  if(isFinite(db))lvl=Math.max(0,Math.min(1,(db+50)/44));
+
+  /* ★ v2.5.2 HOSE 这条路从来没算过 dB。
+   *
+   * 界面上的 dB 读数只由原生上报的 rxlevel 驱动 —— 原生没在收时它
+   * 一直是「—」。以前波形也是平的，两个都空着看不出问题；波形一动，
+   * 旁边空着的 dB 就格外显眼（用户报「只有波形了」）。
+   * Audio_.level 本来就是 RMS，20·log10 就是 dBFS，顺手补上。
+   * 只在「HOSE 在播」这个分支写，和 rxlevel 互斥，不会两边抢同一个节点。 */
+  if(!Q.rxing&&state.current){
+    const el=$('#npDb');
+    if(el){
+      el.textContent=isFinite(db)?(db.toFixed(1)+' dB'):'—';
+      el.dataset.lv=isFinite(db)?(db>-12?'hot':(db>-30?'ok':'low')):'idle';
+    }
+  }
   for(let i=0;i<vuBars.length;i++){
     const th=(i+0.5)/vuBars.length, on=lvl>th*0.92;
     vuBars[i].style.height=on?(9+Math.round(Math.random()*13))+'px':'3px';
@@ -24169,7 +24204,7 @@ function playRec(id){
 }
 
 /* ===================== 设置页 ===================== */
-const PAGE_VER='2026.11.21';
+const PAGE_VER='2026.11.22';
 
 function fmtBytes(n){
   if(!(n>0))return '0 B';
@@ -24307,7 +24342,7 @@ $('#segNet').addEventListener('click',e=>{
 $('#setVol').addEventListener('input',e=>applyVolume(e.target.value));
 $('#segGain').addEventListener('click',e=>{
   const b=e.target.closest('button[data-val]'); if(!b)return;
-  state.gain=Number(b.dataset.val)||2; store.set('gain',state.gain);
+  state.gain=Number(b.dataset.val)||1; store.set('gain',state.gain);
   [...e.currentTarget.children].forEach(x=>x.classList.toggle('on',x===b));
   Audio_.setVol(state.volume);
   toast('音量增强已设为 '+state.gain+'×');
@@ -24911,7 +24946,15 @@ function boot(){
   loadHamCache();
   state.theme=store.get('theme','auto');
   state.volume=store.get('volume',0.8);
-  state.gain=Number(store.get('gain',2))||2;
+  /* ★ v2.5.2 一次性把老的「2×」改回 1×。
+     2 是以前写死的默认值，绝大多数人根本没动过这个开关 —— 而它正是
+     「播放发炸、录音却清晰」的根源。只在第一次升级后纠正一次，
+     之后用户自己调到几倍都尊重他的选择。 */
+  if(!store.get('gainFix252')){
+    if(Number(store.get('gain',1))===2)store.set('gain',1);
+    store.set('gainFix252',1);
+  }
+  state.gain=Number(store.get('gain',1))||1;
   state.awakeOn=store.get('awakeOn',true)!==false;
   state.scanResume=store.get('scanResume',true)!==false;
   /* 通联的接收参数 */

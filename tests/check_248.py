@@ -268,12 +268,12 @@ ok('设置页有自动登录开关', 'id="setAutoConn"' in html)
 
 # ============================================================
 print('\n=== 10. 版本号 ===')
-ok("PAGE_VER 是 2026.11.21", "PAGE_VER='2026.11.21'" in html)
+ok("PAGE_VER 是 2026.11.22", "PAGE_VER='2026.11.22'" in html)
 gp = os.path.join(REPO, 'android', 'app', 'build.gradle')
 if os.path.exists(gp):
     g = read(gp)
-    ok('build.gradle versionName = 2.5.1', 'versionName "2.5.1"' in g)
-    ok('build.gradle versionCode = 27', re.search(r'versionCode\s+27', g) is not None)
+    ok('build.gradle versionName = 2.5.2', 'versionName "2.5.2"' in g)
+    ok('build.gradle versionCode = 28', re.search(r'versionCode\s+28', g) is not None)
 else:
     ok('能读到 android/app/build.gradle', False)
 
@@ -405,6 +405,30 @@ ok('桌面端 np-row 用 display:contents', '.np-row{display:contents}' in html)
 # 窄屏那条 order:4 把波形挪到了行尾，已删
 ok('窄屏不再用 order 挪波形',
    '.vu{order:4' not in html)
+
+# ★ v2.5.2 dB 读数在两条路上都要有
+#
+# 界面上的 dB 只由原生上报的 rxlevel 驱动，HOSE 收听时永远是「—」。
+# 波形一动，旁边空着的 dB 就格外显眼（用户报「只有波形了」）。
+ok('HOSE 也自己算 dB', '20*Math.log10(Audio_.level)' in html)
+ok('两条路统一用 dBFS 映射', 'if(isFinite(db))lvl=Math.max(0,Math.min(1,(db+50)/44));' in html)
+ok('HOSE 分支会写 dB 节点', "if(!Q.rxing&&state.current){" in html)
+# 移动端 min-width 不能给 0：没有读数时「—」会塌成几个像素，再叠上淡色就看不见
+ok('移动端 dB 有最小宽度', '.np-db{margin-left:auto;font-size:11.5px;min-width:46px}' in html)
+ok('移动端计时有最小宽度', '.np-time{min-width:34px;font-size:12.5px;text-align:right}' in html)
+# 清空记录后 lastLogKey 还在，同一句的 CALL_END 重发会被误判成重复
+ok('logCall 去重只在记录还在时生效',
+   'if(state.lastLogKey===key&&state.calls&&state.calls.length)return;' in html)
+
+# ★ v2.5.2 播放发炸：录音清晰、播放却炸，差的就是「增益 + 软限幅」这一段
+#
+# μ-law 解码出来的语音峰值本来就贴着满刻度，再乘 2 几乎每个峰顶都会
+# 撞上软限幅被压平。录音走的是 decode 之后的原始 PCM，不经过这里，
+# 所以录音是清晰的 —— 这个对比正是定位问题的关键。
+ok('接收增益默认 1×', 'audioOn:true, volume:0.8, gain:1,' in html)
+ok('老版本存下的 2× 会一次性改回', 'gainFix252' in html)
+ok('软限幅阈值放到 0.96', 'if(x>0.96)f[i]=0.96+0.04*' in html)
+ok('不再用 0.92 压正常语音', 'if(x>0.92)f[i]=0.92+0.08*' not in html)
 
 print('\n' + '=' * 18 + f'  {passed} 通过 / {failed} 失败  ' + '=' * 18)
 raise SystemExit(1 if failed else 0)

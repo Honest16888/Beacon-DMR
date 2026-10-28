@@ -78,15 +78,20 @@ await ev(`
   state.net='bm';
   state.subscribed=[46001,91];
   state.audioOn=true;
-  state.ham['BA7NCT']={call:'BA7NCT',name:'Eric'};
-  state.current={srcId:4602523,tg:46001,alias:'BA7NCT Eric',start:Date.now()-6000};
+  state.ham['BA7NCT']={call:'BA7NCT',name:'National Emergency Network Coordinator'};
+  state.current={srcId:4602523,tg:46001,alias:'BA7NCT National Emergency Network Coordinator',start:Date.now()-6000};
   RXG.tg=46001; RXG.at=Date.now();
   Q.rxing=true; Q.last={srcId:4602523,dstId:46001,slot:1,priv:false};
   state.rxDb=-24.5;
   state.recOn=true; state.recActive=true;
   renderNow(); renderRecBtn();
+  /* MODE=hose 模拟「只用 Hoseline 收听」：没有原生 rxlevel，
+     dB 必须由 renderVu 用 Audio_.level 自己算出来。 */
+  if('${process.env.MODE || ''}'==='hose'){
+    Q.rxing=false; Q.last=null; state.rxDb=NaN; Audio_.level=0.05;
+  }
   const db=document.getElementById('npDb');
-  if(db){ db.textContent='−24.5 dB'; db.dataset.lv='ok'; }
+  if(db&&'${process.env.MODE || ''}'!=='hose'){ db.textContent='−24.5 dB'; db.dataset.lv='ok'; }
   const t=document.getElementById('npTime'); if(t)t.textContent='6.0s';
   return true;`);
 await sleep(500);
