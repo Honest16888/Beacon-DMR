@@ -20363,6 +20363,12 @@ function openStation(call,id){
   $('#smBody').innerHTML=h;
   $('#stationModal').classList.add('show');
 }
+/* ★ v2.6.5 全局委托：`data-act="playLast"` 的入口都能触发本地回放。
+   提示行是 innerHTML 动态重写的，直接给按钮绑监听会在每次重绘时丢掉。 */
+document.addEventListener('click',e=>{
+  const b=e.target.closest&&e.target.closest('[data-act="playLast"]');
+  if(b){ e.preventDefault(); playLastRec(); }
+});
 $('#smClose').addEventListener('click',()=>$('#stationModal').classList.remove('show'));
 $('#stationModal').addEventListener('click',e=>{ if(e.target===$('#stationModal'))$('#stationModal').classList.remove('show'); });
 
@@ -21399,15 +21405,23 @@ function handleSpotter(m){
     const muted=!!(state.rxMuteTg&&state.rxMuteTg.indexOf(nTg)>=0);
     const self=!!(selfId&&Number(srcId)===selfId);
     const yieldToNative=!hoseOwnsTg(nTg);
-    /* ★ v2.6.4 回声测试组的两个例外。
+    /* ★ v2.6.5 回声测试组：只放行「自己那句」的丢弃，**其余让给原生**。
      *
-     * Parrot 回放的正是你刚才说的话，srcId 当然是**你自己** ——
-     * 按「自己发出去绕回来的那句」丢掉，这个功能就一个音也听不到。
-     * 同理也不能让给原生：那条路同样按 srcId==myId 丢弃。
-     * 所以 Parrot 组只受「用户静音」约束，其余一律由 HOSE 正常播。 */
+     * Parrot 回放的 srcId 就是你自己 —— 按「自己发出去绕回来的那句」丢掉，
+     * 这个功能一个音也听不到。所以 selfDrop 要开例外。
+     *
+     * 但 nativeDrop **不能**开例外（v2.6.4 开过，是错的）：
+     * Parrot 的回放走的是热点这一路（MMDVM UDP 直下发），原生一定收得到；
+     * HOSE 是另一条话组广播通道，压根收不到私密回放。
+     * 两边都放行的结果是「如果 HOSE 恰好也有数据就播两遍」——
+     * 而真正常走的那条路只有原生。所以让给原生，HOSE 只在没有原生时兜底。 */
     const isParrot=isParrotTg(nTg);
+    /* 回声测试有数据进来就写一条日志 —— 「无效」的时候这是唯一能看出
+       「主站到底有没有回放」的地方：有日志 = 回放到了、是播放环节的问题；
+       没日志 = 主站没回，只能靠本地录音自查。 */
+    if(isParrot)txLog('🦜 回声测试收到音频（srcId '+(srcId|0)+'，'+(self?'自己':'他人')+'）','em');
     const selfDrop=self&&!isParrot;
-    const nativeDrop=yieldToNative&&!isParrot;
+    const nativeDrop=yieldToNative;
     if(muted||selfDrop||nativeDrop){
       /* ⚠ 必须把 attrTg 立起来：HOSE 的音频帧不带话组号，
          不标记归属的话，这一段会被当成「上一组说的」照常播出去。 */
@@ -22859,6 +22873,26 @@ function renderPlayBtn(){
   b.classList.toggle('pri',!on);
   b.classList.toggle('on',on);
 }
+/* ★ v2.6.5 回放「刚才那句」—— 用本地录音，完全不依赖主站。
+ *
+ * 为什么要它：回声测试（Parrot）依赖主站把音频回放回来，中间任何一环
+ * （主站不支持、热点没收到、回放走的路和收听不是同一条）都会导致「听不到」，
+ * 而且从界面上完全看不出来是哪一环断的。
+ * 本地录音则是确定能拿到的 —— 发一句就回放一句，用来检查
+ * 「麦克风有没有收到声音」「增益是否合适」这两件事足够。
+ *
+ * 注意它听的是**编码前**的 PCM，所以音色会比对方实际听到的好。
+ * 想听编码后的效果还是得靠 Parrot 或让对方回一句。
+ */
+function playLastRec(){
+  const r=state.recs&&state.recs[0];
+  if(!r){ toast('还没有录音 —— 先在「设置」里把「自动录音」打开'); return; }
+  try{
+    const a=new Audio(r.url||URL.createObjectURL(r.blob));
+    a.play();
+    toast('🔁 回放：TG'+r.tg+' '+(r.call||'')+' · '+fmtDur(Math.round(r.dur)));
+  }catch(e){ toast('回放失败：'+e); }
+}
 function setPlay(on, quiet){
   on=!!on;
   state.audioOn=on;
@@ -23964,8 +23998,14 @@ function txSync(){
     else if(isParrotTg(qCurTg())){
       /* 回声测试组：这行必须说明「接下来会发生什么」，否则用户按完 PTT
        * 松手，等两秒没听到声音就以为是坏了。 */
-      h.innerHTML='🦜 回声测试 · 你松手后主站会把刚才那句<b>原样回放</b>，'
-        +'等 2~5 秒。用它检查麦克风增益和编码音色';
+      /* 两件事必须说清楚：
+         ① 松手后等 2~5 秒才回放（主站要先收完整句）；
+         ② 如果一直等不到，点右边的「🔁 回放刚才那句」用本地录音自查 ——
+            那条路不依赖主站，能把「麦克风没收到声」和「主站没回放」分开。 */
+      const hasRec=!!(state.recs&&state.recs.length);
+      h.innerHTML='🦜 回声测试 · 松手后等 2~5 秒，主站会<b>原样回放</b>。'
+        +'等不到就点 <b class="hslast" data-act="playLast" title="用本地录音回放，不依赖主站">'
+        +(hasRec?'🔁 回放刚才那句':'🔁 回放（还没有录音）')+'</b>';
     }
     else{
       /* 就绪状态下把这行让给「刚才谁在说」—— 这是回话时最需要的信息。

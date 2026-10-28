@@ -110,6 +110,9 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
      */
     private static final int STREAM_HOLD_MS = 400;
 
+    /** 回声测试组（BrandMeister Parrot）。发到这里，主站把你说的原样回放。 */
+    private static final int PARROT_TG = 9990;
+
     /* ---- 「话组忙」上报去重 ----
      *
      * 原来 onDmrd 里每个包都 emit 一次 busy，而 DMR 一个包是 60 ms ——
@@ -536,8 +539,22 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
     public void onDmrd(int srcId, int dstId, int slot, boolean voice, byte[] payload, int flags) {
         /* 只有语音帧才带音频；数据帧（LC 头 / 终止帧）没有载荷 */
         if (!voice) return;
-        /* 主站会把我们发出去的话组流量也推回来，自己的声音不用再听一遍 */
-        if (srcId == myId) return;
+        /* 主站会把我们发出去的话组流量也推回来，自己的声音不用再听一遍。
+         *
+         * ★ 回声测试组（9990）是唯一例外。
+         *
+         * BrandMeister 的 Parrot：把话音发到 9990，主站**原样回放**给你。
+         * 回放的 srcId 就是你自己的 DMR ID —— 按上面这条丢掉的话，
+         * 这个功能一个音也听不到。
+         *
+         * 这就是 2.6.4 里「回声测试无效」的真正原因：那一版只改了网页侧
+         * （handleSpotter）的判定，**原生这条路的丢弃还在**。而 Parrot 的
+         * 回放恰恰走的是热点这一路（MMDVM UDP 直下发），不是 HOSE 的话组广播
+         * —— HOSE 那边就算放行了也收不到东西。
+         *
+         * 只在 dstId==9990 时放行，不会影响「自己说话绕回来」的常规抑制。
+         */
+        if (srcId == myId && dstId != PARROT_TG) return;
 
         /* ① 黑名单。放在最前面：连解码都不做 —— 既省 CPU，也不会让被屏蔽的人
          * 占用抖动缓冲（否则「屏蔽了但还是卡」）。 */
