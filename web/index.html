@@ -20102,8 +20102,23 @@ const store={
 };
 
 /* ============================ 话组 / 国家 ============================ */
+/* ★ v2.6.4 回声测试组（BrandMeister 的 Parrot）。
+ *
+ * 发到这个组，主站把你刚说的话原样回放给你 —— 用来检查自己的发射链路：
+ * 声音有没有发出去、编码后的音色是不是你要的、麦克风增益是否合适。
+ *
+ * 它**不在官方话组表里**（那张表只收真实的组），所以在这里作为虚拟条目维护，
+ * 不去污染 tgData。两个必要处理：
+ *   ① tgName 认得它，界面上才有名字；
+ *   ② 收到 srcId==自己 的音频时**不能丢** —— 这是 Parrot 的核心：
+ *      回放的当然是你自己的 ID，按「自己发出去绕回来」丢掉就完全听不到。
+ *      见 handleSpotter 里的 isParrot。 */
+const PARROT_TG = 9990;
+const PARROT_NAME = '🦜 回声测试';
+function isParrotTg(id){ return Number(id)===PARROT_TG; }
 function tgName(id){
   const k=String(id);
+  if(isParrotTg(id))return PARROT_NAME;
   /* ★ 用户自定义名优先级最高，压过所有远端表。
    * 表里的名字是别人定的（46001 在国际表里叫 Worldwide、国内表里叫「世界组」），
    * 而用户想按自己圈子的习惯叫 —— 这是本机设置，不该被远端数据覆盖。 */
@@ -20142,9 +20157,12 @@ function flagHtml(id){ if(state.net==='cn')return ''; const c=tgCountry(id); ret
 /* 「常用话组」按网络取：国内只有 33 个，常用就是几个大区组 */
 const CN_COMMON=[460,860,86002,86008,86010,86020,86023,86028];
 function commonIds(){
-  return state.net==='cn'
+  /* 回声测试组放在最前面 —— 它是「排查用的工具」，不是常听的话组，
+   * 但需要时得能一眼找到。它不在话组表里，所以不能走下面的 filter。 */
+  const list = state.net==='cn'
     ? CN_COMMON.filter(id=>CN.tg[String(id)])
     : COMMON_IDS.filter(id=>state.tg[String(id)]);
+  return state.net==='cn' ? list : [PARROT_TG].concat(list.filter(x=>x!==PARROT_TG));
 }
 function masterIso(m){ return state.masters[String(m)]||null; }
 
@@ -21381,7 +21399,16 @@ function handleSpotter(m){
     const muted=!!(state.rxMuteTg&&state.rxMuteTg.indexOf(nTg)>=0);
     const self=!!(selfId&&Number(srcId)===selfId);
     const yieldToNative=!hoseOwnsTg(nTg);
-    if(muted||self||yieldToNative){
+    /* ★ v2.6.4 回声测试组的两个例外。
+     *
+     * Parrot 回放的正是你刚才说的话，srcId 当然是**你自己** ——
+     * 按「自己发出去绕回来的那句」丢掉，这个功能就一个音也听不到。
+     * 同理也不能让给原生：那条路同样按 srcId==myId 丢弃。
+     * 所以 Parrot 组只受「用户静音」约束，其余一律由 HOSE 正常播。 */
+    const isParrot=isParrotTg(nTg);
+    const selfDrop=self&&!isParrot;
+    const nativeDrop=yieldToNative&&!isParrot;
+    if(muted||selfDrop||nativeDrop){
       /* ⚠ 必须把 attrTg 立起来：HOSE 的音频帧不带话组号，
          不标记归属的话，这一段会被当成「上一组说的」照常播出去。 */
       RXG.attrTg=nTg;
@@ -23934,6 +23961,12 @@ function txSync(){
     if(!TX.voc)h.textContent='声码器未就绪 —— 去「设置 → 📡 通联（MMDVM）」点「重新加载」';
     else if(busy)h.textContent=TX.stateDetail||'正在登录主站 —— 若被暂时拒绝会自动等待重试，请勿重复点击';
     else if(!TX.conn)h.textContent='未连接主站 —— 点「连接」，或在「设置 → 主站与身份」里填参数';
+    else if(isParrotTg(qCurTg())){
+      /* 回声测试组：这行必须说明「接下来会发生什么」，否则用户按完 PTT
+       * 松手，等两秒没听到声音就以为是坏了。 */
+      h.innerHTML='🦜 回声测试 · 你松手后主站会把刚才那句<b>原样回放</b>，'
+        +'等 2~5 秒。用它检查麦克风增益和编码音色';
+    }
     else{
       /* 就绪状态下把这行让给「刚才谁在说」—— 这是回话时最需要的信息。
          对方说完，state.current 立刻清空，这里再不留一份就真的记不住了。
