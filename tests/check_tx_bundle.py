@@ -176,6 +176,20 @@ def main():
     ok('采集阶段有削波统计', 'countNearFull' in body,
        '这是唯一能区分「手机 MIC 自己过载」和「我们后级搞炸」的测量点')
 
+    print('\n=== 8. AGC 的「静音→开口」过冲防护 ===')
+    # 2026-10-28 的实录：18.48 s 里只有开头 400 ms 冲高 20 dB，后面稳如老狗。
+    # 根因是静音期把增益顶到上限，开口时来不及收。见 tests/tx_agc_overshoot.py。
+    m3 = re.search(r'AGC_GATE_RMS\s*=\s*([0-9.]+)f', strip_comments(src))
+    gate = float(m3.group(1)) if m3 else -1
+    ok('静音门限 ≥ 200（−44 dBFS）', gate >= 200,
+       '门限太低时手机底噪就被当成语音，AGC 在没人说话时把增益顶到上限')
+    ok('有瞬态复位常量 AGC_JUMP_OUT', 'AGC_JUMP_OUT' in strip_comments(src),
+       '没有复位的话，静音期爬上去的增益要 7~8 帧才收回来')
+    ok('复位用当前帧 rms 反算增益',
+       re.search(r'AGC_TARGET_RMS\s*/\s*rms\b', agc_body) is not None,
+       '用平滑值 rmsAvg 算出来的 want 仍偏高，复位等于没复位')
+    ok('复位走 jump 分支而不是只靠 slew', 'jump' in agc_body and 'agcGain = w' in agc_body)
+
     print(f'\n================  {passed} 通过 / {failed} 失败  ================')
     return 0 if failed == 0 else 1
 

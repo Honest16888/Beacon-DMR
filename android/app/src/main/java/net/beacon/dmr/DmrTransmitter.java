@@ -878,8 +878,15 @@ public final class DmrTransmitter {
      *  限幅只在真正的异常大电平时才动一下。代价是整体轻 1.9 dB，
      *  对端若觉得小声，抬麦克风增益即可 —— 现在那个滑块是真的能抬。 */
     private static final float AGC_TARGET_RMS = 4200f;
-    /** 高通砍掉 14 dB 低频能量后，需要更大的补偿量才追得回来 */
-    private static final float AGC_MAX = 8.0f;        // 最多提 18 dB
+    /** 最大提升量。原来是 8.0（+18 dB），v2.4.5 降到 6.0（+15.6 dB）。
+     *
+     *  <p>★ 降低的理由不是「不需要那么多提升」，而是**静音期间会被顶到上限**。
+     *  门限 100（−50 dBFS）时，手机底噪只要超过这个值，`want = 4200/底噪`
+     *  就是一个很大的数，被夹在 AGC_MAX 上 —— 于是静音期增益一路爬到 8 倍，
+     *  开口第一帧就是 8 倍 × 语音电平，严重过冲。仿真（tests/tx_agc_overshoot.py）
+     *  量出来：过冲 +12.7 ~ +13.9 dB，要 7~8 帧才回落。
+     *  6.0 把最坏情况压到 +15.6 dB，配合瞬态复位后实际过冲接近 0。 */
+    private static final float AGC_MAX = 6.0f;        // 最多提 15.6 dB
     /** 允许的衰减量。只提不压的话，MIC 电平偏高的机器会一路顶到满量程 ——
      *  旧代码就是这样，正常说话就能削掉几百个样本。0.22 = 最多压 13 dB，
      *  普通说话（贴着目标电平）增益仍稳定在 1 倍，动态不受影响。
@@ -890,7 +897,17 @@ public final class DmrTransmitter {
      *  压不下去，等于把「降低基础电平」这件事对最需要它的机器完全失效。
      *  4200/0.22 = 19000，比原来还多留了 1 dB 的余量。 */
     private static final float AGC_MIN = 0.22f;
-    private static final float AGC_GATE_RMS = 100f;   // −50 dBFS 以下当静音
+    /** 静音门限：低于这个电平不参与 AGC 决策（want 保持 1.0）。
+     *
+     *  <p>★ 原来是 100（−50 dBFS），**太低**。手机 MIC 的底噪在安静房间就有
+     *  −60 ~ −50 dBFS，嘈杂环境轻松到 −45 ~ −35 dBFS（RMS 180~580）——
+     *  也就是说绝大多数时候「底噪」都被当成「有语音」，AGC 在用户还没开口时
+     *  就把增益往 AGC_MAX 顶。等真正开口，增益已经高得离谱，头几帧全过冲。
+     *
+     *  <p>260 是 −42 dBFS：高于手机底噪的常见区间，又低于轻声说话的
+     *  （RMS 600~1000）。这一档的作用是「别在没人说话时白爬增益」，
+     *  真正的过冲兜底靠 {@link #AGC_JUMP_OUT} 的瞬态复位。 */
+    private static final float AGC_GATE_RMS = 260f;
     /** 每次发射开头快速收敛的帧数（8 × 20 ms = 160 ms） */
     private static final int AGC_FAST_FRAMES = 8;
     private static final float AGC_FAST = 0.50f;
@@ -906,6 +923,22 @@ public final class DmrTransmitter {
      *  短停顿不会把它带下去；真遇到持续更大的电平（换人、换机器）也能
      *  在 80 ms 内跟上。这是所有电台电平器的标准做法。 */
     private static final float AGC_RISE = 0.25f;
+
+    /** 瞬态复位阈值：按当前增益算出的输出超过目标的这个倍数时，直接把增益
+     *  设成目标值，不走 slew。
+     *
+     *  <p>★ 这是 v2.4.5 修「一开口发炸」的关键一条。
+     *
+     *  <p>静音期增益可能被顶到很高（见 {@link #AGC_MAX} 的说明）。开口那一帧，
+     *  平滑后的 rmsAvg 还停在低位，`want` 算出来仍然偏大，靠 slew 慢慢降 ——
+     *  仿真里要 7~8 帧（140~160 ms）才回到稳态 3 dB 以内，这段时间的输出电平
+     *  比正常高 12~14 dB。对方听到的就是「一开口特别冲，然后突然变小」。
+     *
+     *  <p>2.0 = 输出一旦会超过目标 6 dB，就不等了，直接用**当前帧**的 rms
+     *  反算增益并按上去。稳态时 `agcGain × rms ≈ target`，不会触发；
+     *  音节间的正常起伏（3~6 dB）也不会触发 —— 只有真正的「静音→开口」
+     *  这种十几 dB 的跃变才碰得到。 */
+    private static final float AGC_JUMP_OUT = 2.0f;
 
     /** 电平归一化（不是压缩器）。
      *
@@ -951,9 +984,30 @@ public final class DmrTransmitter {
          * 而理想是 7.64×（差 8 dB）—— 要 160 ms 才追上。呼号就在这几帧里。
          * 发射刚开始、还没有输出，直接赋值不会有任何爆音风险。
          * 只有这一帧确实有声音（过了静音门限）才快照，否则一按 PTT
-         * 就先把增益顶到 8× 等着，开口第一下必炸。 */
-        if (agcFrames == 1 && rmsAvg > AGC_GATE_RMS) {
-            agcGain = want;
+         * 就先把增益顶到上限等着，开口第一下必炸。 */
+        /* ★ 瞬态复位：按当前增益算，输出会明显超过目标（>6 dB），就不走 slew，
+         * 直接用**当前帧**的 rms 反算增益并按上去。
+         *
+         * 为什么不等等 slew 慢慢降：静音期增益可能已经被顶到 AGC_MAX，
+         * 开口那一帧的 rmsAvg 还停在低位，want 算出来仍然偏大，按 0.35 的
+         * 系数要 7~8 帧（140~160 ms）才收敛。这段的输出比正常高 12~14 dB，
+         * 对方听到的就是「一开口特别冲」。
+         *
+         * 为什么用当前帧 rms 而不是 rmsAvg：rmsAvg 是平滑值，这时候还挂着
+         * 静音期的小数，拿它算 want 依然偏高 —— 复位了等于没复位。
+         * 用瞬时值会略被爆破音带偏（偏轻一点），比过冲好得多。 */
+        final boolean jump = (agcFrames == 1 && rmsAvg > AGC_GATE_RMS)
+                || (rms > AGC_GATE_RMS && agcGain * rms > AGC_TARGET_RMS * AGC_JUMP_OUT);
+
+        if (jump) {
+            if (agcFrames == 1 && rmsAvg > AGC_GATE_RMS) {
+                agcGain = want;            // 首帧：用平滑值，这一帧就是基准
+            } else {
+                float w = AGC_TARGET_RMS / rms;
+                if (w > AGC_MAX) w = AGC_MAX;
+                else if (w < AGC_MIN) w = AGC_MIN;
+                agcGain = w;
+            }
         } else {
             /* ★ 压增益要快、提增益要慢 —— v2.0 这里是反的。
              *
