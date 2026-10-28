@@ -65,6 +65,122 @@ public final class Prefs {
         sp(c).edit().putBoolean("ht.collapsed", on).apply();
     }
 
+    /* ==================== 网络 ==================== */
+
+    /**
+     * 当前网络：{@code "bm"} 国际 BrandMeister / {@code "cn"} 国内 China DMR。
+     *
+     * <p>两套网络的**话组号体系、订阅协议、发射主站全都不一样**，
+     * 所以这个值决定用哪条收听链路、哪张话组表、哪份发射身份。
+     */
+    public static String net(Context c) {
+        return "cn".equals(sp(c).getString("net", "bm")) ? "cn" : "bm";
+    }
+
+    public static void setNet(Context c, String v) {
+        sp(c).edit().putString("net", "cn".equals(v) ? "cn" : "bm").apply();
+    }
+
+    public static boolean isCn(Context c) {
+        return "cn".equals(net(c));
+    }
+
+    /* ==================== 接收过滤 ==================== */
+
+    /**
+     * 单组静音名单（话组号，逗号分隔）。
+     *
+     * <p>静音是**三层闸**，缺一层就会「静音了还在响」：
+     * ① 从订阅里摘掉 —— 服务器根本不再推这个组的音频（最彻底）；
+     * ② 正在播的立刻掐掉；
+     * ③ 播放前的最后一道检查。
+     * 这里存的是那份名单，三处共用。
+     */
+    public static java.util.Set<Integer> rxMute(Context c) {
+        String raw = sp(c).getString("rx.mute", "");
+        java.util.Set<Integer> s = new java.util.LinkedHashSet<>();
+        if (raw == null || raw.isEmpty()) return s;
+        for (String p : raw.split(",")) {
+            try {
+                s.add(Integer.parseInt(p.trim()));
+            } catch (NumberFormatException ignore) { }
+        }
+        return s;
+    }
+
+    public static void setRxMute(Context c, java.util.Set<Integer> set) {
+        StringBuilder sb = new StringBuilder();
+        for (int v : set) {
+            if (sb.length() > 0) sb.append(',');
+            sb.append(v);
+        }
+        sp(c).edit().putString("rx.mute", sb.toString()).apply();
+    }
+
+    /** 静音名单上限。 */
+    public static final int RX_MUTE_MAX = 40;
+
+    /* ==================== 话组别名 ==================== */
+
+    /**
+     * 用户给话组起的别名，{@code "46001=我的叫法"} 这种。
+     *
+     * <p>★ 别名**压倒所有远端表**：表里的名字是别人定的，
+     * 而用户想按自己圈子的习惯叫 —— 这是本机设置，不该被远端数据覆盖。
+     */
+    public static String tgAlias(Context c, int tg) {
+        String all = sp(c).getString("tg.alias", "");
+        if (all == null || all.isEmpty()) return null;
+        String key = tg + "=";
+        for (String p : all.split("\n")) {
+            if (p.startsWith(key)) {
+                String v = p.substring(key.length()).trim();
+                return v.isEmpty() ? null : v;
+            }
+        }
+        return null;
+    }
+
+    public static void setTgAlias(Context c, int tg, String name) {
+        String all = sp(c).getString("tg.alias", "");
+        StringBuilder sb = new StringBuilder();
+        String key = tg + "=";
+        if (all != null && !all.isEmpty()) {
+            for (String p : all.split("\n")) {
+                if (p.isEmpty() || p.startsWith(key)) continue;
+                if (sb.length() > 0) sb.append('\n');
+                sb.append(p);
+            }
+        }
+        String v = name == null ? "" : name.trim();
+        if (!v.isEmpty()) {
+            if (sb.length() > 0) sb.append('\n');
+            sb.append(key).append(v);
+        }
+        sp(c).edit().putString("tg.alias", sb.toString()).apply();
+    }
+
+    /* ==================== PTT 按钮 ==================== */
+
+    /** PTT 可拖动。关掉时坐标一起清，回到右下角默认位。 */
+    public static boolean pttDrag(Context c) {
+        return sp(c).getBoolean("ptt.drag", false);
+    }
+
+    public static void setPttDrag(Context c, boolean on) {
+        sp(c).edit().putBoolean("ptt.drag", on).apply();
+        if (!on) sp(c).edit().putString("ptt.pos", "").apply();
+    }
+
+    /** PTT 停放位置，{@code "x,y"} 像素；空串 = 右下角默认位。 */
+    public static String pttPos(Context c) {
+        return sp(c).getString("ptt.pos", "");
+    }
+
+    public static void setPttPos(Context c, String v) {
+        sp(c).edit().putString("ptt.pos", v == null ? "" : v).apply();
+    }
+
     /** 上次停在主页的哪一栏：0 我的收听 / 1 实时活动 / 2 话组库。 */
     public static int mcol(Context c) {
         int v = sp(c).getInt("ht.mcol", 0);
@@ -112,7 +228,13 @@ public final class Prefs {
     }
 
     /** 自动录音。录音本身在 Phase 4，这里先只存开关。 */
-    public static boolean recOn(Context c) { return sp(c).getBoolean("recOn", false); }
+    /**
+     * 自动录音。<b>默认开</b> —— 和 WebView 版一致。
+     *
+     * <p>默认关的话，用户永远想不起来去开它，等到「刚才那句很重要」时
+     * 才发现没录。开着不影响什么：一条 12 分钟上限、总量 48 MB 自动裁剪。
+     */
+    public static boolean recOn(Context c) { return sp(c).getBoolean("recOn", true); }
 
     public static void setRecOn(Context c, boolean on) {
         sp(c).edit().putBoolean("recOn", on).apply();

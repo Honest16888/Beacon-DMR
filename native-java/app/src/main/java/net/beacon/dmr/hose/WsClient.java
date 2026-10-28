@@ -61,7 +61,15 @@ public final class WsClient {
 
     private final URI uri;
     private final String subProtocol;
-    private final Listener listener;
+    /**
+     * 回调监听器。<b>可以为 null</b> —— {@link #setListener} 允许主动摘掉。
+     *
+     * <p>为什么需要「摘掉」：主动关闭连接时，如果 onClosed 还挂着，
+     * 库里自己的重连逻辑会被自己的关闭动作触发一次（「断开 → 立刻重连 →
+     * 又断开」的抖动）。WebView 版在三个地方都踩过这个坑，
+     * 那边的做法是 {@code ws.onclose=null} 再 {@code close()}。
+     */
+    private volatile Listener listener;
 
     private Socket raw;
     private InputStream in;
@@ -78,6 +86,9 @@ public final class WsClient {
     }
 
     public boolean isOpen() { return open.get(); }
+
+    /** 换 / 摘掉回调。传 null = 之后不再有任何回调。 */
+    public void setListener(Listener l) { this.listener = l; }
 
     /** 阻塞连接（不要在主线程调）。成功返回 true。 */
     public boolean connect() {
@@ -114,7 +125,8 @@ public final class WsClient {
 
             handshake(host, port);
             open.set(true);
-            listener.onOpen(this);
+            Listener l0 = listener;
+            if (l0 != null) l0.onOpen(this);
 
             Thread t = new Thread(this::readLoop, "ws-reader");
             t.setDaemon(true);
@@ -297,8 +309,10 @@ public final class WsClient {
     private void dispatch(int opcode, byte[] payload) {
         if (closed.get()) return;
         try {
-            if (opcode == 0x1) listener.onText(new String(payload, StandardCharsets.UTF_8));
-            else listener.onBinary(payload);
+            Listener l1 = listener;
+            if (l1 == null) return;
+            if (opcode == 0x1) l1.onText(new String(payload, StandardCharsets.UTF_8));
+            else l1.onBinary(payload);
         } catch (Exception e) {
             /* 回调抛异常不能把读线程带走 —— 一帧解析失败只该丢这一帧。 */
         }
@@ -373,8 +387,9 @@ public final class WsClient {
         if (t != null && t != Thread.currentThread()) {
             try { t.join(300); } catch (InterruptedException ignore) { Thread.currentThread().interrupt(); }
         }
-        if (wasOpen || listener != null) {
-            try { listener.onClosed(why); } catch (Exception ignore) {}
+        Listener l2 = listener;
+        if (wasOpen && l2 != null) {
+            try { l2.onClosed(why); } catch (Exception ignore) {}
         }
     }
 }

@@ -464,15 +464,38 @@
                                 android:singleLine="true" />
                         </LinearLayout>
 
-                        <ListView
-                            android:id="@+id/tgList"
+                        <!--
+                          ★ 这里**不能**用 ListView。
+
+                          ListView 套在 ScrollView 里、高度写 wrap_content 时，
+                          onMeasure 拿到的是 UNSPECIFIED，它只测一个子项的高度就返回 ——
+                          结果就是「订阅了 5 个组，列表只显示第一个」。
+                          nestedScrollingEnabled=false 解决的是滑动冲突，不是这个。
+
+                          订阅数一般几十个顶天，直接用 LinearLayout 动态填行：
+                          没有 Adapter、没有复用、点击直接绑，反而更简单。
+                        -->
+                        <LinearLayout
+                            android:id="@+id/tgRows"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="6dp"
-                            android:divider="@null"
-                            android:dividerHeight="0dp"
-                            android:scrollbars="none"
-                            android:nestedScrollingEnabled="false" />
+                            android:layout_marginTop="4dp"
+                            android:orientation="vertical" />
+
+                        <!-- 空态：一个组都没订阅时给一句「下一步做什么」，
+                             比留一片空白好 —— 用户会以为列表还没加载出来。 -->
+                        <TextView
+                            android:id="@+id/mineHint"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:paddingStart="10dp"
+                            android:paddingEnd="10dp"
+                            android:paddingTop="10dp"
+                            android:paddingBottom="12dp"
+                            android:textColor="?attr/cDim"
+                            android:textSize="11.5sp"
+                            android:lineSpacingMultiplier="1.5"
+                            android:visibility="gone" />
                     </LinearLayout>
 
                     <!--
@@ -721,15 +744,13 @@
                             android:singleLine="true" />
                     </LinearLayout>
 
-                    <ListView
-                        android:id="@+id/libList"
+                    <!-- 同上：ListView 在 ScrollView 里只会显示一行，改成动态行容器。 -->
+                    <LinearLayout
+                        android:id="@+id/libRows"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="6dp"
-                        android:divider="@null"
-                        android:dividerHeight="0dp"
-                        android:scrollbars="none"
-                        android:nestedScrollingEnabled="false" />
+                        android:layout_marginTop="4dp"
+                        android:orientation="vertical" />
                 </LinearLayout>
             </ScrollView>
         </FrameLayout>

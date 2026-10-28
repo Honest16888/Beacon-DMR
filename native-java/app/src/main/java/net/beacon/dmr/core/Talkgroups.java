@@ -53,6 +53,29 @@ public final class Talkgroups {
         prefs(ctx).edit().putString(KEY_SUBS, join(subs)).apply();
     }
 
+    /**
+     * 按 key 读写订阅 —— 国际 BM 和国内 China DMR 是两套话组体系，
+     * 订阅必须分开存，否则切网络时两边的组会互相污染
+     * （460 在国际网是「中国」区域组、在国内网是「460 全国公共」，
+     * 同一个号码含义不同，混在一起就全乱了）。
+     */
+    public static Set<Integer> loadSubs(Context ctx, String key, int[] defaults) {
+        String raw = prefs(ctx).getString(key, null);
+        if (raw == null) {
+            Set<Integer> d = new LinkedHashSet<>();
+            if (defaults != null) for (int v : defaults) d.add(v);
+            return d;
+        }
+        return parseInts(raw);
+    }
+
+    public static void saveSubs(Context ctx, String key, Set<Integer> subs) {
+        prefs(ctx).edit().putString(key, join(subs)).apply();
+    }
+
+    /** 国内订阅用的 key。 */
+    public static final String KEY_SUBS_CN = "subs.cn";
+
     /* ==================== 手动添加的组 ==================== */
 
     public static Set<Integer> loadCustom(Context ctx) {
