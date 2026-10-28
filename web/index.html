@@ -21976,6 +21976,42 @@ function initVu(){
   const el=$('#vu'); el.innerHTML=''; vuBars=[];
   for(let i=0;i<16;i++){ const b=document.createElement('i'); b.style.height='3px'; el.appendChild(b); vuBars.push(b); }
 }
+/* dBFS → 颜色。**连续渐变**，不是「绿/黄/红」三档。
+ *
+ * 三档的问题不是难看，是<没有信息>：正常说话落在 −30 ~ −12 这一段，
+ * 永远停在中间那档，看上去就是「颜色一直没变过」。
+ * 连续渐变才有刻度感 —— 你从小声到大声，颜色真的在走。
+ *
+ *   −40 dB（底噪以下）  → 140° 青绿
+ *   −22 dB（正常说话）  → 约 70° 黄绿
+ *    −6 dB（贴满量程）  → 0° 红
+ *
+ * 只改色相不改亮度/饱和度太多：这格是读数不是装饰，忽明忽暗会读不清。 */
+function dbColor(db){
+  const t=Math.max(0,Math.min(1,(db+40)/34));
+  const hue =Math.round(140-140*t);
+  const sat =Math.round(62+26*t);
+  const lig =Math.round(42+6*t);
+  return 'hsl('+hue+' '+sat+'% '+lig+'%)';
+}
+/* 统一写入顶部那格 dB：文本 + 连续着色 + data-lv（给 title/兼容用）。
+ *
+ * ★ 三处（原生接收 / 发射 / HOSE 播放）都必须走这里 ——
+ * 之前每处各写一套判断，阈值和颜色迟早会分叉。 */
+function setDbReadout(el, db, title){
+  if(!el)return;
+  if(!isFinite(db)||db<=-110){
+    el.textContent='—';
+    el.style.color='';          /* 清掉内联色，让 CSS 的 idle 生效（灰 + 变暗） */
+    el.dataset.lv='idle';
+    if(title)el.title=title;
+    return;
+  }
+  el.textContent=db.toFixed(1)+' dB';
+  el.style.color=dbColor(db);
+  el.dataset.lv=db>-12?'hot':(db>-30?'ok':'low');
+  if(title)el.title=title;
+}
 function renderVu(){
   if(!vuBars)return;
   /* ★ v2.5.1 波形不能再只认 HOSE 的解码电平。
@@ -22021,11 +22057,7 @@ function renderVu(){
    * 上报频率和音频帧同步。这里如果再写一遍，两边会按不同节奏互相覆盖，
    * 看起来就是「数字在跳/有时空白」。 */
   if(!TX.txing&&!Q.rxing&&state.current){
-    const el=$('#npDb');
-    if(el){
-      el.textContent=isFinite(db)?(db.toFixed(1)+' dB'):'—';
-      el.dataset.lv=isFinite(db)?(db>-12?'hot':(db>-30?'ok':'low')):'idle';
-    }
+    setDbReadout($('#npDb'), db, '接收音频电平 '+(isFinite(db)?db.toFixed(1)+' dBFS':'—'));
   }
   for(let i=0;i<vuBars.length;i++){
     const th=(i+0.5)/vuBars.length, on=lvl>th*0.92;
@@ -24472,12 +24504,11 @@ window.onDmrEvent=function(json){
              那个值永远是 0，手机上波形就是一条平线。这里顺手记下来，
              renderVu 优先用它。 */
           state.rxDb=db;
-          el.textContent=db.toFixed(1)+' dB';
-          el.dataset.lv=db>-12?'hot':(db>-30?'ok':'low');
           if(Q.dbPeak==null||db>Q.dbPeak)Q.dbPeak=db;
-          el.title='接收音频电平 '+db.toFixed(1)+' dBFS'
-                  +' · 本句峰值 '+Q.dbPeak.toFixed(1)+' dBFS'
-                  +'\n（DMRD 包不带 RSSI，这不是空口信号强度）';
+          setDbReadout(el, db,
+            '接收音频电平 '+db.toFixed(1)+' dBFS'
+            +' · 本句峰值 '+(Q.dbPeak==null?'—':Q.dbPeak.toFixed(1))+' dBFS'
+            +'\n（DMRD 包不带 RSSI，这不是空口信号强度）');
         }
       }
       break;
@@ -24507,11 +24538,9 @@ window.onDmrEvent=function(json){
        * 用户看到的就是「我自己发言 dB 有概率不显示，有时候又显示」。
        *
        * 发射和接收天然互斥，两边不会抢同一个节点。 */
-      const np=$('#npDb');
-      if(np&&isFinite(db)&&db>-110){
-        np.textContent=db.toFixed(1)+' dB';
-        np.dataset.lv=db>-12?'hot':(db>-30?'ok':'low');
-        np.title='发射音频电平 '+db.toFixed(1)+' dBFS（麦克风增益之后）';
+      if(isFinite(db)&&db>-110){
+        setDbReadout($('#npDb'), db,
+          '发射音频电平 '+db.toFixed(1)+' dBFS（麦克风增益之后）');
       }
       break;
     }
