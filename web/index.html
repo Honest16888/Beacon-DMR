@@ -19412,7 +19412,7 @@ const Audio_ = {
        *   · 音量 100% 峰值 0.98 → 只在最尖的那几个样本上压，动态基本保住；
        *   · 音量推到 150% + 增益 3× → 照旧兜住，不会硬削波「噼啪」。
        * CEIL 从 0.98 改成 1.0，让「刚好到顶」的信号不被提前压。 */
-      const NS=4096, cur=new Float32Array(NS), T=0.90, CEIL=1.0, K=3;
+      const NS=4096, cur=new Float32Array(NS), T=1.0, CEIL=1.0, K=3;
       for(let i=0;i<NS;i++){
         const u=(i/(NS-1))*2-1, x=u*K, a=Math.abs(x), sg=x<0?-1:1;
         cur[i]=a<=T ? x : sg*(T+(CEIL-T)*Math.tanh((a-T)/(CEIL-T)));
@@ -19420,9 +19420,38 @@ const Audio_ = {
       ws.curve=cur;
     }
     ws.oversample='none';
-    this.gain.connect(hp); hp.connect(pk); pk.connect(pre); pre.connect(ws);
-    ws.connect(this.ctx.destination);
     this.hp=hp; this.pk=pk; this.pre=pre; this.ws=ws;  /* 留引用：测试和以后调音色都要用到 */
+
+    /* ★ v2.5.7 两种链路，由「窄带增强」这一颗开关决定 —— 不新增 UI。
+     *
+     *   增强关（默认）→ gain → ws → destination
+     *                    和官方 hose.brandmeister.network 的播放器**完全同一条路**：
+     *                    解码 → 音量 → 出声。中间那两级滤波和音色处理全不接上。
+     *                    ws 还在链路上，但阈值是 1.0 —— 只在真的溢出 ±1 时兜一下，
+     *                    正常音量下逐样本直通，等于不存在。
+     *
+     *   增强开        → gain → hp → pk → pre → ws → destination
+     *                    完整的三级处理，给「嫌闷、想听清辅音」的用户。
+     *
+     * 为什么用 presence 这一颗开关兼管而不是新加一个：
+     * 用户的诉求是「和官方一样」，那就让默认状态真的**一模一样**；
+     * 想要我们原来那套调音的用户，本来就会去开「窄带增强」。
+     * 两颗开关表达同一件事（音色要不要加工），分开反而让人不知道怎么选。 */
+    this.applyChain=function(){
+      const g=this.gain, d=this.ctx.destination;
+      /* 先全拆，再按当前模式接 —— BiquadFilter 一旦接上就会算，
+       * 只改参数（frequency=0 之类）绕不过去，会留下相位失真。 */
+      for(const n of [this.gain,this.hp,this.pk,this.pre,this.ws]){
+        try{ n.disconnect(); }catch(e){}
+      }
+      if(state.presence===true){
+        g.connect(hp); hp.connect(pk); pk.connect(pre); pre.connect(ws);
+      }else{
+        g.connect(ws);
+      }
+      ws.connect(d);
+    };
+    this.applyChain();
     /* 环形缓冲输出是首选路径；建好之前先把帧攒着，别让第一句话卡一下 */
     this.sinkPending=true;
     this.initSink();
@@ -20434,7 +20463,13 @@ const RXG={
    */
   heldCall:{},
   HELD_MS:120000,   // 这么久还没等到 CALL_END，就当它丢了，别一直留着
-  LOST_MS:15000    // 占用的组这么久没声音 = CALL_END 丢了，兜底释放
+  /* ★ v2.5.7 从 15000 降到 5000。
+   *
+   * 占用组的 CALL_END 丢了，坑位会一直占着 —— 期间**别的组全被挡**，
+   * 听感就是「卡在某一个组上，换不过去」，用户报的「卡组」。
+   * 15 秒太长：DMR 一句话中间换气不到 1 秒，5 秒足够区分
+   * 「还在说」和「CALL_END 丢了」，又不会让人干等一个组十几秒。 */
+  LOST_MS:5000
 };
 /* 这一句该不该由 HOSE 播。
  *
@@ -24790,6 +24825,8 @@ $('#segGain').addEventListener('click',e=>{
 /* --- 开关 --- */
 $('#setPresence').addEventListener('change',e=>{
   state.presence=!!e.target.checked; store.set('presence',state.presence);
+  /* 链路要重建 —— 两级滤波是接在信号图上的，不是改参数就能旁路的。 */
+  if(Audio_.applyChain)Audio_.applyChain();
   Audio_.setPresence(state.presence);
   toast(state.presence?'已开启窄带增强':'已关闭窄带增强（声音会闷一点）');
 });
@@ -25159,8 +25196,27 @@ document.addEventListener('click',e=>{
           toast('自动跟进已开启 · 正在锁定最活跃的 '+state.scan.autoN+' 个话组');
         } else {
           state.scan.picked=[]; state.scan.sig='';
+          /* ★ v2.5.7 关自动跟进 = 退出扫描。
+           *
+           * 原来这里只清 picked，`state.scan.on` 还留着 true ——
+           * 而 effSubs() 里 `if(state.scan.on) s.concat(scanSet())`，
+           * scanSet() 又返回 scan.list，于是「跟进来那些组」如果也被
+           * scan.list 收录过，就仍然在订阅里、audioAllowed() 也放行：
+           * 用户看到的是「我已经关了自动跟进，还在放跟进到的组」。
+           *
+           * 用户的心智模型很简单：关掉跟进 = 不再自己找组听。
+           * 所以这里连 on 一起关；如果 scan.list 里有手动加的频道，
+           * 用 toast 说清楚「它们也停了」，而不是偷偷继续放。 */
+          const manual=state.scan.list.slice();
+          state.scan.on=false; store.set('scanOn',false);
+          state.scan.cur=null; state.scan.hold=null;
+          if(Audio_.silence)Audio_.silence();
           syncSubs(); ensureSpotter();
-          toast('已关闭自动跟进，恢复手动扫描列表');
+          if(manual.length){
+            toast('已关闭自动跟进，扫描也停了（手动列表里还有 '+manual.length+' 个频道，需要的话再点「开始扫描」）');
+          }else{
+            toast('已关闭自动跟进，订阅已退回「我的收听」里的组');
+          }
         }
         renderMine(); renderTab(); renderLib(); renderStatus(); return;
       case 'scanHold':
