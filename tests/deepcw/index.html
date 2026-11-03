@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>DeepCW 模型输入 · 频谱</title>
+<style>
+  :root{
+    --bg:#0b0f14; --panel:#11171f; --border:#1e2a36; --text:#d7e3ee;
+    --muted:#7d90a3; --accent:#39c0a0; --warn:#e0a458;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--text);
+    font:13px/1.5 "Segoe UI",system-ui,sans-serif}
+  .wrap{max-width:1120px;margin:0 auto;padding:22px 20px 40px}
+  h1{font:600 15px/1.3 "Segoe UI",system-ui,sans-serif;letter-spacing:.02em;margin:0 0 2px}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:18px}
+  .sub code{color:var(--accent)}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px}
+  .row{display:flex;flex-wrap:wrap;gap:14px;align-items:flex-end;margin-bottom:14px}
+  label{display:block;color:var(--muted);font-size:11px;margin-bottom:3px}
+  input[type=text],input[type=number],select{
+    background:#0a0e13;color:var(--text);border:1px solid var(--border);
+    border-radius:6px;padding:5px 7px;font:12px/1.4 ui-monospace,Consolas,monospace}
+  input[type=text]{width:260px}
+  input[type=number]{width:72px}
+  button{background:#17222d;color:var(--text);border:1px solid var(--border);
+    border-radius:6px;padding:6px 12px;font:12px/1 inherit;cursor:pointer}
+  button:hover{border-color:var(--accent);color:#fff}
+  canvas{display:block;width:100%;height:auto;border-radius:6px}
+  .meta{display:flex;flex-wrap:wrap;gap:18px;color:var(--muted);font-size:11.5px;
+    font-family:ui-monospace,Consolas,monospace;margin-top:10px}
+  .meta b{color:var(--text);font-weight:500}
+  .hint{color:var(--muted);font-size:11.5px;margin-top:14px;line-height:1.7}
+  .hint em{color:var(--warn);font-style:normal}
+  .legend{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:11px;
+    font-family:ui-monospace,Consolas,monospace;margin-top:8px}
+  .legend i{display:block;width:120px;height:8px;border-radius:2px;
+    background:linear-gradient(90deg,#05070a,#12365c,#1f8a9c,#e8c547,#fff)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>DeepCW 模型输入 · 频谱图</h1>
+  <div class="sub">
+    3.2 kHz 重采样 → 周期 Hann(256) / hop 48 → 400–1200 Hz 共 <code>65</code> 个频点
+    → <code>noise_q90_log1p</code>。这一格一格就是模型真正看到的东西。
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <div><label>报文</label><input type="text" id="text" value="CQ CQ DE BH6RGQ K"></div>
+      <div><label>速度 WPM</label><input type="number" id="wpm" value="20" min="5" max="60"></div>
+      <div><label>音调 Hz</label><input type="number" id="tone" value="700" min="400" max="1200"></div>
+      <div><label>信噪比 dB</label><input type="number" id="snr" value="0" min="-20" max="30"></div>
+      <div><label>时长 s</label><input type="number" id="seconds" value="6" min="2" max="30"></div>
+      <button id="gen">重新生成</button>
+      <button id="pick">载入 WAV…</button>
+      <input type="file" id="file" accept=".wav,audio/*" hidden>
+    </div>
+
+    <canvas id="scope" width="1080" height="360"></canvas>
+
+    <div class="legend"><span>弱</span><i></i><span>强</span>
+      <span style="margin-left:auto" id="src">合成 CW</span></div>
+
+    <div class="meta">
+      <span>帧数 <b id="mFrames">–</b></span>
+      <span>帧率 <b id="mRate">–</b></span>
+      <span>hop <b>15 ms</b></span>
+      <span>模型输入 <b id="mShape">–</b></span>
+      <span>归一化峰值 <b id="mPeak">–</b></span>
+    </div>
+  </div>
+
+  <div class="hint">
+    纵轴 400–1200 Hz，横轴时间。颜色是 <code>log1p(幅度/噪声底)</code>，所以「大片深蓝」是
+    静音、亮色是落在这个 812 Hz 窗口里的信号——不是信号强度的绝对值。<br>
+    <em>注意：</em>归一化用的是整段音频的 90 分位，所以同一句话放进不同的录音里，颜色会变；
+    模型吃的正是这个相对量。
+  </div>
+</div>
+
+<script src="dsp.js"></script>
+<script>
+(function () {
+  'use strict';
+  var D = window.DeepCW;
+  var canvas = document.getElementById('scope');
+  var ctx = canvas.getContext('2d');
+
+  var state = { result: null, label: '合成 CW' };
+
+  // 颜色：深蓝 → 青 → 黄 → 白。0 是静音，3.5 以上基本饱和
+  function colorFor(v) {
+    var stops = [
+      [0.00, 5, 7, 10],
+      [0.18, 18, 54, 92],
+      [0.42, 31, 138, 156],
+      [0.68, 200, 170, 70],
+      [0.86, 240, 220, 120],
+      [1.00, 255, 255, 255]
+    ];
+    var t = Math.max(0, Math.min(1, v / 3.5));
+    for (var i = 1; i < stops.length; i++) {
+      if (t <= stops[i][0]) {
+        var a = stops[i - 1], b = stops[i];
+        var k = (t - a[0]) / (b[0] - a[0] || 1);
+        return [
+          Math.round(a[1] + (b[1] - a[1]) * k),
+          Math.round(a[2] + (b[2] - a[2]) * k),
+          Math.round(a[3] + (b[3] - a[3]) * k)
+        ];
+      }
+    }
+    return [255, 255, 255];
+  }
+
+  function draw() {
+    var r = state.result;
+    var W = canvas.width, H = canvas.height;
+    var ml = 56, mr = 14, mt = 16, mb = 30;
+    var pw = W - ml - mr, ph = H - mt - mb;
+
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = '#0a0e13';
+    ctx.fillRect(ml, mt, pw, ph);
+
+    if (r && r.frames > 0) {
+      // 先画到 frames×bins 的小画布，再放大 —— 每帧一列，不糊
+      var off = document.createElement('canvas');
+      off.width = r.frames;
+      off.height = r.bins;
+      var octx = off.getContext('2d');
+      var img = octx.createImageData(r.frames, r.bins);
+      for (var f = 0; f < r.frames; f++) {
+        for (var b = 0; b < r.bins; b++) {
+          var v = r.data[f * r.bins + b];
+          var c = colorFor(v);
+          var y = r.bins - 1 - b;            // 低频在下
+          var o = (y * r.frames + f) * 4;
+          img.data[o] = c[0];
+          img.data[o + 1] = c[1];
+          img.data[o + 2] = c[2];
+          img.data[o + 3] = 255;
+        }
+      }
+      octx.putImageData(img, 0, 0);
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(off, ml, mt, pw, ph);
+
+      // 网格与刻度
+      ctx.strokeStyle = 'rgba(215,227,238,.10)';
+      ctx.fillStyle = '#7d90a3';
+      ctx.font = '11px ui-monospace,Consolas,monospace';
+      ctx.textAlign = 'right';
+      ctx.textBaseline = 'middle';
+      [400, 600, 800, 1000, 1200].forEach(function (hz) {
+        var y = mt + ph - (hz - 400) / 800 * ph;
+        ctx.beginPath(); ctx.moveTo(ml, y); ctx.lineTo(ml + pw, y); ctx.stroke();
+        ctx.fillText(hz + '', ml - 8, y);
+      });
+
+      var seconds = r.frames * 0.015;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+      var step = seconds > 12 ? 2 : 1;
+      for (var s = 0; s <= seconds; s += step) {
+        var x = ml + (s / seconds) * pw;
+        ctx.beginPath(); ctx.moveTo(x, mt); ctx.lineTo(x, mt + ph); ctx.stroke();
+        ctx.fillText(s + 's', x, mt + ph + 7);
+      }
+      ctx.textAlign = 'left';
+      ctx.save();
+      ctx.translate(14, mt + ph / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = 'center';
+      ctx.fillText('Hz', 0, 0);
+      ctx.restore();
+    } else {
+      ctx.fillStyle = '#7d90a3';
+      ctx.textAlign = 'center';
+      ctx.fillText('点「重新生成」', ml + pw / 2, mt + ph / 2);
+    }
+
+    ctx.strokeStyle = '#1e2a36';
+    ctx.strokeRect(ml + .5, mt + .5, pw - 1, ph - 1);
+  }
+
+  function update(samples, sampleRate, label) {
+    var r = D.audioToInput(samples, sampleRate);
+    state.result = r;
+    state.label = label;
+
+    document.getElementById('mFrames').textContent = r.frames;
+    document.getElementById('mRate').textContent = (3200 / 48).toFixed(1) + ' fps';
+    document.getElementById('mShape').textContent = '[1, 1, ' + r.frames + ', ' + r.bins + ']';
+    var peak = 0;
+    for (var i = 0; i < r.data.length; i++) if (r.data[i] > peak) peak = r.data[i];
+    document.getElementById('mPeak').textContent = peak.toFixed(2);
+    document.getElementById('src').textContent = label;
+    draw();
+  }
+
+  function generate() {
+    var text = document.getElementById('text').value.trim() || 'CQ';
+    var wpm = +document.getElementById('wpm').value || 20;
+    var tone = +document.getElementById('tone').value || 700;
+    var snr = +document.getElementById('snr').value;
+    var seconds = +document.getElementById('seconds').value || 6;
+
+    var parts = [];
+    var total = 0;
+    while (total < seconds * 48000) {
+      var pcm = D.synthCw(text, { wpm: wpm, toneHz: tone, sampleRate: 48000, noiseDb: snr });
+      parts.push(pcm);
+      total += pcm.length;
+    }
+    var merged = new Float32Array(total);
+    var off = 0;
+    parts.forEach(function (p) { merged.set(p, off); off += p.length; });
+    update(merged, 48000, '合成 CW · ' + wpm + ' WPM · ' + tone + ' Hz · ' + snr + ' dB');
+  }
+
+  document.getElementById('gen').addEventListener('click', generate);
+  document.getElementById('pick').addEventListener('click', function () {
+    document.getElementById('file').click();
+  });
+  document.getElementById('file').addEventListener('change', function (e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    file.arrayBuffer().then(function (buf) {
+      return new OfflineAudioContext(1, 1, 48000).decodeAudioData(buf);
+    }).then(function (audio) {
+      var pcm = audio.getChannelData(0);
+      if (audio.numberOfChannels > 1) {
+        // 双声道取平均，和参考实现一致
+        var right = audio.getChannelData(1);
+        for (var i = 0; i < pcm.length; i++) pcm[i] = (pcm[i] + right[i]) / 2;
+      }
+      update(pcm, audio.sampleRate, file.name);
+    }).catch(function (err) {
+      alert('读不了这个音频：' + err.message);
+    });
+  });
+
+  generate();
+})();
+</script>
+</body>
+</html>

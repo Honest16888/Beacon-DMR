@@ -45,6 +45,11 @@
 - 自动录音，WAV 落到公共音乐目录
 - 扫描模式：轮流守听一批话组，可自动跟进最活跃的那个
 - 接收过滤：只收当前话组 / 屏蔽名单 / 单独静音某话组
+- **接收频谱（DeepCW 模型输入）**：「频谱」页签把正在听的音频按
+  [DeepCW](https://github.com/e04/deepcw-engine) 的口径画成瀑布图——
+  3.2 kHz 重采样、400–1200 Hz 共 65 个频点、15 ms 一帧，
+  颜色是相对噪声底的对数幅度。HOSE 与原生 MMDVM 两条路都接，
+  数值与 Python 参考实现对到 3.4e-7。**只到输入这一层，模型推理还没接**
 - **个呼与组呼同时开启**：组呼收听中也能收到点名呼我的个呼，顶部主显示区与
   折叠摘要条都会切成「个呼 · 对方 ID」，并给一个「回复」按钮（自动带上对方 ID、
   个呼标志和收到的时隙）
@@ -427,6 +432,12 @@ python tests/tx_pacing_sim.py
 # AGC「静音→开口」过冲仿真：静音期增益被顶到多高、开口过冲多少 dB、几帧回落
 #   —— 2026-10-28 的实录里「只有开头 400 ms 冲高 20 dB」就是这条
 python tests/tx_agc_overshoot.py
+
+# DeepCW 输入频谱：Python 参考实现出金标准 → JS 实现逐值对比
+python tests/deepcw/spec_ref.py --out tests/out/deepcw
+node   tests/deepcw/verify.js --dir tests/out/deepcw
+# 顺手出图（不经过浏览器，图里的像素就是金标准的数值）
+python tests/deepcw/render_png.py --dir tests/out/deepcw
 ```
 
 冒烟测试会覆盖 320 / 360 / 390 / 414 / 480 / 768 / 1024 / 1280 八个宽度检查横向溢出，

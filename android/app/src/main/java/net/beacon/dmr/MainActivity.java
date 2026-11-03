@@ -723,6 +723,18 @@ public class MainActivity extends Activity {
             if (dmr != null) dmr.setRxJitter(ms);
         }
 
+        /**
+         * 「频谱」页签开 / 关。
+         *
+         * <p>原生 MMDVM 那条路的 PCM 页面拿不到（见 {@link DmrEngine#setCwTap}），
+         * 只能由原生把解出来的 8 kHz 样本发过去。每秒约 16 KB 的 base64，
+         * 所以只在页签打开时才开，关掉就停。
+         */
+        @JavascriptInterface
+        public void cwTap(final boolean on) {
+            if (dmr != null) dmr.setCwTap(on);
+        }
+
         /* ---------------- 接收过滤（屏蔽名单 / 单流锁定） ---------------- */
 
         /**

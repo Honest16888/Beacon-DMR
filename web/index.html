@@ -1148,6 +1148,14 @@ body.dragging #mineList{overflow:visible}
 /* 排序提示：只在拖动时出现的一行小字 */
 .dghint{display:none;font-size:11px;color:var(--dim);padding:4px 10px 6px}
 body.dragging .dghint{display:block}
+
+/* ===================== 接收频谱（DeepCW 输入） =====================
+   瀑布图本身永远是深色底 —— 它是「仪器」不是「内容」，浅色主题下也照旧，
+   否则 65 级灰度对不上。外边距按面板走。 */
+#cwScope{width:100%;height:150px;display:block;border-radius:6px;background:#0a0e13}
+.cwhint{display:flex;flex-wrap:wrap;gap:10px;padding:7px 2px 2px;
+  font-size:11px;color:var(--dim);font-family:ui-monospace,Consolas,monospace}
+.cwhint b{color:var(--muted);font-weight:500}
 </style>
 </head>
 <body>
@@ -1300,6 +1308,7 @@ body.dragging .dghint{display:block}
               <button data-tab="scan" class="on">扫描</button>
               <button data-tab="rec">录音</button>
               <button data-tab="log">记录</button>
+              <button data-tab="cw">频谱</button>
             </div>
             <div class="spacer"></div>
             <span class="n" id="tabCount">0</span>
@@ -19619,6 +19628,12 @@ const Audio_ = {
     /* 最近一帧到达的时刻。和 level 不同，它不会被平滑掉 ——
        给 audioGuard() 判「数据还在流吗」用。 */
     this.lastAt=Date.now();
+    /* ★ 接收频谱的抽头就在这里。
+       放在 decode 而不是 push：push 在静音/让位时会提前 return，而频谱看的是
+       「空口上有什么」，用户把喇叭静音了不代表这一段信号不存在。
+       三条调用点（国内流 / HOSE / 只为录音解码的那条）都恰好每帧调一次 decode，
+       所以不会重复喂。 */
+    try{ CW.feed(f); }catch(e){}
     return f;
   },
   play(f){
@@ -22627,10 +22642,354 @@ function renderLibCN(){
 }
 
 /* ============================ 渲染：左侧标签页 ============================ */
+/* ================= 接收频谱：DeepCW 模型的输入 =================
+ *
+ * 抽的是 Audio_.decode() 出来的那一路 —— μ-law 解完、还没过增益和静音的
+ * **原始 PCM（8 kHz）**。看的是「空口上有什么」，不是「喇叭放多响」，
+ * 所以静音/让位/被丢弃的句子也照样进频谱。
+ *
+ * 链路按 model.onnx.json 的常数复刻：
+ *   8 kHz → 255 抽头 Blackman 窗 sinc 重采样 3.2 kHz（截止 1.4 kHz）
+ *         → 周期 Hann(256) / hop 48（15 ms 一帧）
+ *         → 400–1200 Hz 的 65 个频点（12.5 Hz 一格）
+ *         → log1p(幅度 / 噪声底)，噪声底 = 最近 8 秒的 90 分位 / 2.146
+ *
+ * 和 tests/deepcw/dsp.js 是同一套算式：那边和 Python 参考实现对到 3.4e-7，
+ * 这边改成流式 —— 块与块之间必须接着算（重采样器的相位、FFT 的 hop 都不能
+ * 每 20 ms 重新起一个窗），否则频谱上每帧一条缝，模型看到的是假的。
+ *
+ * 这一版只画图，模型推理还没接。
+ */
+const CW = {
+  RATE: 3200, FFT: 256, HOP: 48, BINS: 65,
+  MIN_HZ: 400, MAX_HZ: 1200,
+  TAPS: 255, CUTOFF: 1400,
+  COLS: 900,            /* 显示窗口 13.5 秒 */
+  WIN: 533,             /* 噪声底用最近 8 秒估，和模型的 8 秒窗一致 */
+  SCALE: 3.5,           /* 归一化后到 3.5 基本饱和 */
+
+  res: null, sbuf: null, sw: 0, total: 0, frame: 0,
+  raw: null, rh: 0, rn: 0,
+  cols: null, ch: 0, cn: 0,
+  noise: 1, noiseAt: 0, kern: null, LUT: null,
+  canvas: null, ctx: null, off: null, offCtx: null, img: null,
+
+  init() {
+    if (this.sbuf) return;
+    const n = this.FFT;
+    const w = new Float64Array(n);
+    for (let i = 0; i < n; i++) w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / n);
+    this.wins = w;
+    this.re = new Float64Array(n);
+    this.im = new Float64Array(n);
+    this.sbuf = new Float32Array(8192);            /* 2.56 s @3.2k，够覆盖 hop 与重采样滞后 */
+    this.raw = new Float32Array(this.WIN * this.BINS);
+    this.tmpNoise = new Float32Array(this.WIN * this.BINS);
+    this.cols = new Float32Array(this.COLS * this.BINS);
+    /* 重采样器状态：buf 是输入侧（8 kHz），pos 是「下一个输出」的绝对输入位置 */
+    const half = (this.TAPS - 1) >> 1;
+    const win = new Float64Array(this.TAPS);
+    for (let i = 0; i < this.TAPS; i++) {
+      const u = (i - half) / half;
+      win[i] = 0.42 - 0.5 * Math.cos(Math.PI * (u + 1)) + 0.08 * Math.cos(2 * Math.PI * (u + 1));
+    }
+    this.res = { ratio: 8000 / this.RATE, fc: this.CUTOFF / 8000, half,
+                 win, buf: new Float32Array(4096), n: 0, base: 0, pos: half };
+    this.kern = {};
+    this.lut();
+  },
+
+  /* 某个相位的 255 个系数。8000/3200 = 2.5，所以实际只会出现 0 和 0.5 两个相位 ——
+     缓存之后内层循环是纯乘加，不用每次再算 sin。 */
+  kernel(frac) {
+    const key = 'k' + frac;
+    let k = this.kern[key];
+    if (k) return k;
+    const r = this.res, half = r.half;
+    k = new Float64Array(this.TAPS);
+    let sum = 0;
+    for (let i = 0; i < this.TAPS; i++) {
+      const z = (i - half) - frac, u = 2 * r.fc * z;
+      const s = (u === 0 ? 1 : Math.sin(Math.PI * u) / (Math.PI * u)) * r.win[i];
+      k[i] = s; sum += s;
+    }
+    if (sum) for (let i = 0; i < this.TAPS; i++) k[i] /= sum;
+    this.kern[key] = k;
+    return k;
+  },
+
+  resample(x) {
+    const r = this.res;
+    if (r.n + x.length > r.buf.length) {
+      let cap = r.buf.length;
+      while (cap < r.n + x.length) cap *= 2;
+      const nb = new Float32Array(cap);
+      nb.set(r.buf.subarray(0, r.n));
+      r.buf = nb;
+    }
+    r.buf.set(x, r.n);
+    r.n += x.length;
+
+    const out = new Float32Array(Math.ceil(x.length / r.ratio) + 2);
+    let m = 0;
+    while (r.pos + r.half < r.base + r.n) {
+      const p = r.pos, i0 = Math.floor(p);
+      const frac = Math.round((p - i0) * 1e6) / 1e6;
+      const k = this.kernel(frac);
+      let acc = 0;
+      for (let j = 0; j < this.TAPS; j++) {
+        const idx = i0 - r.half + j - r.base;
+        if (idx >= 0 && idx < r.n) acc += r.buf[idx] * k[j];
+      }
+      out[m++] = acc;
+      r.pos += r.ratio;
+    }
+    /* 只留「下一个输出还要用到的过去」—— 否则缓冲会一直长 */
+    const drop = Math.min(Math.floor(r.pos) - r.half - 2 - r.base, r.n);
+    if (drop > 0) {
+      r.buf.copyWithin(0, drop, r.n);
+      r.n -= drop; r.base += drop;
+    }
+    return m === out.length ? out : out.subarray(0, m);
+  },
+
+  /* 迭代基 2 FFT，长度固定 256 */
+  fft(re, im) {
+    const n = re.length;
+    let i, j, k, m, half, tr, ti, cr, ci, wr, wi;
+    for (i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        let t = re[i]; re[i] = re[j]; re[j] = t;
+        t = im[i]; im[i] = im[j]; im[j] = t;
+      }
+    }
+    for (m = 2; m <= n; m <<= 1) {
+      const ang = -2 * Math.PI / m;
+      wr = Math.cos(ang); wi = Math.sin(ang);
+      half = m >> 1;
+      for (k = 0; k < n; k += m) {
+        cr = 1; ci = 0;
+        for (i = 0; i < half; i++) {
+          const a = k + i, b = a + half;
+          tr = re[b] * cr - im[b] * ci;
+          ti = re[b] * ci + im[b] * cr;
+          re[b] = re[a] - tr; im[b] = im[a] - ti;
+          re[a] += tr;        im[a] += ti;
+          const ncr = cr * wr - ci * wi;
+          ci = cr * wi + ci * wr;
+          cr = ncr;
+        }
+      }
+    }
+  },
+
+  spectrumAt(start) {
+    const n = this.FFT, sb = this.sbuf, cap = sb.length;
+    const re = this.re, im = this.im, w = this.wins;
+    for (let i = 0; i < n; i++) {
+      let idx = (start + i) % cap;
+      if (idx < 0) idx += cap;
+      re[i] = sb[idx] * w[i];
+      im[i] = 0;
+    }
+    this.fft(re, im);
+    const binHz = this.RATE / n;
+    const off = Math.ceil(this.MIN_HZ / binHz);           /* 32 */
+    const bins = this.BINS;
+    const row = new Float32Array(bins);
+    for (let b = 0; b < bins; b++) {
+      const k = off + b;
+      row[b] = Math.sqrt(re[k] * re[k] + im[k] * im[k]);
+    }
+    return row;
+  },
+
+  feed(pcm) {
+    if (!pcm || !pcm.length) return;
+    if (!this.sbuf) this.init();
+    const y = this.resample(pcm);
+    if (!y.length) return;
+    const sb = this.sbuf, cap = sb.length;
+    for (let i = 0; i < y.length; i++) { sb[this.sw] = y[i]; this.sw = (this.sw + 1) % cap; }
+    this.total += y.length;
+    while (this.frame + this.FFT <= this.total) {
+      this.pushRow(this.spectrumAt(this.frame));
+      this.frame += this.HOP;
+    }
+  },
+
+  pushRow(row) {
+    const B = this.BINS;
+    this.raw.set(row, this.rh * B);
+    this.rh = (this.rh + 1) % this.WIN;
+    this.rn = Math.min(this.WIN, this.rn + 1);
+
+    const now = Date.now();
+    if (now - this.noiseAt > 500) { this.noiseAt = now; this.estimateNoise(); }
+
+    /* 归一化用的是「此刻」的噪声底，而模型用的是整段 8 秒窗。
+       显示上这点差别看不出来，但每 500 ms 重估一次是必要的 ——
+       否则换一个底噪不同的时段，整张图会突然变亮或变暗。 */
+    const nz = this.noise || 1e-5;
+    const off = this.ch * B, cols = this.cols, lim = this.SCALE;
+    for (let b = 0; b < B; b++) {
+      let v = Math.log1p(row[b] / nz);
+      if (v > lim) v = lim;
+      cols[off + b] = v;
+    }
+    this.ch = (this.ch + 1) % this.COLS;
+    this.cn = Math.min(this.COLS, this.cn + 1);
+  },
+
+  estimateNoise() {
+    const B = this.BINS, n = this.rn;
+    if (!n) return;
+    /* 复用一块缓冲：这个函数每 500 ms 跑一次，每次 3.4 万个浮点排序，
+       每回都新建一块就是白白给 GC 添活。 */
+    const tmp = this.tmpNoise;
+    for (let i = 0; i < n; i++) {
+      const src = ((this.rh - n + i) % this.WIN + this.WIN) % this.WIN;
+      tmp.set(this.raw.subarray(src * B, src * B + B), i * B);
+    }
+    const view = tmp.subarray(0, n * B);
+    view.sort();
+    const q = 0.9;
+    const rayleigh = Math.sqrt(-2 * Math.log(1 - q));     /* 2.146 */
+    const q90 = view[Math.floor(q * (view.length - 1))];
+    const peak = view[view.length - 1];
+    this.noise = Math.max(q90 / rayleigh, peak * 1e-3, 1e-5);
+  },
+
+  lut() {
+    if (this.LUT) return this.LUT;
+    const stops = [[0, 5, 7, 10], [0.18, 18, 54, 92], [0.42, 31, 138, 156],
+                   [0.68, 200, 170, 70], [0.86, 240, 220, 120], [1, 255, 255, 255]];
+    const L = new Uint8Array(256 * 3);
+    for (let i = 0; i < 256; i++) {
+      const t = i / 255;
+      let c = [255, 255, 255];
+      for (let j = 1; j < stops.length; j++) {
+        if (t <= stops[j][0]) {
+          const a = stops[j - 1], b = stops[j];
+          const f = (t - a[0]) / ((b[0] - a[0]) || 1);
+          c = [a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f, a[3] + (b[3] - a[3]) * f];
+          break;
+        }
+      }
+      L[i * 3] = c[0]; L[i * 3 + 1] = c[1]; L[i * 3 + 2] = c[2];
+    }
+    this.LUT = L;
+    return L;
+  },
+
+  bind(cv) {
+    if (!this.sbuf) this.init();
+    this.canvas = cv;
+    this.ctx = cv.getContext('2d');
+    if (!this.off) {
+      this.off = document.createElement('canvas');
+      this.off.width = this.COLS;
+      this.off.height = this.BINS;
+      this.offCtx = this.off.getContext('2d');
+      this.img = this.offCtx.createImageData(this.COLS, this.BINS);
+    }
+    this.draw();
+  },
+
+  unbind() { this.canvas = null; this.ctx = null; },
+
+  /* 原生那条路的抽头开关（见 DmrEngine.setCwTap）。
+     浏览器里没有 Android 对象 —— 静默跳过，网页版只靠 HOSE 那一路。 */
+  tap(on) {
+    on = !!on;
+    if (on === this.tapOn) return;
+    this.tapOn = on;
+    try { if (window.Android && Android.cwTap) Android.cwTap(on); } catch (e) {}
+  },
+
+  clear() {
+    if (this.cols) this.cols.fill(0);
+    if (this.raw) this.raw.fill(0);
+    this.cn = 0; this.ch = 0; this.rh = 0; this.rn = 0;
+    this.draw();
+  },
+
+  draw() {
+    const cv = this.canvas, g = this.ctx;
+    if (!cv || !g) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const cssW = cv.clientWidth || 300, cssH = cv.clientHeight || 150;
+    const W = Math.max(1, Math.round(cssW * dpr)), H = Math.max(1, Math.round(cssH * dpr));
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, cssW, cssH);
+    g.fillStyle = '#0a0e13';
+    g.fillRect(0, 0, cssW, cssH);
+
+    const padL = 30, padR = 4, padT = 4, padB = 14;
+    const pw = Math.max(20, cssW - padL - padR);
+    const ph = Math.max(20, cssH - padT - padB);
+
+    const cols = this.COLS, B = this.BINS, n = this.cn;
+    const img = this.img, data = img.data, L = this.lut(), src = this.cols, ch = this.ch;
+    const scale = this.SCALE;
+
+    /* 空的部分画成底色：整张画布先清零，再填右边 n 列 */
+    for (let j = 0; j < cols - n; j++) {
+      for (let b = 0; b < B; b++) {
+        const o = ((B - 1 - b) * cols + j) * 4;
+        data[o] = 5; data[o + 1] = 7; data[o + 2] = 10; data[o + 3] = 255;
+      }
+    }
+    for (let k = 0; k < n; k++) {
+      const sc = ((ch - n + k) % cols + cols) % cols;
+      const x = cols - n + k;
+      for (let b = 0; b < B; b++) {
+        let t = src[sc * B + b] / scale;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        const li = ((t * 255) | 0) * 3;
+        const o = ((B - 1 - b) * cols + x) * 4;
+        data[o] = L[li]; data[o + 1] = L[li + 1]; data[o + 2] = L[li + 2]; data[o + 3] = 255;
+      }
+    }
+    this.offCtx.putImageData(img, 0, 0);
+
+    g.imageSmoothingEnabled = true;
+    g.drawImage(this.off, padL, padT, pw, ph);
+
+    /* 频段刻度：只有 3 条，面板窄，多一点就是噪音 */
+    g.strokeStyle = 'rgba(215,227,238,.12)';
+    g.fillStyle = '#8d97a5';
+    g.font = '10px ui-monospace,Consolas,monospace';
+    g.textAlign = 'right';
+    g.textBaseline = 'middle';
+    [400, 800, 1200].forEach(hz => {
+      const y = padT + ph - (hz - 400) / 800 * ph;
+      g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + pw, y); g.stroke();
+      /* 顶/底两格的文字往里收 6px，否则 1200 在画布外只剩半行 */
+      const ty = Math.max(padT + 6, Math.min(padT + ph - 6, y));
+      g.fillText(hz + '', padL - 3, ty);
+    });
+
+    if (!n) {
+      g.fillStyle = '#66707e';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      g.font = '12px "Segoe UI",system-ui,sans-serif';
+      g.fillText('等待接收音频…', padL + pw / 2, padT + ph / 2);
+    }
+  }
+};
+
 function renderTab(){
   const t=state.tab;
   [...$('#tabTabs').children].forEach(b=>b.classList.toggle('on',b.dataset.tab===t));
   const tools=$('#tabTools'), body=$('#tabBody');
+  /* 频谱的 canvas 不在 DOM 里了就把引用清掉，免得继续往一个已经摘掉的画布上画 */
+  if(t!=='cw'){ CW.unbind(); CW.tap(false); }
   if(t==='scan'){
     const picked=state.scan.picked;
     $('#tabCount').textContent=scanSet().length;
@@ -22703,6 +23062,18 @@ function renderTab(){
         '<button class="mini danger" data-act="recDel" data-id="'+r.id+'" title="删除">✕</button>'+
         '</div></div>';
     }).join('');
+  } else if(t==='cw'){
+    $('#tabCount').textContent='65 bin';
+    tools.innerHTML='<div class="tools" style="border-bottom:1px solid var(--border2)">'+
+      '<span style="font-size:11.5px;color:var(--dim)">DeepCW 模型输入 · 正在收听的音频</span>'+
+      '<div class="spacer"></div>'+
+      '<button class="btn sm" data-act="cwClear">清空</button></div>';
+    body.innerHTML='<div style="padding:8px">'+
+      '<canvas id="cwScope" height="150"></canvas>'+
+      '<div class="cwhint"><span><b>3.2 kHz</b></span><span>400–1200 Hz</span>'+
+      '<span>65 bin</span><span>15 ms/帧</span><span>颜色 = 幅度 / 噪声底</span></div></div>';
+    CW.bind($('#cwScope'));
+    CW.tap(true);
   } else {
     tools.innerHTML='<div class="tools" style="border-bottom:1px solid var(--border2)">'+
       '<span style="font-size:11.5px;color:var(--dim)">本次会话的通话记录</span>'+
@@ -24486,6 +24857,24 @@ function txPttUp(e){
 window.onDmrEvent=function(json){
   let ev; try{ ev=JSON.parse(json); }catch(e){ return; }
   switch(ev.type){
+    case 'rwaudio': {
+      /* 原生 MMDVM 那条路的 PCM —— HOSE 这边根本看不到的那一半。
+         原生解出来的就是 8 kHz 的 int16，页面只负责把它喂进同一个频谱前端；
+         算频谱的代码只有一份，避免 Java 和 JS 两份实现慢慢漂。 */
+      try{
+        const s=atob(ev.b64||''), n=s.length>>1;
+        if(n>0){
+          const f=new Float32Array(n);
+          for(let i=0;i<n;i++){
+            let v=(s.charCodeAt(i<<1)|(s.charCodeAt((i<<1)+1)<<8))&0xFFFF;
+            if(v>=0x8000)v-=0x10000;
+            f[i]=v/32768;
+          }
+          CW.feed(f);
+        }
+      }catch(e){}
+      break;
+    }
     case 'vocoder':
       TX.voc=!!ev.ready;
       txPill('txPillVoc','声码器',TX.voc?'已就绪':'未加载',TX.voc?'ok':'bad');
@@ -25465,6 +25854,7 @@ document.addEventListener('click',e=>{
         state.recs.forEach(r=>{try{URL.revokeObjectURL(r.url);}catch(x){}});
         state.recs=[]; stopRecPlay(); renderTab(); toast('录音已清空'); return;
       case 'logClear': state.calls=[]; store.set('calls',[]); renderLog(); toast('记录已清空'); return;
+      case 'cwClear': CW.clear(); toast('频谱已清空'); return;
       case 'station': openStation(b.dataset.call); return;
       case 'all': {
         const g=[...document.querySelectorAll('.group')].find(x=>{
@@ -25793,7 +26183,7 @@ function boot(){
   }
   txMarkTarget();
   loadTalkgroups(); loadMasters(); ensureLive();
-  setInterval(()=>{ renderNowTimer(); renderVu(); },100);
+  setInterval(()=>{ renderNowTimer(); renderVu(); CW.draw(); },100);
   setInterval(liveTick,1000);
   setInterval(renderStatus,2000);
   setInterval(rxStatsTick,2000);

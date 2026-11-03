@@ -723,6 +723,53 @@ ok('自检读数占满整行（不再被 38px 数值位压成竖排）',
   diagW.w > diagW.row * 0.7, diagW);
 ok('自检读数只占一两行（没有逐字换行）', diagW.h < 60, diagW);
 
+console.log('\n=== 频谱页签（v2.7.0） ===');
+const cwTab = await ev(`
+  /* 前面的折叠测试可能把这块面板收起来了 —— 收起时 tabBody 是 display:none，
+     量到的是 0×0。先展开再量。 */
+  const panel=document.getElementById('tabPanel');
+  if(panel&&panel.classList.contains('folded'))document.getElementById('tabFold').click();
+  /* 手机端一次只显示一栏 —— 前面的用例可能切到了「实时活动」，那样左栏是
+     display:none，画布量到 0×0。先把栏位切回「我的收听」。 */
+  if(typeof mobCol==='function')mobCol(0);
+  /* 前面的用例停在设置页 —— 那时 #viewListen 是 display:none，画布量到 0×0。 */
+  if(typeof setView==='function')setView('listen');
+  document.querySelector('[data-tab="cw"]').click();
+  await new Promise(r=>setTimeout(r,250));
+  const cv=document.getElementById('cwScope');
+  const r=cv?cv.getBoundingClientRect():null;
+  return {存在:!!cv, 宽:r?Math.round(r.width):0, 高:r?Math.round(r.height):0,
+          绑定:!!CW.canvas, 提示:!!document.querySelector('.cwhint'),
+          列:CW.cols?CW.cols.length/CW.BINS:0};`);
+ok('「频谱」页签能打开并建出画布', cwTab.存在 && cwTab.宽 > 100 && cwTab.高 >= 100, cwTab);
+ok('画布已绑定到 CW（会跟 100 ms tick 重绘）', cwTab.绑定 === true, cwTab);
+ok('画布是 65 行的瀑布（列数 = 900）', cwTab.列 === 900, cwTab);
+
+const cwFeed = await ev(`
+  CW.clear();
+  const sr=8000, N=8000;
+  const pcm=new Float32Array(N);
+  for(let i=0;i<N;i++) pcm[i]=0.3*Math.sin(2*Math.PI*700*i/sr);
+  const before=CW.cn;
+  CW.feed(pcm);
+  /* 再走一遍真正的抽头：μ-law 编码后交给 Audio_.decode() */
+  const enc=s=>{const BIAS=0x84,CLIP=32635;let sign=s<0?0x80:0;
+    let mag=Math.min(CLIP,Math.round(Math.abs(s)*32767))+BIAS;let exp=7;
+    for(let mask=0x4000;(mag&mask)===0&&exp>0;exp--,mask>>=1);
+    return (~(sign|(exp<<4)|((mag>>(exp+3))&0x0F)))&0xFF;};
+  const u=new Uint8Array(160); for(let j=0;j<160;j++)u[j]=enc(pcm[j]);
+  const t0=CW.total; Audio_.decode(u); const t1=CW.total;
+  return {before, afterFeed:CW.cn, 新增样本:t1-t0, noise:+CW.noise.toFixed(5)};`);
+ok('喂 1 秒 700 Hz → 至少 40 列（66.7 列/秒）', cwFeed.afterFeed - cwFeed.before >= 40, cwFeed);
+ok('Audio_.decode() 真的喂到了频谱（抽头位置正确）', cwFeed.新增样本 >= 60, cwFeed);
+ok('噪声底被估出来（不是 0，也不是 1）', cwFeed.noise > 0 && cwFeed.noise !== 1, cwFeed);
+
+const cwOff = await ev(`
+  document.querySelector('[data-tab="scan"]').click();
+  await new Promise(r=>setTimeout(r,150));
+  return {绑定:!!CW.canvas, tap:CW.tapOn};`);
+ok('切走页签后停止绘制，也关掉原生抽头', cwOff.绑定 === false && cwOff.tap === false, cwOff);
+
 console.log(`\n================  ${pass} 通过 / ${fail} 失败  ================`);
 ws.close(); chrome.kill();
 await sleep(300);

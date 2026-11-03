@@ -110,6 +110,49 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
      */
     private static final int STREAM_HOLD_MS = 400;
 
+    /* ===== 接收频谱的抽头 =====
+     *
+     * HOSE 那条路的音频在页面里，页面自己抽；原生 MMDVM 这条路（DMRD → 声码器
+     * → AudioTrack）页面完全拿不到 PCM —— 所以这里把解出来的 8 kHz PCM 甩给页面。
+     *
+     * 为什么不在 Java 里把频谱算好：模型要的是 3.2 kHz / 65 bin 那套固定的前端，
+     * 它已经在页面里和 Python 参考实现逐值对过（tests/deepcw）。在这里再写一份，
+     * 两份迟早会漂，而漂了的后果是「模型很有信心地输出错字」，不报错。
+     *
+     * 代价是每秒约 16 KB 的 base64 —— 所以**只在「频谱」页签打开时才发**，
+     * 页面关掉页签就调 setCwTap(false)。
+     */
+    private volatile boolean cwTap = false;
+    /** 240 ms 一批（1920 个 8 kHz 样本）：4 次/秒，够顺滑又不至于把桥刷爆 */
+    private final short[] cwBuf = new short[1920];
+    private int cwLen = 0;
+
+    public void setCwTap(boolean on) {
+        cwTap = on;
+        if (!on) cwLen = 0;
+        emit("cwtap", "on", on);
+    }
+
+    private void cwTapPush(short[] pcm, int n) {
+        if (!cwTap || pcm == null || n <= 0) return;
+        int off = 0;
+        while (off < n) {
+            int take = Math.min(n - off, cwBuf.length - cwLen);
+            System.arraycopy(pcm, off, cwBuf, cwLen, take);
+            cwLen += take;
+            off += take;
+            if (cwLen < cwBuf.length) continue;
+            byte[] b = new byte[cwBuf.length * 2];
+            for (int i = 0; i < cwBuf.length; i++) {
+                b[i * 2] = (byte) cwBuf[i];
+                b[i * 2 + 1] = (byte) (cwBuf[i] >> 8);
+            }
+            cwLen = 0;
+            emit("rwaudio", "b64", android.util.Base64.encodeToString(b, android.util.Base64.NO_WRAP));
+        }
+    }
+
+
     /** 回声测试组（BrandMeister Parrot）。发到这里，主站把你说的原样回放。 */
     private static final int PARROT_TG = 9990;
 
@@ -620,6 +663,7 @@ public final class DmrEngine implements MmdvmSession.Listener, DmrTransmitter.Li
                 curSlot = slot;
                 curPrivate = (flags & DmrRx.FLAG_PRIVATE) != 0;
                 audio.feed(pcm, n);
+                cwTapPush(pcm, n);
             }
         }
 
