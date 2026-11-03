@@ -143,6 +143,8 @@ const fed = await ev(`
 console.log('喂数据：', JSON.stringify(fed));
 
 await sleep(600);
+/* 文档用截图：PTT 悬浮钮会盖在瀑布图上，截之前先摘掉 */
+await ev(`const p=document.getElementById('txPtt'); if(p)p.style.display='none'; return true;`);
 /* 3. 原生那条路：伪造一条 rwaudio 事件，确认 base64 → Int16 → CW.feed 这段也通 */
 const nativeEv = await ev(`
   const before=CW.cn;
