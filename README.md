@@ -234,9 +234,10 @@ beacon-dmr/
 │   └── verify_apk.py            核对 APK 里的 dex 和 assets
 ├── tests/
 │   ├── smoke_cn.js              CDP 冒烟测试（166 项断言）
-│   ├── smoke_ui.js              CDP 交互测试（63 项断言：收听 / 折叠 / 多话组）
+│   ├── smoke_ui.js              CDP 交互测试（154 项断言：收听 / 折叠 / 多话组）
 │   ├── tx_chain_sim.py          发射前端链路仿真（新旧链对比 + 电平扫描）
 │   ├── tx_filter_resp.py        发射滤波器频响计算
+│   ├── sdr_sim.py               模拟一台 SDR 的频谱画面（峰线 + 瀑布，示意图用）
 │   └── check_html.py            单文件 HTML 的静态检查
 └── docs/
     ├── 实现说明.md              完整开发日志，3400 行，按问题逐条记录
