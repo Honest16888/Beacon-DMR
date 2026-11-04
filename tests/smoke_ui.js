@@ -836,6 +836,48 @@ ok('自检读数占满整行（不再被 38px 数值位压成竖排）',
   diagW.w > diagW.row * 0.7, diagW);
 ok('自检读数只占一两行（没有逐字换行）', diagW.h < 60, diagW);
 
+console.log('\n=== 12b. 实时活动的分类查看（v2.9.0）===');
+const lc = await ev(`
+  /* 造四种行：中国台站在国际组 / 外国台站 / 国内网话组 / 个呼。
+     判据要能分开它们，否则「国内 / 国际」两档就是摆设。 */
+  const now=Date.now();
+  const mk=(k,tg,call,srcId,priv)=>({key:k,tg,call,srcId,alias:'',slot:0,master:'',
+    start:now,seen:now,priv:!!priv});
+  const keepSubs=state.subscribed.slice(), keepScan=state.scan.on;
+  state.subscribed=[46001]; state.scan.on=false;
+  state.active.clear();
+  state.active.set('a',mk('a',46001,'BG5ABC',4601234,false));
+  state.active.set('b',mk('b',2621,'DL1ABC',2620123,false));
+  state.active.set('c',mk('c',86023,'BH7XYZ',4606666,false));
+  state.active.set('d',mk('d',0,'BG7ZZZ',3100000,true));
+  renderLive(true);
+  const box=document.getElementById('liveCat');
+  const num=b=>Number((b.textContent.match(/\\d+/)||[0])[0]);
+  const chips=[...box.children].map(b=>({k:b.dataset.cat,n:num(b)}));
+  const hintAll=document.getElementById('liveHint').textContent;
+  box.querySelector('[data-cat="cn"]').click();
+  const cnTgs=[...document.querySelectorAll('#liveList .live-row')].map(el=>el.dataset.tg).sort();
+  const hintCn=document.getElementById('liveHint').textContent;
+  const saved=String(localStorage.getItem('dmr.liveCat')||'');
+  const catNow=state.liveCat, mirror=state.onlyMine;
+  box.querySelector('[data-cat="intl"]').click();
+  const intlTgs=[...document.querySelectorAll('#liveList .live-row')].map(el=>el.dataset.tg);
+  const privInIntl=document.querySelectorAll('#liveList .live-row.priv').length;
+  box.querySelector('[data-cat="all"]').click();
+  state.active.clear(); state.subscribed=keepSubs; state.scan.on=keepScan; renderLive(true);
+  return {chips, hintAll, cnTgs, hintCn, saved, catNow, mirror, intlTgs, privInIntl};`);
+const chipOf = k => (lc.chips.find(c => c.k === k) || {}).n;
+ok('分类条有五档（全部/订阅/国内/国际/个呼）',
+  lc.chips.length === 5 && ['all','mine','cn','intl','priv'].every(k => chipOf(k) !== undefined), lc.chips);
+ok('条数与分类一致（中国台站+国内组算国内，个呼单独一档）',
+  chipOf('all') === 4 && chipOf('cn') === 2 && chipOf('intl') === 1 && chipOf('priv') === 1 && chipOf('mine') === 1,
+  lc.chips);
+ok('点「国内」只剩国内那两行', lc.cnTgs.length === 2 && lc.cnTgs.join(',') === '46001,86023', lc.cnTgs);
+ok('点「国际」不含个呼（个呼的 tg 是对方 ID）',
+  lc.intlTgs.length === 1 && lc.privInIntl === 0, lc);
+ok('标题跟着分类变', /国内/.test(lc.hintCn || '') && /Last Heard|最近通话/.test(lc.hintAll || ''), lc);
+ok('选择存本地，并同步到 onlyMine 镜像', lc.saved.indexOf('cn') >= 0 && lc.mirror === false, lc);
+
 console.log('\n=== 频谱页签：音频频谱（SDR 视图，v2.8.0） ===');
 const sdrTab = await ev(`
   /* 前面的折叠测试可能把这块面板收起来了 —— 收起时 tabBody 是 display:none，

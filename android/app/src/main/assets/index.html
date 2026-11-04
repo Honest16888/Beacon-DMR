@@ -925,6 +925,13 @@ html[data-theme="dark"] .qbadge span.priv{background:#2b1416;border-color:#4a202
 .chip.ban{border-color:var(--tx);background:var(--tx2);color:var(--tx)}
 .chip.ban b{color:var(--tx)}
 .chip.add{cursor:pointer}
+/* 实时活动的分类条：一行小胶囊，带条数。外观和话组库的 .chip 一致，
+   但这里是「单选筛选器」，所以选中态更明确（--accent 描边 + 淡底）。 */
+.livecat{display:flex;flex-wrap:wrap;gap:4px;padding:0 8px 8px}
+.livecat .chip{cursor:pointer}
+.livecat .chip.on{border-color:var(--accent);background:var(--accent2);color:var(--accent)}
+.livecat .chip.on b{color:var(--accent)}
+.livecat .chip.zero{opacity:.45}
 
 @media (max-width:760px){
   .qcard{padding:11px 12px 12px}
@@ -1346,8 +1353,10 @@ body.dragging .dghint{display:block}
           </div>
           <div class="tools">
             <div class="search"><input id="liveSearch" placeholder="筛选：呼号 / 话组号 / 名称"></div>
-            <button class="btn sm" id="btnOnlyMine">只看我的</button>
           </div>
+          <!-- 分类查看（v2.9.0）：全部 / 订阅 / 国内 / 国际 / 个呼。
+               条数按「当前搜索词过滤之后」算，点之前就知道会看到几条。 -->
+          <div class="livecat" id="liveCat"></div>
           <div class="pb" id="liveList"></div>
         </section>
       </div>
@@ -20047,6 +20056,9 @@ const state = {
   /* 上一个「有呼叫但被让路」的组，用于限流提示 {tg,at} */
   holdNotice:null,
   libTab:'common', libQuery:'', liveQuery:'', onlyMine:false,
+  /* 实时活动的分类：all / mine / cn / intl / priv。
+     onlyMine 保留成 liveCat==='mine' 的镜像 —— 别处（和记忆里）都按它读。 */
+  liveCat:'all',
   mcol:0,                                   // 手机端当前显示的分栏
   stats:{ sessions:[], startedAt:Date.now() },
   lastLogKey:''
@@ -22498,24 +22510,88 @@ function sigBars(rssi){
 /* ============================ 渲染：实时活动 ============================ */
 let liveSig='';
 function liveSub(s){ return s.priv?'私密呼叫（不广播）':tgLabel(s.tg); }
+
+/* 「国内」的判据有两条，缺一不可 —— 只看话组号的话，BrandMeister 这条全球流里
+   国内话组基本不出现（它们在国内网 radiowo 上），分类永远是 0 条：
+
+   ① 话组在 radiowo 那张表里（33 个，含 860xx）；
+   ② 或者这一路的**台站**是中国的：呼号以 B 开头（BY/BD/BG/BH/BI/BA…），
+      或 DMR ID 落在 460 段。
+
+   ★ 别用数值区间猜话组：① 「46 开头」是 BrandMeister 上的中国区组，全球都在用；
+     ② 「>=86000」会把个呼行算进来 —— 个呼的 tg 是对方的 DMR ID（7 位数字）。 */
+function isCnTg(tg){
+  tg=Number(tg)||0;
+  return !!(CN&&CN.tg&&CN.tg[tg]);
+}
+function isCnStation(s){
+  const call=String(s&&s.call||'').toUpperCase();
+  if(/^B[A-Z0-9]/.test(call))return true;          /* BY BD BG BH BI BA / B0…B9 */
+  const id=String(Number(s&&s.srcId)||0);
+  return id.slice(0,3)==='460';
+}
+function isCnRow(s){ return isCnTg(Number(s.tg)||0)||isCnStation(s); }
+const LIVE_CATS=[
+  {k:'all',  label:'全部'},
+  {k:'mine', label:'订阅'},
+  {k:'cn',   label:'国内'},
+  {k:'intl', label:'国际'},
+  {k:'priv', label:'个呼'},
+];
+function liveCatMatch(s,cat){
+  /* ★ 「全部」必须先返回：下面那句 `if(s.priv)return false` 是为了把个呼挡在
+     「国内 / 国际」之外（个呼的 tg 是对方 ID，不是话组号），但顺序写错就会连
+     「全部」也把它挡掉 —— 现象是个呼在列表里凭空消失。 */
+  if(cat==='all')return true;
+  if(cat==='priv')return !!s.priv;
+  if(s.priv)return false;
+  const tg=Number(s.tg)||0;
+  if(cat==='mine')return state.subscribed.includes(tg)||(state.scan.on&&state.scan.list.includes(tg));
+  if(cat==='cn')return isCnRow(s);
+  if(cat==='intl')return !isCnRow(s);
+  return true;
+}
+/* 分类条：条数按「搜索词过滤之后」算。0 条也列出来（压暗），
+   否则用户会以为这个分类没做。 */
+function renderLiveCats(rows){
+  const box=document.getElementById('liveCat');
+  if(!box)return;
+  box.innerHTML=LIVE_CATS.map(c=>{
+    const n=rows.filter(s=>liveCatMatch(s,c.k)).length;
+    const on=state.liveCat===c.k;
+    return '<button class="chip'+(on?' on':'')+(n?'':' zero')+
+      '" data-cat="'+c.k+'" aria-pressed="'+(on?'true':'false')+'">'+c.label+
+      '<b>'+n+'</b></button>';
+  }).join('');
+}
 function renderLive(force){
   const q=state.liveQuery.trim().toLowerCase();
   let rows=[...state.active.values()];
-  if(state.onlyMine)rows=rows.filter(s=>state.subscribed.includes(Number(s.tg))||state.scan.list.includes(Number(s.tg)));
   if(q)rows=rows.filter(s=>{
     const n=(tgName(s.tg)||'').toLowerCase();
     return String(s.tg).includes(q)||n.includes(q)||(s.call||'').toLowerCase().includes(q)
       ||(s.name||'').toLowerCase().includes(q)||(s.alias||'').toLowerCase().includes(q);
   });
   rows.sort((a,b)=>(b.seen||0)-(a.seen||0)||(b.start||0)-(a.start||0));
+  /* 先画分类条（条数用搜索之后的全量），再按分类收窄 */
+  renderLiveCats(rows);
+  state.onlyMine=(state.liveCat==='mine');
+  const catLabel=(LIVE_CATS.find(c=>c.k===state.liveCat)||{}).label||'全部';
+  rows=rows.filter(s=>liveCatMatch(s,state.liveCat));
   $('#liveCount').textContent=state.active.size;
-  $('#liveHint').textContent=state.onlyMine?'只看我的话组'
-    :(state.net==='cn'?'国内最近通话':'全球 Last Heard');
+  $('#liveHint').textContent=state.liveCat==='all'
+    ? (state.net==='cn'?'国内最近通话':'全球 Last Heard')
+    : ('实时活动 · '+catLabel);
   const sig=rows.map(s=>s.key+'|'+s.tg+'|'+s.call+'|'+(s.alias||'')+'|'+s.rssi+'|'+s.slot).join(',');
   if(!force&&sig===liveSig){ tickLive(); return; }
   liveSig=sig;
   if(!rows.length){
-    $('#liveList').innerHTML='<div class="empty"><b>暂无活动</b>'+(state.onlyMine?'你的话组当前没有通话':'全球当前没有正在进行的通话')+'</div>';
+    const why=state.liveCat==='mine'?'你的话组当前没有通话'
+      :state.liveCat==='cn'?'国内话组当前没有通话'
+      :state.liveCat==='intl'?'国际话组当前没有通话'
+      :state.liveCat==='priv'?'当前没有个呼'
+      :'全球当前没有正在进行的通话';
+    $('#liveList').innerHTML='<div class="empty"><b>暂无活动</b>'+why+'</div>';
     return;
   }
   $('#liveList').innerHTML=rows.map(s=>{
@@ -26125,12 +26201,14 @@ $('#addInput').addEventListener('keydown',e=>{
   e.target.value='';
 });
 $('#liveSearch').addEventListener('input',e=>{ state.liveQuery=e.target.value; renderLive(true); });
-$('#btnOnlyMine').addEventListener('click',()=>{
-  state.onlyMine=!state.onlyMine;
-  const b=$('#btnOnlyMine');
-  b.style.color=state.onlyMine?'var(--accent)':'';
-  b.style.borderColor=state.onlyMine?'var(--accent)':'';
-  b.style.background=state.onlyMine?'var(--accent2)':'';
+/* 分类条（v2.9.0）：单选。点已选中的那个不取消 —— 分类没有「再点一次看全部」的语义，
+   要看全部就点「全部」。选择存本地，下次进来还是这一档。 */
+$('#liveCat').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-cat]'); if(!b)return;
+  const k=b.dataset.cat;
+  if(k===state.liveCat)return;
+  state.liveCat=k; state.onlyMine=(k==='mine');
+  store.set('liveCat',k);
   renderLive(true);
 });
 $('#libSearch').addEventListener('input',e=>{ state.libQuery=e.target.value; renderLib(); });
@@ -26460,6 +26538,10 @@ function boot(){
   /* 窄带增强：默认开。关掉的人下次进来还得是关的 —— 这是排查「喇叭噼啪」
      时唯一能自己动手的开关，不能每次都被重置回去。 */
   state.presence=store.get('presence',false)===true;
+  /* 实时活动的分类也记住：上一档是「国内」，下次进来还停在国内 */
+  { const lc=store.get('liveCat','all');
+    state.liveCat=LIVE_CATS.some(c=>c.k===lc)?lc:'all';
+    state.onlyMine=(state.liveCat==='mine'); }
   state.awakeOn=store.get('awakeOn',true)!==false;
   state.scanResume=store.get('scanResume',true)!==false;
   /* 通联的接收参数 */
