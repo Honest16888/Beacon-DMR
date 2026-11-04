@@ -1,0 +1,9 @@
+﻿{
+  "name": "deepcw-poc",
+  "private": true,
+  "type": "module",
+  "description": "DeepCW 模型推理 PoC：只验证 onnxruntime-web 的 wasm 能不能跑出与 Python 一致的 logits",
+  "dependencies": {
+    "onnxruntime-web": "1.20.1"
+  }
+}

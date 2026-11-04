@@ -9,6 +9,11 @@
 | **MMDVMHost**（G4KLX） | GPL-2.0-or-later | FEC 编解码：RS(12,9) / BPTC(196,96) / Golay(20,8,7) / Hamming / CRC | <https://github.com/g4klx/MMDVMHost> |
 | **droidstar_vocoder_plugin** | GPL-3.0-or-later | 预编译动态库 `libdsvocoder.so`（arm64-v8a / armeabi-v7a），通过 `dlopen` 加载 | <https://github.com/wiblingen/droidstar_vocoder_plugin> |
 | **mbelib** | GPL-2.0 | AMBE 解码，间接经由上述声码器插件 | <https://github.com/szechyjs/mbelib> |
+| **DeepCW**（e04/deepcw-engine） | MIT | 摩尔斯解码模型 `model.onnx` + `model.onnx.json`（只用于 `tests/deepcw/` 的频谱与推理验证，**不进 APK**） | <https://github.com/e04/deepcw-engine> |
+| **onnxruntime-web** | MIT | DeepCW PoC 页（`tests/deepcw/poc/`）里的 wasm 推理运行时，走 `npm install` 装到 `node_modules/`，不进仓库也不进 APK | <https://github.com/microsoft/onnxruntime> |
+
+`model.onnx` / `model_narrow.onnx`（共约 16 MB）**不在仓库里** —— 二进制进 git 会一直
+留在历史里。用 `python tools/fetch_deepcw.py` 取，脚本会核对 sha256。
 
 ## 关于 `libdsvocoder.so`
 

@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>DeepCW onnxruntime-web PoC</title>
+<style>
+  :root{color-scheme:dark}
+  body{margin:0;padding:24px;background:#0d1117;color:#c9d1d9;
+       font:13px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace}
+  h1{font-size:15px;margin:0 0 4px;color:#e6edf3}
+  .sub{color:#8b949e;margin-bottom:18px}
+  table{border-collapse:collapse;margin:10px 0 18px}
+  td{padding:2px 12px 2px 0;vertical-align:top}
+  td.k{color:#8b949e;white-space:nowrap}
+  td.v{color:#e6edf3}
+  .ok{color:#3fb950}.bad{color:#f85149}.warn{color:#d29922}
+  pre{margin:0;white-space:pre-wrap;color:#c9d1d9}
+  #log{margin-top:14px;color:#8b949e;font-size:12px}
+</style>
+</head>
+<body>
+<h1>DeepCW 模型 × onnxruntime-web</h1>
+<div class="sub">输入 = <code>tests/out/deepcw/spec.f32</code>（Python 金标准频谱），
+对照 = <code>ref_logits.f32</code>（Python onnxruntime 同一份权重）。界面无关，只验 wasm。</div>
+
+<table id="env"></table>
+<table id="res"></table>
+<pre id="text"></pre>
+<div id="log"></div>
+
+<script src="node_modules/onnxruntime-web/dist/ort.wasm.min.js"></script>
+<script>
+const KEEP = 6;
+const ORT_DIST = new URL('node_modules/onnxruntime-web/dist/', document.baseURI).href;
+// 结尾必须有斜杠、且是绝对 URL：ort 1.20 会用 dynamic import 去拉 ort-wasm-*.mjs，
+// 传相对路径（哪怕带目录）会被当成 bare specifier，报
+// 「Failed to resolve module specifier 'node_modules/...'」—— 看着像缺文件，其实是 URL 形状不对。
+// 页面在 /tests/deepcw/poc/ 下：仓库根是 ..\..\..，tests/out 是 ..\..\out
+const MODEL = '../../../third_party/deepcw/model.onnx';
+const META = '../../../third_party/deepcw/model.onnx.json';
+const SPEC = '../../out/deepcw/spec.f32';
+const REF = '../../out/deepcw/ref_logits.f32';
+
+const getJSON = async url => {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`GET ${url} → HTTP ${r.status}`);
+  return r.json();
+};
+const getF32 = async url => {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`GET ${url} → HTTP ${r.status}`);
+  return new Float32Array(await r.arrayBuffer());
+};
+
+const rows = (el, list) => { el.innerHTML = list.map(([k, v]) => `<tr><td class="k">${k}</td><td class="v">${v}</td></tr>`).join(''); };
+const log = m => { document.getElementById('log').textContent += m + '\n'; };
+
+// CTC 贪心：逐帧 argmax → 合并相邻重复 → 去 blank
+function greedy(logits, T, C, chars, blank) {
+  const idx = new Int32Array(T);
+  for (let t = 0; t < T; t++) {
+    let best = 0, bv = logits[t * C];
+    for (let c = 1; c < C; c++) { const v = logits[t * C + c]; if (v > bv) { bv = v; best = c; } }
+    idx[t] = best;
+  }
+  let out = '', prev = -1;
+  for (let t = 0; t < T; t++) { const i = idx[t]; if (i !== prev && i !== blank) out += chars[i]; prev = i; }
+  return { text: out, idx };
+}
+
+async function main() {
+  const t0 = performance.now();
+  const env = [];
+  env.push(['UA', navigator.userAgent.replace(/^Mozilla\/5\.0 /, '')]);
+  env.push(['ort 版本', ort.version || '(未导出)']);
+  env.push(['crossOriginIsolated', String(self.crossOriginIsolated)]);
+  env.push(['SharedArrayBuffer', typeof SharedArrayBuffer === 'function' ? '有' : '无']);
+
+  const meta = await getJSON(META);
+  const specBuf = await getF32(SPEC);
+  const bins = meta.spectrogram_frequency_bins, C = meta.num_classes, blank = meta.blank_index;
+  const frames = specBuf.length / bins;
+  const refBuf = await getF32(REF);
+  const refT = refBuf.length / C;
+
+  env.push(['输入频谱', `${frames} 帧 × ${bins} bin（${(frames / 66.667).toFixed(2)} s）`]);
+  env.push(['参照 logits', `${refT} 帧 × ${C} 类`]);
+
+  // wasm 并发：单线程 —— 手机 WebView 里 SharedArrayBuffer 常常拿不到，
+  // 单线程是两个环境都能跑的那一档，PoC 不追性能。
+  ort.env.wasm.numThreads = 1;
+  ort.env.wasm.wasmPaths = ORT_DIST;
+  ort.env.logLevel = 'error';
+  env.push(['numThreads', String(ort.env.wasm.numThreads)]);
+
+  rows(document.getElementById('env'), env);
+
+  const tLoad = performance.now();
+  const session = await ort.InferenceSession.create(MODEL, {
+    executionProviders: ['wasm'],
+    graphOptimizationLevel: 'all',
+  });
+  const tSession = performance.now() - tLoad;
+
+  // 到底加载了哪一档 wasm —— 这是「SIMD 有没有生效」唯一可靠的证据
+  const wasmFiles = performance.getEntriesByType('resource')
+    .map(e => e.name.split('/').pop()).filter(n => /^ort-wasm.*\.wasm$/.test(n));
+  const usedWasm = wasmFiles[0] || '(缓存命中，未记录)';
+
+  const input = new ort.Tensor('float32', specBuf, [1, 1, frames, bins]);
+  const tRun = performance.now();
+  const out = await session.run({ [meta.onnx_input_name]: input });
+  const runMs = performance.now() - tRun;
+  const outT = out[meta.onnx_output_name];
+  const dims = outT.dims;                       // [1, T, C]
+  const got = outT.data;                        // Float32Array
+  const T = dims[1];
+
+  // ===== 与 Python 逐值对比 =====
+  // 输出是 log_probs：绝对值能到 −31（p≈3e-14），那里 0.06 的绝对差在概率上只有 1e-15，
+  // 是纯 f32 舍入、不携带任何信息。所以判据放两处：
+  //   ① logits 空间：余弦 + 逐帧 argmax + 解码文本（结构一致性）
+  //   ② 概率空间：exp(logit) 的最大差（数值一致性，这个才该用绝对阈值）
+  let maxD = 0, sumD = 0, dot = 0, na = 0, nb = 0, argmaxSame = 0, n = 0;
+  let maxPD = 0, atMax = null, maxTop1PD = 0, atTop1 = null;
+  const m = Math.min(T, refT) * C;
+  for (let i = 0; i < m; i++) {
+    const a = got[i], b = refBuf[i];
+    const d = Math.abs(a - b);
+    if (d > maxD) { maxD = d; atMax = { i, a, b }; }
+    const dp = Math.abs(Math.exp(a) - Math.exp(b));
+    if (dp > maxPD) maxPD = dp;
+    sumD += d; dot += a * b; na += a * a; nb += b * b;
+  }
+  const g1 = greedy(got, T, C, meta.chars, blank);
+  const g2 = greedy(refBuf, refT, C, meta.chars, blank);
+  const pdTop1 = [];
+  for (let t = 0; t < Math.min(T, refT); t++) {
+    if (g1.idx[t] === g2.idx[t]) argmaxSame++;
+    n++;
+    // 最该看的一处：每帧 top-1 的概率差（其余格子的概率本来就接近 0，
+    // 它们的绝对差只反映 f32 在 log 空间的噪声）
+    const c = g1.idx[t];
+    const pa = Math.exp(got[t * C + c]), pb = Math.exp(refBuf[t * C + c]);
+    const dTop = Math.abs(pa - pb);
+    pdTop1.push(dTop);
+    if (dTop > maxTop1PD) { maxTop1PD = dTop; atTop1 = { t, c, a: pa, b: pb }; }
+  }
+  pdTop1.sort((x, y) => x - y);
+  const q = f => pdTop1[Math.min(pdTop1.length - 1, Math.floor(f * pdTop1.length))] || 0;
+  const cos = dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
+
+  const ok = T === refT && cos > 0.999999 && argmaxSame === n && g1.text === g2.text && maxTop1PD < 5e-3;
+  const res = [
+    ['输出形状', `${JSON.stringify(dims)}` + (T === refT ? ' <span class="ok">✓ 与参照一致</span>' : ' <span class="bad">✗</span>')],
+    ['推理耗时', `${runMs.toFixed(0)} ms（建 session ${tSession.toFixed(0)} ms，整页 ${(performance.now() - t0).toFixed(0)} ms）`],
+    ['实时倍率', `${((frames / 66.667) * 1000 / runMs).toFixed(1)}× 实时`],
+    ['加载的 wasm', usedWasm],
+    ['max|Δlogits|', `${maxD.toExponential(2)}（这一格 p≈${Math.exp(atMax.b).toExponential(1)}：${atMax.b.toFixed(3)} vs ${atMax.a.toFixed(3)}）`],
+    ['mean|Δlogits|', (sumD / (m || 1)).toExponential(2)],
+    ['max|Δp|（全部 42 类）', maxPD.toExponential(2) + ' <span class="warn">含 p≈1e-14 的格，信息量低</span>'],
+    ['max|Δp|（逐帧 top-1）', `${maxTop1PD.toExponential(2)}` + (maxTop1PD < 5e-3
+      ? ` <span class="ok">✓</span>（最差的一帧 t=${atTop1.t}：Python ${atTop1.b.toFixed(4)} vs wasm ${atTop1.a.toFixed(4)}）`
+      : ` <span class="bad">✗</span>（${atTop1.b.toFixed(4)} vs ${atTop1.a.toFixed(4)}）`)],
+    ['|Δp| 分位（逐帧 top-1）', `p50 ${q(0.5).toExponential(1)} · p90 ${q(0.9).toExponential(1)} · p99 ${q(0.99).toExponential(1)}`],
+    ['余弦相似度', cos.toFixed(9)],
+    ['逐帧 argmax 一致率', `${(100 * argmaxSame / (n || 1)).toFixed(2)}%` + (argmaxSame === n ? ' <span class="ok">✓</span>' : ' <span class="bad">✗</span>')],
+    ['JS 解码', `<span class="${g1.text === g2.text ? 'ok' : 'bad'}">${JSON.stringify(g1.text)}</span>`],
+    ['Python 解码', JSON.stringify(g2.text)],
+    ['结论', ok ? '<span class="ok">PASS —— wasm 跑得出与 Python 一致的 logits</span>'
+                : '<span class="bad">FAIL</span>'],
+  ];
+  rows(document.getElementById('res'), res);
+  document.getElementById('text').textContent = 'greedy: ' + g1.text;
+
+  window.__poc = {
+    ok, maxD, maxPD, maxTop1PD, meanD: sumD / (m || 1), cos, argmaxSameRate: argmaxSame / (n || 1),
+    pdTop1: { p50: q(0.5), p90: q(0.9), p99: q(0.99) },
+    atTop1: { t: atTop1.t, ref: atTop1.b, wasm: atTop1.a },
+    T, refT, dims, runMs, sessionMs: tSession, usedWasm, text: g1.text, refText: g2.text,
+    ua: navigator.userAgent, inputShape: [1, 1, frames, bins],
+  };
+  log('done');
+}
+
+main().catch(e => {
+  window.__poc = { ok: false, error: String(e && e.stack || e) };
+  document.getElementById('res').innerHTML =
+    `<tr><td class="k">错误</td><td class="v bad">${String(e && e.message || e)}</td></tr>`;
+  console.error(e);
+});
+</script>
+</body>
+</html>

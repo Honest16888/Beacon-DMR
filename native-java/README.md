@@ -1,5 +1,14 @@
 # 信标 DMR · 纯 Java 版
 
+> ## ⛔ 已封存（2026-11-04，用户决定）
+>
+> **这条线不再开发。** 不再出新包、不再跟 WebView 版对齐、`Phase 4 / Phase 5` 不做了。
+> 代码留在仓库里只作参考 —— 协议、音频链、主题系统、JNI 约束那几节的结论都已经
+> 沉淀进主线的 `docs/实现说明.md` 和 `.workbuddy-ai/memory/`，搬结论不用搬工程。
+>
+> 交付物只有 `android/` 的 WebView 版（`net.beacon.dmr`）。
+> 下文是它停在 **alpha6**（2026-10-28）时的状态记录，保留原样，别再照它继续做。
+
 `android/` 那份是 WebView 版（界面在 `web/index.html`，原生层只做 UDP + 声码器 + 桥）。
 这一份是**全量重写**：界面、协议、音频全部在 Java 里，不加载 WebView。
 
@@ -452,14 +461,16 @@ bash native-java/tests/run.sh      # 125 项，桌面 JDK 直接跑，不需要�
 
 ## 进度
 
+> 2026-11-04 封存时停在这里：Phase 0 ～ 3.5 完成（alpha6），Phase 4 / 5 不做了。
+
 - [x] **Phase 0** 工程骨架 + HOSE 收听 + AudioTrack + 波形 + 话组订阅
 - [x] **Phase 0.5** 话组表三级来源（内置 47 / 缓存 / 在线 1845）+ 搜索 + 只看订阅 + 手动加组
 - [x] **Phase 1** 看板（6 数字卡 / 走势 / 实时活动 / 4×Top10 / 通话构成 / 通联记录）
 - [x] **Phase 2** 设置（外观三档 / 音量 / 增强 / 窄带 / 保持唤醒 / 扫描 / 音频自检 / 关于）
 - [x] **Phase 3** 收发（MMDVM 会话 + 声码器 + FEC 链 + 按住说话 + 收发设置卡 + 三份自检）
 - [x] **Phase 3.5** 主页 1:1 复刻（顶栏两行 / 播报条 / 可收起操作区 / 三栏列表 / 悬浮 PTT）
-- [ ] Phase 4 录音 / 呼号库 / 国内 radiowo 链路
-- [ ] Phase 5 对齐后改回 `net.beacon.dmr`，替代 WebView 版
+- [—] Phase 4 录音 / 呼号库 / 国内 radiowo 链路（**不做了**）
+- [—] Phase 5 对齐后改回 `net.beacon.dmr`，替代 WebView 版（**不做了**）
 
 ## 已知的待办
 

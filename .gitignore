@@ -44,6 +44,14 @@ desktop.ini
 node_modules/
 package-lock.json
 
+# ---------- DeepCW 模型（16 MB 二进制，不进 git）----------
+# 用 python tools/fetch_deepcw.py 取，脚本核对 sha256。
+third_party/deepcw/*.onnx
+third_party/deepcw/*.onnx.json
+third_party/deepcw/*.py
+third_party/deepcw/*.txt
+third_party/deepcw/README.md
+
 # ---------- 注意 ----------
 # 不要加 *.so：android/app/src/main/jniLibs/**/libdsvocoder.so 是运行时必需的
 # 预编译插件（GPL-3.0），必须随仓库分发。见 THIRD-PARTY.md。

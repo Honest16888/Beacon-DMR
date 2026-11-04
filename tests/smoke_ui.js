@@ -218,11 +218,47 @@ console.log('\n=== 6. 接收音质处理链 ===');
 const q1 = await ev(`const ok0=Audio_.init();
   return {inited:ok0, hasPush:typeof Audio_.push==='function',
     hp:Audio_.hp?{type:Audio_.hp.type,f:Audio_.hp.frequency.value,q:Audio_.hp.Q.value}:null,
-    pk:Audio_.pk?{type:Audio_.pk.type,f:Audio_.pk.frequency.value,g:Audio_.pk.gain.value}:null};`);
+    pk:Audio_.pk?{type:Audio_.pk.type,f:Audio_.pk.frequency.value,g:Audio_.pk.gain.value}:null,
+    presence:state.presence===true};`);
 ok('音频上下文可用', q1.inited === true, q1);
 ok('有 push 统一入口', q1.hasPush === true, q1);
-ok('高通滤波器已串入（180Hz）', q1.hp && q1.hp.type === 'highpass' && q1.hp.f === 180, q1.hp);
-ok('2.6kHz 提升已串入（+2.5dB）', q1.pk && q1.pk.type === 'peaking' && q1.pk.g === 2.5, q1.pk);
+/* 这两条以前钉的是 180Hz / +2.5dB 的绝对值。v2.5.7「音频默认直通官方路径」之后
+   高通降到 80Hz、presence 默认关（增益 0），断言没跟着改就成了常驻假警报 ——
+   谁下次动音频都会被它误导。现在钉的是「串进去了没有」和「增益跟不跟开关走」：
+   频率/增益的取值只要求与代码常量一致，不锁某一次调音的结果。 */
+ok('高通滤波器已串入（80Hz 直通档）',
+  q1.hp && q1.hp.type === 'highpass' && Math.abs(q1.hp.f - 80) < 0.5 && Math.abs(q1.hp.q - 0.7) < 0.05, q1.hp);
+ok('2.6kHz 提升已串入（增益跟随 state.presence）',
+  q1.pk && q1.pk.type === 'peaking' && Math.abs(q1.pk.f - 2600) < 0.5
+  && Math.abs(q1.pk.g - (q1.presence ? 2.5 : 0)) < 0.05, q1.pk);
+
+/* 光验静态值不够 —— v2.5.7 之后 presence 是「两条链路」：关着时 gain→ws→destination
+   直通，高通/提升/预增益整段**被 disconnect 掉**，根本不在信号图里。
+   于是：① 只改 pk.gain 而不重建链路 = 开关无效（正是这版之前的形态）；
+        ② 断开状态下 pk.gain 的自动化事件不会推进，值冻结在原地（浏览器不为不参与
+           混音的节点跑 AudioParam 时间线）—— 所以「关掉后增益应回到 0」这条断言
+           是错的，它会逼着代码去调一个已经旁路的节点。
+   这里拨的是真实那个开关（change → applyChain → setPresence → 落盘），
+   验「打开后 2.6kHz 提升真的推到 +2.5dB」和「关掉后状态/存储/开关一致」。 */
+const q1b = await ev(`const cb=document.getElementById('setPresence');
+  const was=cb.checked;
+  if(was)cb.click();                       // 先归到「关」，起点确定
+  await new Promise(r=>setTimeout(r,80));
+  cb.click();
+  await new Promise(r=>setTimeout(r,350));
+  const on={checked:cb.checked, state:state.presence, ap:Audio_.presence===true,
+    g:Audio_.pk?Audio_.pk.gain.value:null, saved:localStorage.getItem('dmr.presence')};
+  cb.click();
+  await new Promise(r=>setTimeout(r,250));
+  const off={checked:cb.checked, state:state.presence, ap:Audio_.presence===true,
+    saved:localStorage.getItem('dmr.presence')};
+  return {on:on, off:off};`);
+ok('打开窄带增强 → 2.6kHz 提升真的推到 +2.5dB（链路已重建）',
+  q1b && q1b.on.checked === true && q1b.on.state === true && q1b.on.ap === true
+  && Math.abs(q1b.on.g - 2.5) < 0.2, q1b && q1b.on);
+ok('关闭窄带增强 → 状态 / 开关 / 存储三处一起归零',
+  q1b && q1b.off.checked === false && q1b.off.state === false && q1b.off.ap === false
+  && q1b.off.saved === 'false', q1b && q1b.off);
 
 const q2 = await ev(`Audio_.silence();
   const f1=new Float32Array(160).fill(0.5);

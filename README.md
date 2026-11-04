@@ -440,6 +440,17 @@ node   tests/deepcw/verify.js --dir tests/out/deepcw
 python tests/deepcw/render_png.py --dir tests/out/deepcw
 ```
 
+模型那一段（**只到「能不能跑、跑得对不对」，没接进 App**）：
+
+```bash
+# 取模型权重（15 MB，不进 git，按 sha256 钉版本）
+python tools/fetch_deepcw.py
+# Python onnxruntime 出参考 logits，再用 onnxruntime-web 的 wasm 在无头 Chrome 里重算一遍
+python tests/deepcw/poc/make_ref.py
+cd tests/deepcw/poc && npm install && cd -
+node tests/deepcw/poc/run_poc.js       # 逐帧 argmax 100% 一致、解码文本相同、≈60× 实时
+```
+
 冒烟测试会覆盖 320 / 360 / 390 / 414 / 480 / 768 / 1024 / 1280 八个宽度检查横向溢出，
 并验证 PTT 拖动、操作区折叠、网络切换等交互。截图落在 `tests/shot/`（已 gitignore）。
 
