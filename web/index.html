@@ -1153,8 +1153,16 @@ body.dragging .dghint{display:block}
    瀑布图本身永远是深色底 —— 它是「仪器」不是「内容」，浅色主题下也照旧，
    否则 65 级灰度对不上。外边距按面板走。 */
 #cwScope{width:100%;height:150px;display:block;border-radius:6px;background:#0a0e13}
-.cwhint{display:flex;flex-wrap:wrap;gap:10px;padding:7px 2px 2px;
-  font-size:11px;color:var(--dim);font-family:ui-monospace,Consolas,monospace}
+/* SDR 视图：峰线 + 瀑布。画布同样是深底 —— 仪器不是内容，浅色主题下也不变 */
+#tabPanel.cwspec #tabBody{max-height:clamp(200px,calc(100vh - 620px),460px)}
+#sdrScope{width:100%;height:146px;display:block;border-radius:6px;background:#0a0e13}
+.segspec{display:inline-flex;gap:2px;padding:2px;border-radius:8px;
+  background:rgba(120,140,160,.10);border:1px solid var(--border2)}
+.segspec button{border:none;background:transparent;color:var(--muted);cursor:pointer;
+  font:inherit;font-size:11.5px;line-height:1.5;padding:3px 9px;border-radius:6px;white-space:nowrap}
+.segspec button.on{background:var(--panel);color:var(--text)}
+.cwhint{display:flex;flex-wrap:wrap;gap:9px;padding:4px 2px 0;
+  font-size:10.5px;line-height:1.5;color:var(--dim);font-family:ui-monospace,Consolas,monospace}
 .cwhint b{color:var(--muted);font-weight:500}
 </style>
 </head>
@@ -19633,7 +19641,7 @@ const Audio_ = {
        「空口上有什么」，用户把喇叭静音了不代表这一段信号不存在。
        三条调用点（国内流 / HOSE / 只为录音解码的那条）都恰好每帧调一次 decode，
        所以不会重复喂。 */
-    try{ CW.feed(f); }catch(e){}
+    try{ feedSpectrum(f); }catch(e){}
     return f;
   },
   play(f){
@@ -19967,6 +19975,9 @@ function syncAwake(){
 /* ============================ 状态 ============================ */
 const state = {
   view:'listen', tab:'scan',
+  /* 频谱页签的两个视图：'sdr' = 0–4 kHz 音频频谱（默认，看信号用）；
+     'model' = DeepCW 的 65 bin 输入。同一份 PCM，两条显示。 */
+  cwMode:'sdr',
   tg:{}, tgReady:false, masters:{}, masterList:[],
   /* 用户自定义的话组名：{ '46001': '我的叫法' }。
      话组表是别人维护的（46001 官方叫 Worldwide，国内表里叫「世界组」），
@@ -22984,12 +22995,318 @@ const CW = {
   }
 };
 
+/* ================= SDR 式音频频谱：真数据、实时 =================
+ *
+ * 和上面那个 DeepCW 视图**同一口饲料**：`Audio_.decode()` 出来的 8 kHz 原始 PCM
+ * （μ-law 解完、还没过增益和静音），以及原生 MMDVM 解出来回传的那一路。
+ * 两条路、两个视图，算频域的东西只有一份。
+ *
+ *   模型视图   3.2 kHz / 400–1200 Hz / 65 bin / 颜色 = 幅度 ÷ 噪声底  → 模型要吃的样子
+ *   SDR 视图   8 kHz / 0–4000 Hz / 256 bin / 纵轴 dBFS + 峰线 + 瀑布 → 看的样子
+ *
+ * ★ 口径必须写清楚，别和射频混：
+ *   - 横轴是**音频频率**（0–4 kHz），不是射频；纵轴是 **dBFS**（相对满刻度），不是 dBm。
+ *     DMRD 包不带 RSSI、主站也不下发 —— 标成 dBm 就是编数据。
+ *   - 一帧 512 点（64 ms）周期 Hann，hop 128（16 ms）→ RBW 15.6 Hz、62.5 帧/秒。
+ *     窗长比 hop 长是必须的：只取 16 ms 的话 15.6 Hz 的 RBW 撑不住，峰线会毛成一片。
+ *   - 瀑布一根竖条 = 一帧，最新在右；颜色窗口固定 -85…-15 dBFS，
+ *     不跟音量走 —— 抽的是增益**之前**的 PCM，音量越大图上越亮就是错的。
+ *
+ * FFT 不复制一份：直接用 CW.fft（它对数组长度没有假设），两份实现迟早会漂。
+ */
+const SDR = {
+  RATE: 8000, FFT: 512, HOP: 128, BINS: 256,
+  COLS: 640,                 /* 640 × 16 ms ≈ 10.2 秒 */
+  TOP: -15, BOT: -85,        /* 纵轴 / 色标窗口（dBFS） */
+
+  pcm: null, pw: 0, total: 0, frame: 0,
+  re: null, im: null, win: null, wsum: 0,
+  last: null, hist: null, ch: 0, cn: 0, hold: null,
+  floor: -70, peaks: [], peakHz: 0, peakDb: 0, peakText: '等待音频…',
+  canvas: null, ctx: null, off: null, offCtx: null, img: null,
+
+  init() {
+    if (this.pcm) return;
+    const n = this.FFT;
+    const w = new Float64Array(n);
+    let sum = 0;
+    for (let i = 0; i < n; i++) { w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / n); sum += w[i]; }
+    this.win = w; this.wsum = sum;
+    this.re = new Float64Array(n);
+    this.im = new Float64Array(n);
+    this.pcm = new Float32Array(16384);        /* 2 秒，够覆盖帧计算与抽头之间的滞后 */
+    this.last = new Float32Array(this.BINS).fill(-140);
+    this.hold = new Float32Array(this.BINS).fill(-200);
+    this.tmp = new Float32Array(this.BINS);
+    this.hist = new Float32Array(this.COLS * this.BINS);
+    this.hist.fill(this.BOT);
+  },
+
+  binHz() { return this.RATE / this.FFT; },
+
+  /* 取 start 处的 512 点算一帧幅度谱（dBFS）。整幅谱 0…4 kHz 全要，
+     不像模型视图只切 400–1200 Hz 那 65 格。 */
+  spectrumAt(start) {
+    const n = this.FFT, sb = this.pcm, cap = sb.length;
+    const re = this.re, im = this.im, w = this.win;
+    for (let i = 0; i < n; i++) {
+      let idx = (start + i) % cap;
+      if (idx < 0) idx += cap;
+      re[i] = sb[idx] * w[i];
+      im[i] = 0;
+    }
+    CW.fft(re, im);                       /* 复用同一份 FFT */
+    const g = 2 / this.wsum;              /* 单边幅度：满刻度正弦 → 1.0 */
+    const row = this.last;
+    for (let b = 0; b < this.BINS; b++) {
+      const m = Math.sqrt(re[b] * re[b] + im[b] * im[b]) * g;
+      row[b] = 20 * Math.log10(m > 1e-7 ? m : 1e-7);
+    }
+    return row;
+  },
+
+  feed(pcm) {
+    if (!pcm || !pcm.length) return;
+    if (!this.pcm) this.init();
+    const cap = this.pcm.length;
+    for (let i = 0; i < pcm.length; i++) {
+      this.pcm[this.pw] = pcm[i];
+      this.pw = (this.pw + 1) % cap;
+      this.total++;
+    }
+    /* ★ 追帧别把环形缓冲读穿：要算的那一帧如果已经被新样本覆盖，算出来的就是
+       另一时刻的信号 —— 图上表现为「一片糊的亮块」，不报错，也不会自己恢复。
+       落后的部分直接跳过，宁可少几列。 */
+    const oldest = this.total - cap + this.FFT;
+    if (this.frame < oldest) this.frame = oldest;
+    while (this.frame + this.FFT <= this.total) {
+      this.pushRow(this.spectrumAt(this.frame));
+      this.frame += this.HOP;
+    }
+  },
+
+  pushRow(row) {
+    const B = this.BINS;
+    this.hist.set(row, this.ch * B);
+    this.ch = (this.ch + 1) % this.COLS;
+    this.cn = Math.min(this.COLS, this.cn + 1);
+    /* 峰值保持：慢慢衰减，不立刻归零 —— 一帧里最强的那个峰留在图上才好读 */
+    for (let b = 0; b < B; b++) {
+      this.hold[b] = Math.max(row[b], this.hold[b] - 0.25);
+    }
+    if (this.cn % 12 === 0) {
+      this.tmp.set(row); this.tmp.sort();
+      this.floor = this.tmp[Math.floor(0.2 * (B - 1))];
+      this.findPeaks();
+    }
+  },
+
+  /* 找显著峰：高于噪声底 14 dB 的局部极大，最多标 3 个，间隔至少 4 格 */
+  findPeaks() {
+    const row = this.last, B = this.BINS, thr = this.floor + 14;
+    const cand = [];
+    for (let b = 1; b < B - 1; b++) {
+      const v = row[b];
+      if (v > thr && v >= row[b - 1] && v >= row[b + 1]) cand.push({ b, db: v });
+    }
+    cand.sort((a, b) => b.db - a.db);
+    const keep = [];
+    for (const p of cand) {
+      if (keep.length >= 3) break;
+      if (keep.every(q => Math.abs(q.b - p.b) >= 4)) keep.push(p);
+    }
+    this.peaks = keep;
+    if (keep.length) {
+      this.peakHz = keep[0].b * this.binHz();
+      this.peakDb = keep[0].db;
+      this.peakText = (this.peakHz >= 1000
+        ? (this.peakHz / 1000).toFixed(2) + ' kHz'
+        : Math.round(this.peakHz) + ' Hz') + '  ' + this.peakDb.toFixed(0) + ' dBFS';
+    } else {
+      this.peakHz = 0; this.peakDb = this.floor;
+      this.peakText = '无显著峰 · 底噪 ' + this.floor.toFixed(0) + ' dBFS';
+    }
+  },
+
+  bind(cv) {
+    if (!this.pcm) this.init();
+    this.canvas = cv;
+    this.ctx = cv.getContext('2d');
+    if (!this.off) {
+      this.off = document.createElement('canvas');
+      this.off.width = this.COLS;
+      this.off.height = this.BINS;
+      this.offCtx = this.off.getContext('2d');
+      this.img = this.offCtx.createImageData(this.COLS, this.BINS);
+    }
+    this.draw();
+  },
+
+  unbind() { this.canvas = null; this.ctx = null; },
+
+  clear() {
+    if (this.hist) this.hist.fill(this.BOT);
+    if (this.hold) this.hold.fill(-200);
+    if (this.pcm) this.pcm.fill(0);
+    /* 采样计数器一起归零：只清 hist 不清 pw/total/frame 的话，下一段音频会接着
+       旧的计数器跑，头几帧读到的是「上一段的尾巴 + 这一段的头」。 */
+    this.pw = 0; this.total = 0; this.frame = 0;
+    this.cn = 0; this.ch = 0; this.peaks = [];
+    this.last.fill(-140);
+    this.peakText = '已清空';
+    this.draw();
+  },
+
+  draw() {
+    const cv = this.canvas, g = this.ctx;
+    if (!cv || !g) return;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const cssW = cv.clientWidth || 320, cssH = cv.clientHeight || 146;
+    const W = Math.max(1, Math.round(cssW * dpr)), H = Math.max(1, Math.round(cssH * dpr));
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.fillStyle = '#0a0e13';
+    g.fillRect(0, 0, cssW, cssH);
+
+    const padL = 30, padR = 5, padT = 5, padB = 13;
+    const pw = Math.max(20, cssW - padL - padR);
+    const ph = Math.max(20, cssH - padT - padB);
+    const panH = Math.max(26, Math.round(ph * 0.42));
+    const wfT = padT + panH + 4;
+    const wfH = Math.max(10, ph - panH - 4);
+    const B = this.BINS, binHz = this.binHz();
+    const yOf = db => padT + (this.TOP - db) / (this.TOP - this.BOT) * panH;
+    const xOf = b => padL + (b / (B - 1)) * pw;
+
+    /* ---- 网格 ---- */
+    g.strokeStyle = 'rgba(215,227,238,.10)';
+    g.fillStyle = '#7d8b99';
+    g.font = '9px ui-monospace,Consolas,monospace';
+    g.textAlign = 'right'; g.textBaseline = 'middle';
+    [-20, -40, -60, -80].forEach(db => {
+      const y = yOf(db);
+      g.beginPath(); g.moveTo(padL, y); g.lineTo(padL + pw, y); g.stroke();
+      g.fillText(db + '', padL - 3, y);
+    });
+    g.textAlign = 'center';
+    [0, 1000, 2000, 3000, 4000].forEach(hz => {
+      const x = padL + (hz / binHz) / (B - 1) * pw;
+      g.beginPath(); g.moveTo(x, padT); g.lineTo(x, padT + panH); g.stroke();
+      g.beginPath(); g.moveTo(x, wfT); g.lineTo(x, wfT + wfH); g.stroke();
+    });
+
+    /* ---- 峰线：下面积 + 峰值保持 + 当前线 ---- */
+    if (this.cn) {
+      g.beginPath();
+      g.moveTo(xOf(0), yOf(this.last[0]));
+      for (let b = 1; b < B; b++) g.lineTo(xOf(b), yOf(this.last[b]));
+      g.lineTo(padL + pw, padT + panH);
+      g.lineTo(padL, padT + panH);
+      g.closePath();
+      g.fillStyle = 'rgba(18,96,130,.35)';
+      g.fill();
+
+      g.beginPath();
+      g.moveTo(xOf(0), yOf(this.hold[0]));
+      for (let b = 1; b < B; b++) g.lineTo(xOf(b), yOf(this.hold[b]));
+      g.strokeStyle = 'rgba(64,132,152,.55)';
+      g.lineWidth = 1; g.stroke();
+
+      g.beginPath();
+      g.moveTo(xOf(0), yOf(this.last[0]));
+      for (let b = 1; b < B; b++) g.lineTo(xOf(b), yOf(this.last[b]));
+      g.strokeStyle = '#56e2ff';
+      g.lineWidth = 1.4; g.stroke();
+
+      /* 峰值竖线 + 小标签（只标最靠前的两个，多了在手机上看不清） */
+      this.peaks.slice(0, 2).forEach((p, i) => {
+        const x = xOf(p.b), y = yOf(p.db);
+        g.strokeStyle = 'rgba(255,196,64,.45)';
+        g.beginPath(); g.moveTo(x, y); g.lineTo(x, wfT + wfH); g.stroke();
+        const hz = (p.b * binHz >= 1000)
+          ? (p.b * binHz / 1000).toFixed(2) + 'k'
+          : Math.round(p.b * binHz) + '';
+        /* 只给最强那个峰写字：两个标签在 340px 宽的手机屏上必然叠在一起，
+           竖线留着就够了 —— 下面的读数行（#sdrPeak）里本来就有精确值。 */
+        if (i === 0) {
+          g.textAlign = 'left';
+          g.fillStyle = '#ffc440';
+          const lx = Math.max(padL + 2, Math.min(padL + pw - 34, x + 4));
+          g.fillText(hz, lx, Math.max(padT + 5, y - 6));
+        }
+      });
+      g.beginPath();
+      g.rect(padL, padT, pw, panH);
+      g.strokeStyle = 'rgba(215,227,238,.14)';
+      g.stroke();
+    } else {
+      g.fillStyle = '#66707e';
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.font = '12px "Segoe UI",system-ui,sans-serif';
+      g.fillText('等待接收音频…', padL + pw / 2, padT + panH / 2);
+    }
+
+    /* ---- 瀑布 ---- */
+    const cols = this.COLS, n = this.cn, data = this.img.data, L = CW.lut();
+    const hist = this.hist, ch = this.ch, span = this.TOP - this.BOT;
+    for (let j = 0; j < cols - n; j++) {
+      for (let b = 0; b < B; b++) {
+        const o = ((B - 1 - b) * cols + j) * 4;
+        data[o] = 5; data[o + 1] = 7; data[o + 2] = 10; data[o + 3] = 255;
+      }
+    }
+    for (let k = 0; k < n; k++) {
+      const sc = ((ch - n + k) % cols + cols) % cols;
+      const x = cols - n + k;
+      for (let b = 0; b < B; b++) {
+        let t = (hist[sc * B + b] - this.BOT) / span;
+        if (t < 0) t = 0; else if (t > 1) t = 1;
+        const li = ((t * 255) | 0) * 3;
+        const o = ((B - 1 - b) * cols + x) * 4;
+        data[o] = L[li]; data[o + 1] = L[li + 1]; data[o + 2] = L[li + 2]; data[o + 3] = 255;
+      }
+    }
+    this.offCtx.putImageData(this.img, 0, 0);
+    g.imageSmoothingEnabled = true;
+    g.drawImage(this.off, padL, wfT, pw, wfH);
+    g.strokeStyle = 'rgba(215,227,238,.14)';
+    g.beginPath(); g.rect(padL, wfT, pw, wfH); g.stroke();
+
+    /* 横轴：音频频率（kHz）。单位写在下面那行提示里 —— 画布里再写一遍会压到 -20 刻度 */
+    g.fillStyle = '#7d8b99';
+    g.font = '9px ui-monospace,Consolas,monospace';
+    g.textAlign = 'center'; g.textBaseline = 'top';
+    [0, 1, 2, 3, 4].forEach(k => {
+      const x = padL + (k * 1000 / binHz) / (B - 1) * pw;
+      g.fillText(k ? k + 'k' : '0', Math.max(padL + 5, Math.min(padL + pw - 5, x)), wfT + wfH + 3);
+    });
+
+    const el = document.getElementById('sdrPeak');
+    if (el) el.textContent = this.peakText;
+  }
+};
+
+/* 两条音频路都从这里进：模型视图和 SDR 视图各自吃同一份 PCM。
+   收成一个函数，是为了「漏喂一路」这种错只可能犯一次。 */
+function feedSpectrum(f) {
+  try { CW.feed(f); } catch (e) {}
+  try { SDR.feed(f); } catch (e) {}
+}
+
+/* 频谱页签当前该画哪个视图 */
+function drawSpectrum() {
+  if (state.tab !== 'cw') return;
+  if (state.cwMode === 'model') CW.draw(); else SDR.draw();
+}
+
 function renderTab(){
   const t=state.tab;
   [...$('#tabTabs').children].forEach(b=>b.classList.toggle('on',b.dataset.tab===t));
   const tools=$('#tabTools'), body=$('#tabBody');
-  /* 频谱的 canvas 不在 DOM 里了就把引用清掉，免得继续往一个已经摘掉的画布上画 */
-  if(t!=='cw'){ CW.unbind(); CW.tap(false); }
+  /* 频谱的 canvas 不在 DOM 里了就把引用清掉，免得继续往一个已经摘掉的画布上画。
+     两个视图共用这一个抽头开关：只要在频谱页签上就要 PCM，所以 tap 只在离开页签时关。 */
+  if(t!=='cw'){ CW.unbind(); SDR.unbind(); CW.tap(false); }
+  { const pn=$('#tabPanel'); if(pn)pn.classList.toggle('cwspec', t==='cw'); }
   if(t==='scan'){
     const picked=state.scan.picked;
     $('#tabCount').textContent=scanSet().length;
@@ -23063,16 +23380,34 @@ function renderTab(){
         '</div></div>';
     }).join('');
   } else if(t==='cw'){
-    $('#tabCount').textContent='65 bin';
+    /* 两个视图，同一份 PCM：
+         sdr   0–4 kHz / dBFS / 峰线 + 瀑布  —— 看「空口上有什么」，默认这个
+         model 400–1200 Hz / 65 bin          —— DeepCW 模型真正吃的那张图
+       默认给 sdr：打开频谱页是想看信号，不是想看模型的饲料。 */
+    const sdr = state.cwMode !== 'model';
+    $('#tabCount').textContent = sdr ? '4 kHz' : '65 bin';
     tools.innerHTML='<div class="tools" style="border-bottom:1px solid var(--border2)">'+
-      '<span style="font-size:11.5px;color:var(--dim)">DeepCW 模型输入 · 正在收听的音频</span>'+
+      '<div class="seg segspec" id="segSpec">'+
+        '<button data-spec="sdr" class="'+(sdr?'on':'')+'">📶 音频频谱</button>'+
+        '<button data-spec="model" class="'+(!sdr?'on':'')+'">DeepCW 输入</button>'+
+      '</div>'+
       '<div class="spacer"></div>'+
       '<button class="btn sm" data-act="cwClear">清空</button></div>';
-    body.innerHTML='<div style="padding:8px">'+
-      '<canvas id="cwScope" height="150"></canvas>'+
-      '<div class="cwhint"><span><b>3.2 kHz</b></span><span>400–1200 Hz</span>'+
-      '<span>65 bin</span><span>15 ms/帧</span><span>颜色 = 幅度 / 噪声底</span></div></div>';
-    CW.bind($('#cwScope'));
+    if (sdr) {
+      CW.unbind();                       /* 另一视图的画布已经摘掉，别继续往它上面画 */
+      body.innerHTML='<div style="padding:8px">'+
+        '<canvas id="sdrScope" height="146"></canvas>'+
+        '<div class="cwhint"><span><b id="sdrPeak">等待音频…</b></span>'+
+        '<span>0–4 kHz · RBW 15.6 Hz · dBFS（非射频）</span></div></div>';
+      SDR.bind($('#sdrScope'));
+    } else {
+      SDR.unbind();
+      body.innerHTML='<div style="padding:8px">'+
+        '<canvas id="cwScope" height="150"></canvas>'+
+        '<div class="cwhint"><span><b>3.2 kHz</b></span><span>400–1200 Hz</span>'+
+        '<span>65 bin</span><span>15 ms/帧</span><span>颜色 = 幅度 / 噪声底</span></div></div>';
+      CW.bind($('#cwScope'));
+    }
     CW.tap(true);
   } else {
     tools.innerHTML='<div class="tools" style="border-bottom:1px solid var(--border2)">'+
@@ -24870,7 +25205,7 @@ window.onDmrEvent=function(json){
             if(v>=0x8000)v-=0x10000;
             f[i]=v/32768;
           }
-          CW.feed(f);
+          feedSpectrum(f);
         }
       }catch(e){}
       break;
@@ -25581,6 +25916,12 @@ $('#btnPlay').addEventListener('click',()=>setPlay(!state.audioOn));
 $('#vol').addEventListener('input',e=>applyVolume(e.target.value));
 $('#viewTabs').addEventListener('click',e=>{ const b=e.target.closest('button[data-view]'); if(b)setView(b.dataset.view); });
 $('#tabTabs').addEventListener('click',e=>{ const b=e.target.closest('button[data-tab]'); if(b){ state.tab=b.dataset.tab; renderTab(); } });
+/* 频谱页签里切视图（音频频谱 / DeepCW 输入）：只换画布，不重开抽头 */
+$('#tabTools').addEventListener('click',e=>{
+  const b=e.target.closest('button[data-spec]'); if(!b)return;
+  state.cwMode=b.dataset.spec==='model'?'model':'sdr';
+  renderTab();
+});
 
 /* ---------- 手机端分栏切换 ---------- */
 function mobCol(i){
@@ -25854,7 +26195,7 @@ document.addEventListener('click',e=>{
         state.recs.forEach(r=>{try{URL.revokeObjectURL(r.url);}catch(x){}});
         state.recs=[]; stopRecPlay(); renderTab(); toast('录音已清空'); return;
       case 'logClear': state.calls=[]; store.set('calls',[]); renderLog(); toast('记录已清空'); return;
-      case 'cwClear': CW.clear(); toast('频谱已清空'); return;
+      case 'cwClear': CW.clear(); SDR.clear(); toast('频谱已清空'); return;
       case 'station': openStation(b.dataset.call); return;
       case 'all': {
         const g=[...document.querySelectorAll('.group')].find(x=>{
@@ -26183,7 +26524,7 @@ function boot(){
   }
   txMarkTarget();
   loadTalkgroups(); loadMasters(); ensureLive();
-  setInterval(()=>{ renderNowTimer(); renderVu(); CW.draw(); },100);
+  setInterval(()=>{ renderNowTimer(); renderVu(); drawSpectrum(); },100);
   setInterval(liveTick,1000);
   setInterval(renderStatus,2000);
   setInterval(rxStatsTick,2000);

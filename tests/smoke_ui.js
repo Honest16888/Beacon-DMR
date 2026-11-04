@@ -351,9 +351,13 @@ const h1 = await ev(`try{ spotterClose(); }catch(e){}
   rxReset(); state.current=null; state.active.clear(); Audio_.silence();
   handleSpotter([T.CALL_START, 0, 4601001, 46001]);
   for(let i=0;i<5;i++) handleSpotter([T.CALL_AUDIO, new Uint8Array(160).fill(128)]);
-  /* 模拟换气停顿 5 秒：靠 hang 超时让位的旧逻辑会在这里把坑位交给 91，
-     而 46001 的音频还在路上 —— 正是「声音是 46001、顶部却显示 91」的来源 */
-  RXG.at=Date.now()-5000;
+  /* 模拟换气停顿：靠 hang 超时让位的旧逻辑会在这里把坑位交给 91，
+     而 46001 的音频还在路上 —— 正是「声音是 46001、顶部却显示 91」的来源。
+     ★ 值取到 LOST_MS 之内一点（而不是正好等于）：rxHold() 判的是
+     Date.now()-RXG.at > LOST_MS，把 at 写成 now-LOST_MS 等于让这个断言和
+     毫秒时钟赛跑 —— 中间只要过了 1 ms 就翻成「已超时」，和被测逻辑无关。
+     这条以前是踩着 0 ms 边界侥幸过的，加一次 FFT 就红了。 */
+  RXG.at=Date.now()-(RXG.LOST_MS-1000);
   handleSpotter([T.CALL_START, 0, 9100001, 91]);
   return {tg:state.current&&state.current.tg, hold:rxHold(91), active91:state.active.has(91)};`);
 ok('46001 停顿 5 秒，91 仍抢不走 current', h1.tg === 46001, h1);
@@ -759,8 +763,8 @@ ok('自检读数占满整行（不再被 38px 数值位压成竖排）',
   diagW.w > diagW.row * 0.7, diagW);
 ok('自检读数只占一两行（没有逐字换行）', diagW.h < 60, diagW);
 
-console.log('\n=== 频谱页签（v2.7.0） ===');
-const cwTab = await ev(`
+console.log('\n=== 频谱页签：音频频谱（SDR 视图，v2.8.0） ===');
+const sdrTab = await ev(`
   /* 前面的折叠测试可能把这块面板收起来了 —— 收起时 tabBody 是 display:none，
      量到的是 0×0。先展开再量。 */
   const panel=document.getElementById('tabPanel');
@@ -772,14 +776,61 @@ const cwTab = await ev(`
   if(typeof setView==='function')setView('listen');
   document.querySelector('[data-tab="cw"]').click();
   await new Promise(r=>setTimeout(r,250));
+  const cv=document.getElementById('sdrScope');
+  const r=cv?cv.getBoundingClientRect():null;
+  return {模式:state.cwMode, 存在:!!cv, 宽:r?Math.round(r.width):0, 高:r?Math.round(r.height):0,
+          绑定:!!SDR.canvas, 提示:!!document.querySelector('.cwhint'),
+          bin:SDR.BINS, 列:SDR.hist?SDR.hist.length/SDR.BINS:0,
+          计数:document.getElementById('tabCount').textContent,
+          页签:!!document.getElementById('segSpec')};`);
+ok('频谱页签默认是「音频频谱」（SDR 视图）', sdrTab.模式 === 'sdr', sdrTab);
+ok('「音频频谱」画布建出来了', sdrTab.存在 && sdrTab.宽 > 100 && sdrTab.高 >= 140, sdrTab);
+ok('画布已绑定到 SDR（会跟 100 ms tick 重绘）', sdrTab.绑定 === true, sdrTab);
+ok('瀑布是 256 bin × 640 列（0–4 kHz / 15.6 Hz 一格）',
+  sdrTab.bin === 256 && sdrTab.列 === 640, sdrTab);
+ok('视图切换器在（音频频谱 / DeepCW 输入）', sdrTab.页签 === true && sdrTab.计数 === '4 kHz', sdrTab);
+
+const sdrFeed = await ev(`
+  SDR.clear();
+  const sr=8000, N=8000;                       /* 1 秒 */
+  const pcm=new Float32Array(N);
+  for(let i=0;i<N;i++) pcm[i]=0.3*Math.sin(2*Math.PI*700*i/sr);
+  const c0=SDR.cn;
+  SDR.feed(pcm);
+  const c1=SDR.cn;
+  /* 再走一遍真的抽头：μ-law 编码后交给 Audio_.decode() */
+  const enc=s=>{const BIAS=0x84,CLIP=32635;let sign=s<0?0x80:0;
+    let mag=Math.min(CLIP,Math.round(Math.abs(s)*32767))+BIAS;let exp=7;
+    for(let mask=0x4000;(mag&mask)===0&&exp>0;exp--,mask>>=1);
+    return (~(sign|(exp<<4)|((mag>>(exp+3))&0x0F)))&0xFF;};
+  const u=new Uint8Array(160); for(let j=0;j<160;j++)u[j]=enc(pcm[j]);
+  const t0=SDR.total; Audio_.decode(u); const t1=SDR.total;
+  SDR.draw();
+  const cv=document.getElementById('sdrScope');
+  return {新增列:c1-c0, 真抽头样本:t1-t0, 峰值Hz:Math.round(SDR.peakHz),
+          峰值dB:+SDR.peakDb.toFixed(1), 底噪dB:+SDR.floor.toFixed(1),
+          读数:(document.getElementById('sdrPeak')||{}).textContent,
+          画布宽:cv?cv.width:0, 画布高:cv?cv.height:0};`);
+ok('喂 1 秒音频 → 出一串瀑布列（62.5 列/秒）', sdrFeed.新增列 >= 55, sdrFeed);
+ok('Audio_.decode() 真的喂到了 SDR（抽头位置正确）', sdrFeed.真抽头样本 >= 60, sdrFeed);
+ok('峰线找到 700 Hz 的峰（±40 Hz）', Math.abs(sdrFeed.峰值Hz - 700) <= 40, sdrFeed);
+ok('峰值电平是 dBFS 量级（-60…0）且高于底噪',
+  sdrFeed.峰值dB > -60 && sdrFeed.峰值dB < 0 && sdrFeed.峰值dB > sdrFeed.底噪dB + 10, sdrFeed);
+ok('峰值读数写到了图上（不是「等待音频」）',
+  /kHz|Hz/.test(sdrFeed.读数 || ''), sdrFeed);
+ok('画布按 DPR 真实分辨率建（不是 0×0）', sdrFeed.画布宽 > 100 && sdrFeed.画布高 > 150, sdrFeed);
+
+const modelTab = await ev(`
+  document.querySelector('[data-spec="model"]').click();
+  await new Promise(r=>setTimeout(r,200));
   const cv=document.getElementById('cwScope');
   const r=cv?cv.getBoundingClientRect():null;
-  return {存在:!!cv, 宽:r?Math.round(r.width):0, 高:r?Math.round(r.height):0,
-          绑定:!!CW.canvas, 提示:!!document.querySelector('.cwhint'),
-          列:CW.cols?CW.cols.length/CW.BINS:0};`);
-ok('「频谱」页签能打开并建出画布', cwTab.存在 && cwTab.宽 > 100 && cwTab.高 >= 100, cwTab);
-ok('画布已绑定到 CW（会跟 100 ms tick 重绘）', cwTab.绑定 === true, cwTab);
-ok('画布是 65 行的瀑布（列数 = 900）', cwTab.列 === 900, cwTab);
+  return {模式:state.cwMode, 存在:!!cv, 宽:r?Math.round(r.width):0, 高:r?Math.round(r.height):0,
+          绑定:!!CW.canvas, sdr绑定:!!SDR.canvas, tap:CW.tapOn===true,
+          列:CW.cols?CW.cols.length/CW.BINS:0, 计数:document.getElementById('tabCount').textContent};`);
+ok('切到「DeepCW 输入」→ 65 bin 的画布', modelTab.模式 === 'model' && modelTab.存在 && modelTab.列 === 900, modelTab);
+ok('切视图只换画布，不重开抽头', modelTab.tap === true && modelTab.sdr绑定 === false, modelTab);
+ok('计数跟着视图走', modelTab.计数 === '65 bin', modelTab);
 
 const cwFeed = await ev(`
   CW.clear();
@@ -803,8 +854,9 @@ ok('噪声底被估出来（不是 0，也不是 1）', cwFeed.noise > 0 && cwFe
 const cwOff = await ev(`
   document.querySelector('[data-tab="scan"]').click();
   await new Promise(r=>setTimeout(r,150));
-  return {绑定:!!CW.canvas, tap:CW.tapOn};`);
-ok('切走页签后停止绘制，也关掉原生抽头', cwOff.绑定 === false && cwOff.tap === false, cwOff);
+  return {绑定:!!CW.canvas, sdr绑定:!!SDR.canvas, tap:CW.tapOn};`);
+ok('切走页签后两个视图都停止绘制，也关掉原生抽头',
+  cwOff.绑定 === false && cwOff.sdr绑定 === false && cwOff.tap === false, cwOff);
 
 console.log(`\n================  ${pass} 通过 / ${fail} 失败  ================`);
 ws.close(); chrome.kill();
