@@ -50,7 +50,8 @@ const server = http.createServer((req, res) => {
 
 const PORT = Number(process.env.POC_PORT || 9347);
 await new Promise(r => server.listen(PORT, '127.0.0.1', r));
-const PAGE = `http://127.0.0.1:${PORT}/tests/deepcw/poc/index.html`;
+const QUERY = process.env.POC_QUERY || '';        // 例：POC_QUERY='?simd=0' 走标量 wasm
+const PAGE = `http://127.0.0.1:${PORT}/tests/deepcw/poc/index.html${QUERY}`;
 console.log('serve:', PAGE);
 
 const PROFILE = path.join(os.tmpdir(), 'deepcw-poc-' + Date.now());

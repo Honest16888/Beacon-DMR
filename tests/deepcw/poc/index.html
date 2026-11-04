@@ -91,14 +91,20 @@ async function main() {
   ort.env.wasm.numThreads = 1;
   ort.env.wasm.wasmPaths = ORT_DIST;
   ort.env.logLevel = 'error';
+  // ?simd=0 → 走标量 wasm，用来分辨「差值是 SIMD kernel 带来的」还是运行时本身的
+  const qs = new URLSearchParams(location.search);
+  if (qs.get('simd') === '0') ort.env.wasm.simd = false;
   env.push(['numThreads', String(ort.env.wasm.numThreads)]);
+  env.push(['simd', ort.env.wasm.simd === false ? '关（标量）' : '开（默认）']);
 
   rows(document.getElementById('env'), env);
 
   const tLoad = performance.now();
+  const optLevel = qs.get('opt') === 'disable' ? 'disabled' : 'all';
+  env.push(['图优化', optLevel]);
   const session = await ort.InferenceSession.create(MODEL, {
     executionProviders: ['wasm'],
-    graphOptimizationLevel: 'all',
+    graphOptimizationLevel: optLevel,
   });
   const tSession = performance.now() - tLoad;
 
@@ -150,6 +156,23 @@ async function main() {
   const q = f => pdTop1[Math.min(pdTop1.length - 1, Math.floor(f * pdTop1.length))] || 0;
   const cos = dot / (Math.sqrt(na) * Math.sqrt(nb) || 1);
 
+  // 差值在帧上是怎么分布的 —— 单个 max 值会被一两帧「决策边界」放大，
+  // 不给分布就容易被读成「整体都差这么多」。
+  const perFrame = [];
+  for (let t = 0; t < Math.min(T, refT); t++) {
+    let dmax = 0, c = 0;
+    for (let k = 0; k < C; k++) {
+      const d = Math.abs(got[t * C + k] - refBuf[t * C + k]);
+      if (d > dmax) { dmax = d; c = k; }
+    }
+    perFrame.push({ t, dmax, c });
+  }
+  perFrame.sort((x, y) => y.dmax - x.dmax);
+  const over1e2 = perFrame.filter(f => f.dmax > 1e-2).length;
+  const over1e3 = perFrame.filter(f => f.dmax > 1e-3).length;
+  const worst = perFrame.slice(0, 3).map(f =>
+    `t=${f.t}:${f.dmax.toExponential(1)}`).join(' · ');
+
   const ok = T === refT && cos > 0.999999 && argmaxSame === n && g1.text === g2.text && maxTop1PD < 5e-3;
   const res = [
     ['输出形状', `${JSON.stringify(dims)}` + (T === refT ? ' <span class="ok">✓ 与参照一致</span>' : ' <span class="bad">✗</span>')],
@@ -157,6 +180,8 @@ async function main() {
     ['实时倍率', `${((frames / 66.667) * 1000 / runMs).toFixed(1)}× 实时`],
     ['加载的 wasm', usedWasm],
     ['max|Δlogits|', `${maxD.toExponential(2)}（这一格 p≈${Math.exp(atMax.b).toExponential(1)}：${atMax.b.toFixed(3)} vs ${atMax.a.toFixed(3)}）`],
+    ['|Δlogits| 超阈的帧', `>1e-2：${over1e2} 帧 · >1e-3：${over1e3} 帧（共 ${perFrame.length} 帧）`],
+    ['最差三帧', worst],
     ['mean|Δlogits|', (sumD / (m || 1)).toExponential(2)],
     ['max|Δp|（全部 42 类）', maxPD.toExponential(2) + ' <span class="warn">含 p≈1e-14 的格，信息量低</span>'],
     ['max|Δp|（逐帧 top-1）', `${maxTop1PD.toExponential(2)}` + (maxTop1PD < 5e-3
@@ -176,6 +201,7 @@ async function main() {
   window.__poc = {
     ok, maxD, maxPD, maxTop1PD, meanD: sumD / (m || 1), cos, argmaxSameRate: argmaxSame / (n || 1),
     pdTop1: { p50: q(0.5), p90: q(0.9), p99: q(0.99) },
+    framesOver: { e2: over1e2, e3: over1e3, total: perFrame.length },
     atTop1: { t: atTop1.t, ref: atTop1.b, wasm: atTop1.a },
     T, refT, dims, runMs, sessionMs: tSession, usedWasm, text: g1.text, refText: g2.text,
     ua: navigator.userAgent, inputShape: [1, 1, frames, bins],

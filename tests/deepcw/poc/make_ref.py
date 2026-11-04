@@ -54,6 +54,10 @@ def main() -> int:
     ap.add_argument('--meta', default=META)
     ap.add_argument('--spec', default=SPEC)
     ap.add_argument('--out', default=OUT)
+    ap.add_argument('--opt', choices=['all', 'disable'], default='all',
+                    help='图优化级别（用来量「同一个运行时自己跟自己对差多少」）')
+    ap.add_argument('--threads', type=int, default=4)
+    ap.add_argument('--stdout-only', action='store_true', help='不落盘，只打印摘要')
     args = ap.parse_args()
 
     for p in (args.model, args.meta, args.spec):
@@ -68,14 +72,17 @@ def main() -> int:
     assert x.shape[2] == frames
 
     so = ort.SessionOptions()
-    so.intra_op_num_threads = 4
+    so.intra_op_num_threads = args.threads
+    if args.opt == 'disable':
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_DISABLE_ALL
     sess = ort.InferenceSession(args.model, so, providers=['CPUExecutionProvider'])
     in_name = sess.get_inputs()[0].name
     out_name = sess.get_outputs()[0].name
     logits = sess.run([out_name], {in_name: x.astype(np.float32)})[0]
 
     os.makedirs(args.out, exist_ok=True)
-    logits.astype(np.float32).tofile(os.path.join(args.out, 'ref_logits.f32'))
+    if not args.stdout_only:
+        logits.astype(np.float32).tofile(os.path.join(args.out, 'ref_logits.f32'))
     text = greedy(logits[0], meta['chars'], meta['blank_index'])
 
     info = {
