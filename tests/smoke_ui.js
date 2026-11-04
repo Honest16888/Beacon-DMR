@@ -238,6 +238,55 @@ await sleep(400);
 const shot = await send('Page.captureScreenshot', { format: 'png' }, S);
 if (shot.result?.data) fs.writeFileSync(path.join(OUT, 'beacon-dmr-ui-' + W + '.png'), Buffer.from(shot.result.data, 'base64'));
 
+console.log('\n=== 5c. 长按排序不被系统「复制」菜单抢走（v2.8.1）===');
+const noselect = await ev(`
+  /* 根因：行里文字可选，Android 长按 ~400 ms 先弹「复制」，而我们的长按是 420 ms。
+     判据是三条可观测的东西：行不可选、右键/长按菜单被拦、按下时清掉旧选区。 */
+  const list=document.getElementById('mineList');
+  const row=list&&list.querySelector('.row[data-id]');
+  if(!row)return {skip:true};
+  const cs=getComputedStyle(row);
+  const m1=new MouseEvent('contextmenu',{bubbles:true,cancelable:true});
+  row.dispatchEvent(m1);
+  /* 对照组：普通元素必须选得中，否则下面「选不中」可能只是这个环境不支持 */
+  const ctl=document.querySelector('.topbar .brand')||document.querySelector('.topbar');
+  const pick=(el)=>{ const rr=document.createRange(); rr.selectNodeContents(el);
+    const ss=window.getSelection(); ss.removeAllRanges(); ss.addRange(rr); return ss.toString().length; };
+  const ctlLen=ctl?pick(ctl):-1;
+  /* 先把这一行文字选中，模拟「系统已经弹出复制菜单」的状态 */
+  const r=document.createRange(); r.selectNodeContents(row);
+  const sel=window.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+  const before=sel.toString().length;
+  /* 记住对照组结果（pick 会换掉选区，所以先取 before） */
+  row.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,clientX:12,clientY:12,button:0}));
+  await new Promise(x=>setTimeout(x,60));
+  const afterDown=window.getSelection().toString().length;
+  await new Promise(x=>setTimeout(x,420));
+  const dragging=DG.on===true;
+  row.dispatchEvent(new PointerEvent('pointerup',{bubbles:true}));
+  await new Promise(x=>setTimeout(x,80));
+  return {ctlSel:ctlLen,
+    userSelect:(cs.getPropertyValue('user-select')||cs.getPropertyValue('-webkit-user-select')||''),
+    callout:cs.getPropertyValue('-webkit-touch-callout')||'',
+    ctxPrevented:m1.defaultPrevented===true,
+    before:before, afterDown:afterDown,
+    afterUp:window.getSelection().toString().length, dragging:dragging};`);
+if (noselect.skip) {
+  ok('（跳过）我的收听里没有行可测', true, noselect);
+} else {
+  /* 判据用「选得中吗」而不是 computed style：headless 里 getPropertyValue
+     有时拿不到 user-select，但「选不选得中」是行为，跨浏览器一致。
+     对照组必须选得中，否则这条测的是环境不支持选区，不是我们的修复。 */
+  ok('列表行选不中（长按不会先起选区）',
+    noselect.ctlSel > 0 && noselect.before === 0, noselect);
+  ok('长按菜单被拦（复制/分享不会弹）', noselect.ctxPrevented === true, noselect);
+  /* 两种都算过：文字根本选不中（before=0，最理想），或者选得中但一按下就被清掉 */
+  ok('按下即清掉已有选区（或本来就选不中）',
+    (noselect.before === 0) || (noselect.before > 0 && noselect.afterDown === 0), noselect);
+  ok('长按 480 ms 仍能进入拖动（手势归我们）', noselect.dragging === true, noselect);
+  ok('松手后不留选区', noselect.afterUp === 0, noselect);
+}
+
 console.log('\n=== 6. 接收音质处理链 ===');
 const q1 = await ev(`const ok0=Audio_.init();
   return {inited:ok0, hasPush:typeof Audio_.push==='function',

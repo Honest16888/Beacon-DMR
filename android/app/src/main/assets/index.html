@@ -1139,6 +1139,11 @@ body.simple .foot .fc{display:none}
 #mineList .row.muted .tgnum,#mineList .row.muted .tgname{color:var(--dim)}
 #mineList .row.muted .lamp{background:var(--dim);box-shadow:none}
 #mineList .row.muted .mini[data-act="mute"]{color:var(--tx);border-color:#f0c2c4}
+/* ★ v2.8.1 长按排序时 Android 会先弹「复制」菜单，手势被系统抢走。
+   原因：行里是可选的文字，系统长按 ~400 ms 就开始选词，而我们自己的长按是 420 ms。
+   把选择彻底关掉（连带 -webkit-touch-callout），手势才归我们。 */
+#mineList .row,#mineList .row *{-webkit-user-select:none;user-select:none;
+  -webkit-touch-callout:none;-webkit-tap-highlight-color:transparent}
 /* 长按拖动：抬起来的那一行跟着手指走（用 transform 而非改定位，
    避免和列表的滚动容器打架），其余行保持原位，松手才重排。 */
 #mineList .row.lift{position:relative;z-index:6;background:var(--panel);
@@ -22385,6 +22390,7 @@ function dgCancel(){
   document.body.classList.remove('dragging');
 }
 function dgStart(row){
+  try{ const sel=window.getSelection(); if(sel)sel.removeAllRanges(); }catch(e){}
   DG.on=true; DG.row=row;
   row.classList.add('lift');
   document.body.classList.add('dragging');
@@ -22424,6 +22430,8 @@ function dgDrop(){
     : [];
   DG.lastDrop=Date.now();
   dgCancel();
+  /* 松手后也清一次：手抖选中半个话组名，留在那儿会跟着后面的滚动飘 */
+  try{ const sel=window.getSelection(); if(sel)sel.removeAllRanges(); }catch(e){}
   if(!order.length||order.length!==state.subscribed.length
      ||order.every((n,i)=>n===state.subscribed[i])){
     renderMine();                       /* 没变，只把 lift 样式收掉 */
@@ -22442,8 +22450,15 @@ function dgDrop(){
     const row=e.target.closest('.row[data-id]');
     if(!row)return;
     if(e.target.closest('.acts'))return;      /* 行内小按钮不参与拖动 */
+    /* 手指落下就把已有选区清掉：上一步如果已经被系统选中（弹出了复制菜单），
+       不清的话那个菜单会一直挂着手势，后面怎么拖都不对。 */
+    try{ const sel=window.getSelection(); if(sel)sel.removeAllRanges(); }catch(err){}
     DG.y0=e.clientY; DG.x0=e.clientX; DG.row=row;
     DG.timer=setTimeout(()=>{ DG.timer=null; dgStart(row); },420);
+  });
+  /* 长按菜单（复制/分享）在列表行上没有任何用处，只会抢手势 */
+  list.addEventListener('contextmenu',e=>{
+    if(e.target.closest('.row[data-id]'))e.preventDefault();
   });
   list.addEventListener('pointermove',e=>{
     if(DG.timer){
