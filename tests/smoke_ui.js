@@ -204,6 +204,30 @@ const f5 = await ev(`/* ★ v2.4.8 这里是「滚回顶部自动展开」，v2.
 ok('滚到深处不会自动收起/展开', f5.deep === true, f5);
 ok('滚回顶部也不会自动展开', f5.collapsed === true && f5.stateCollapsed === true, f5);
 ok('折叠态摘要条仍然显示', f5.sumShown === true, f5);
+
+console.log('\n=== 5b. 播报条吸顶（滚下去也要看得见谁在说话）===');
+const sticky = await ev(`
+  /* 播报条是「谁在说话 / 发到哪个组 / 录没在录」的唯一显示，滚走等于没有。
+     它吸在顶栏下面，操作区再吸在「顶栏 + 播报条」下面 —— 三者不能叠。 */
+  window.scrollTo(0, document.body.scrollHeight);
+  await new Promise(r=>setTimeout(r,250));
+  const tb=document.querySelector('.topbar').getBoundingClientRect();
+  const nb=document.getElementById('nowbar').getBoundingClientRect();
+  const ht=document.querySelector('#viewListen .home-top').getBoundingClientRect();
+  const r={y:Math.round(window.scrollY), vh:window.innerHeight,
+    tbH:Math.round(tb.height), nbTop:Math.round(nb.top), nbBottom:Math.round(nb.bottom),
+    nbH:Math.round(nb.height), htTop:Math.round(ht.top),
+    cs:getComputedStyle(document.getElementById('nowbar')).position};
+  window.scrollTo(0,0);
+  await new Promise(r=>setTimeout(r,150));
+  return r;`);
+ok('页面确实滚动了（否则下面三条是在测顶栏）', sticky.y > 100, sticky);
+ok('播报条是 sticky 且吸在顶栏正下方',
+  sticky.cs === 'sticky' && Math.abs(sticky.nbTop - sticky.tbH) <= 1, sticky);
+ok('滚动后播报条仍在视口内（没被滚走）',
+  sticky.nbTop >= 0 && sticky.nbTop + sticky.nbH <= sticky.vh, sticky);
+ok('操作区接在播报条下面（两者不重叠）',
+  sticky.htTop >= sticky.nbBottom - 1, sticky);
 await ev(`const sp=document.getElementById('__sp'); if(sp)sp.remove(); return 1;`);
 
 // 截图：折叠态

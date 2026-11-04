@@ -97,7 +97,10 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;heigh
 .nowbar{display:flex;align-items:center;gap:12px;padding:11px 16px 11px 13px;
   background:var(--panel);border-bottom:1px solid var(--border);
   border-left:3px solid transparent;min-height:0;flex-wrap:wrap;
-  transition:border-color .15s,background .15s}
+  transition:border-color .15s,background .15s;
+  /* ★ 吸在顶栏下面：它是「谁在说话」的唯一显示，滚下去就看不见等于没有。
+     顶栏高度随换行变，所以 top 用实测值（--topbar-h），不用写死 62px。 */
+  position:sticky;top:var(--topbar-h,62px);z-index:55}
 html[data-theme="dark"] .nowbar{background:var(--panel2)}
 .nowbar.live{border-left-color:var(--tx);
   background:linear-gradient(90deg,color-mix(in srgb,var(--tx) 6%,var(--panel)) 0%,var(--panel) 40%)}
@@ -248,7 +251,7 @@ html[data-theme="dark"] .np-reply{background:color-mix(in srgb,var(--tx) 16%,var
    ⚠ 分栏条(mobnav)必须和操作区在**同一个** sticky 容器里 —— 之前它是独立
    sticky、靠算出来的高度偏移去对齐，操作区一换行（提示文字变长/变短）就错位，
    中间露出一条缝。 */
-.home-top{position:sticky;top:var(--topbar-h,62px);z-index:40;
+.home-top{position:sticky;top:calc(var(--topbar-h,62px) + var(--nowbar-h,0px));z-index:40;
   display:flex;flex-direction:column;gap:8px;padding:10px 12px 10px;
   background:var(--panel);border-bottom:1px solid var(--border);
   box-shadow:0 6px 14px -10px rgba(0,0,0,.35)}
@@ -26060,8 +26063,21 @@ function txAutoConnect(){
 function syncTopbarH(){
   const tb=document.querySelector('.topbar');
   if(tb)document.documentElement.style.setProperty('--topbar-h',tb.offsetHeight+'px');
+  /* 播报条也吸顶，它换行时高度会变（录制中 / 个呼 / 窄屏），操作区跟着往下让 */
+  const nb=document.querySelector('.nowbar');
+  if(nb)document.documentElement.style.setProperty('--nowbar-h',nb.offsetHeight+'px');
   syncHomeTopH();
 }
+/* 播报条内容一换就可能换行，高度是被动变的 —— 用 ResizeObserver 盯着它，
+   比在每个渲染点后面手动调一次靠谱（漏一处就重叠一处）。 */
+(function watchNowbar(){
+  const nb=document.querySelector('.nowbar');
+  if(!nb||typeof ResizeObserver!=='function')return;
+  new ResizeObserver(()=>{
+    document.documentElement.style.setProperty('--nowbar-h',nb.offsetHeight+'px');
+    syncHomeTopH();
+  }).observe(nb);
+})();
 /* 首页「操作区」的高度也随宽度变（发射条会换行），mobnav 要钉在它正下方，
    同样把实测高度喂给 --htop-h。不在首页时（display:none）量不到，保留旧值即可。 */
 function syncHomeTopH(){
