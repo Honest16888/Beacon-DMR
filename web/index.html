@@ -23813,6 +23813,18 @@ const AURA = {
     }
     return this.ends;
   },
+  /* 按 PTT 时该对谁说话：已加入 → 发射目标框 → 订阅列表第一个 → 全部端点第一个 */
+  targetEnd(){
+    if(this.cur)return this.cur;
+    const el=document.getElementById('txTg');
+    const t=Number(el&&el.value)||0;
+    if(t&&this.endByTg.has(t))return this.endByTg.get(t);
+    for(const tg of state.subscribed){
+      const e=this.endByTg.get(Number(tg));
+      if(e)return e;
+    }
+    return this.ends[0]||null;
+  },
   endName(tg){ const e=this.endByTg.get(Number(tg)); return e?e.name:''; },
   endChannel(tg){ const e=this.endByTg.get(Number(tg)); return e?e.channelName:''; },
 
@@ -23996,6 +24008,11 @@ const AURA = {
         for(const mm of (m.members||[]))if(mm&&mm.callsign)this.members.set(String(mm.callsign),!!mm.talking);
         try{ txWebMode(); }catch(e){}
         renderAll(); renderLive(true);
+        /* 按 PTT 时自动加入的：加入成功立刻开口（用户的手还按着） */
+        if(this.pendingTalk){
+          this.pendingTalk=false;
+          setTimeout(()=>{ auraTalkStart(); },50);
+        }
         break;
       }
       case 'left':
@@ -24189,7 +24206,8 @@ function auraRenderMine(){
     return;
   }
   if(!AURA.ends.length){
-    list.innerHTML='<div class="empty"><b>没有可用频道</b>'
+    list.innerHTML='<div class="empty"><b>这个账号还没有可用频道</b><br>'
+      +'公开频道也要先申请加入、并由管理员通过；联系部署方处理后再拉取。<br>'
       +'<button class="btn sm" data-act="auraRefresh" style="margin-top:8px">重新拉取频道</button></div>';
     return;
   }
@@ -24203,7 +24221,9 @@ function auraRenderMine(){
     const tx=joined&&AURA.talkOn;
     const inScan=state.scan.list.includes(Number(id));
     const muted=state.rxMuteTg.indexOf(Number(id))>=0;
-    return '<div class="row'+(tx?' tx':'')+(muted?' muted':'')+' pinned" data-id="'+id+'">'+
+    /* data-act 挂在整行上：点一下就是加入/离开，不用非得找准那颗 ▶ */
+    return '<div class="row'+(tx?' tx':'')+(muted?' muted':'')+' pinned" data-id="'+id
+      +'" data-act="auraJoin">'+
       '<span class="lamp'+(joined?' on':'')+'"></span>'+
       '<span class="tgnum">'+id+'</span>'+
       '<div class="tginfo"><div class="tgname">'+esc(e.name||('TG '+id))+'</div>'+
@@ -24297,10 +24317,8 @@ function auraRenderSet(){
      · AURA ：talk(on) → getUserMedia → s16le → /ws/ptt 二进制帧
    所以这里不需要 Android 桥，也不需要声码器；web 版和 App 走的是同一条。
    失败时必须把 TX.pttHeld / TX.txing 复位，否则 PTT 会卡在「发射中」。 */
-async function auraPttDown(){
-  if(!AURA.loggedIn()){ toast('先登录 AURA（设置 → ☁️ AURA）'); return; }
-  if(!AURA.wsOpen){ toast('AURA 连接还没建立'); return; }
-  if(!AURA.cur){ toast('先加入一个端点'); return; }
+/* 真正开口：talk on + 起麦克风。失败要把状态全复位，否则 PTT 卡在「发射中」。 */
+async function auraTalkStart(){
   if(!AURA.talk(true)){ toast('talk 指令没发出去'); return; }
   TX.pttHeld=true; TX.txing=true;
   const p=txEl('txPtt'); if(p)p.classList.add('live');
@@ -24313,7 +24331,35 @@ async function auraPttDown(){
     renderNow(); renderStatus();
   }
 }
+async function auraPttDown(){
+  if(!AURA.loggedIn()){ toast('先登录 AURA（设置 → ☁️ AURA）'); return; }
+
+  if(!AURA.wsOpen){
+    toast('AURA 正在连接…');
+    await AURA.waitOpen(4000);
+    if(!AURA.wsOpen){ toast('AURA 还没连上 —— 点「测试连接」看是哪一步'); return; }
+  }
+
+  /* ★ 没加入端点时自己补上：AURA 的 join 是一次一个端点的显式动作，
+     和 BM「订阅即收听」不一样；用户按 PTT 时大多只是「想对当前这个说」。 */
+  if(!AURA.cur){
+    const e=AURA.targetEnd();
+    if(!e){
+      toast(AURA.ends.length
+        ? '先选一个端点：在「我的收听」点一行（或点 ▶）'
+        : '这个账号还没有可用频道 —— 公开频道也要管理员批准加入');
+      return;
+    }
+    AURA.pendingTalk=true;
+    AURA.join(e);
+    toast('正在加入 '+(e.name||('TG '+e.tg))+'…加入后自动发射');
+    return;
+  }
+
+  await auraTalkStart();
+}
 function auraPttUp(){
+  AURA.pendingTalk=false;
   AURA.talk(false);
   AURA.micStop();
   TX.txing=false;

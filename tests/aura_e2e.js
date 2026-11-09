@@ -191,6 +191,44 @@ ok('音频帧到达 Hub（0x01 PCM）', tx.after.audio_in > tx.before.audio_in,
   { in: tx.after.audio_in, bytes: tx.after.audio_bytes });
 ok('talk off 到达 Hub', tx.after2.talk_off > tx.before.talk_off, tx.after2);
 
+console.log('\n=== 4a. 没加入端点就按 PTT：自动加入并开口 ===');
+const autoJoin = await ev(`
+  AURA.leave();
+  await new Promise(r=>setTimeout(r,250));
+  state.subscribed=[460];
+  const before=(await (await fetch(${JSON.stringify(HUB)} + '/__stats')).json()).stats;
+  auraPttDown();                       /* 不 await：它要等 joined 再开口 */
+  await new Promise(r=>setTimeout(r,1800));
+  const after=(await (await fetch(${JSON.stringify(HUB)} + '/__stats')).json()).stats;
+  const out={cur:AURA.cur&&AURA.cur.tg, talkBefore:before.talk_on, talkAfter:after.talk_on,
+             txing:TX.txing===true, audioBefore:before.audio_in, audioAfter:after.audio_in};
+  AURA.pendingTalk=false; auraPttUp();
+  return out;`);
+ok('按 PTT 自动加入端点（不用先点 ▶）', autoJoin.cur === 460, autoJoin);
+ok('加入后自动 talk on', autoJoin.talkAfter > autoJoin.talkBefore, autoJoin);
+ok('加入后麦克风真的开始发帧', autoJoin.audioAfter > autoJoin.audioBefore, autoJoin);
+ok('TX 状态进了「发射中」', autoJoin.txing === true, autoJoin);
+
+const rowJoin = await ev(`
+  /* 行点击走的是 UI 分发器，里面带 net==='aura' 的判断 —— 先把网络切过去 */
+  const prev=state.net;
+  setNet('aura');
+  await new Promise(r=>setTimeout(r,200));
+  /* setNet 会从这个网络的 localStorage 重新载入订阅，先把它填回来 */
+  state.subscribed=[460];
+  store.set('subscribedAURA',[460]);
+  renderMine();
+  AURA.leave();
+  await new Promise(r=>setTimeout(r,250));
+  const row=document.querySelector('#mineList .row[data-id="460"]');
+  if(row)row.click();
+  await new Promise(r=>setTimeout(r,700));
+  const out={cur:AURA.cur&&AURA.cur.tg, hasRow:!!row};
+  setNet(prev==='aura'?'bm':prev);
+  return out;`);
+ok('点整行即加入（不是只有那颗 ▶）',
+  rowJoin.hasRow === true && rowJoin.cur === 460, rowJoin);
+
 console.log('\n=== 4b. 连接诊断 + 原生 HTTP 桥 ===');
 const diag = await ev(`
   const r = await AURA.testConn();
