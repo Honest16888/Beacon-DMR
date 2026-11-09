@@ -289,6 +289,11 @@ public class MainActivity extends Activity {
     }
 
     private class AssetClient extends WebViewClient {
+        @Override
+        public void onReceivedSslError(WebView view, android.webkit.SslErrorHandler handler, android.net.http.SslError error) {
+            handler.proceed(); // 信任自签证书（用于 FRP 隧道的自动 HTTPS）
+        }
+
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest req) {
