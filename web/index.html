@@ -24497,13 +24497,13 @@ const Update = {
   },
 
   /* 当前版本 —— 和 AndroidManifest 的 versionName 保持一致 */
-  current(){ return '2.10.1'; },
+  current(){ return '2.10.15'; },
 
   /** 检查更新，返回 {has_update, info} 或 null（未配置/网络错误） */
   async check(){
     if(!this.server)return null;
     try{
-      const r = await fetch(this.server+'/api/version?current='+encodeURIComponent(this.current()),
+      const r = await fetch(this.server+'/?action=version&current='+encodeURIComponent(this.current()),
         {headers:{'Accept':'application/json'}});
       if(!r.ok)return null;
       return await r.json();
@@ -24522,7 +24522,7 @@ const Update = {
       + (v.force ? '⚠ 此版本为强制更新' : '是否下载？');
 
     if(confirm(msg)){
-      this.download(this.server+v.download);
+      this.download(this.server+'/?action=download&ver='+encodeURIComponent(v.version));
     }
   },
 
@@ -24931,7 +24931,7 @@ function auraPttUp(){
     if(!Update.server){ toast('先填更新服务器地址'); return; }
     toast('正在检查更新…');
     const r = await Update.check();
-    if(!r){ toast('检查失败（网络或服务器不可达）'); return; }
+    if(!r){ toast('检查失败：'+Update.server+' 不可达'); return; }
     if(r.has_update && r.info){
       Update.checkAndNotify();
     }else{
