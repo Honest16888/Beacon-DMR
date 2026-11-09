@@ -24503,11 +24503,17 @@ const Update = {
 
   load(){
     // 内置默认更新服务器，用户可在设置页修改
-    this.server = String(store.get('updateServer','https://frp-hip.com:52615/update')||'https://frp-hip.com:52615/update').trim().replace(/\/+$/,'');
+    let s = String(store.get('updateServer','')||'').trim().replace(/\/+$/,'');
+    if(!s) s = 'https://frp-hip.com:52615/update';
+    // 确保协议双斜杠正确（防止存成 https:/xxx）
+    s = s.replace(/^(https?):\/(?!\/)/, '$1://');
+    this.server = s;
   },
   save(url){
-    this.server = String(url||'').trim().replace(/\/+$/,'');
-    store.set('updateServer', this.server);
+    let s = String(url||'').trim().replace(/\/+$/,'');
+    s = s.replace(/^(https?):\/(?!\/)/, '$1://');
+    this.server = s;
+    store.set('updateServer', s);
   },
 
   /* 当前版本 —— 和 AndroidManifest 的 versionName 保持一致 */
@@ -24554,7 +24560,7 @@ const Update = {
     if(document.getElementById('updateModal'))return;
     const sizeMb=((v.size||0)/1024/1024).toFixed(1);
     const isForce=!!v.force;
-    const url=this.server+'/index.php?action=download&ver='+encodeURIComponent(v.version);
+    const url=this.server+(v.download||('/?action=download&ver='+encodeURIComponent(v.version)));
     const wrap=document.createElement('div');
     wrap.id='updateModal';
     wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;animation:updFadeIn .2s';
