@@ -24598,11 +24598,7 @@ const Update = {
     const bar=document.getElementById('updBar');
     const pct=document.getElementById('updPct');
     const btn=document.getElementById('updBtn');
-    if(typeof Android!=='undefined'&&Android.downloadApk){
-      // App 内：走原生下载（无法获取进度）
-      Android.downloadApk(url);
-      return;
-    }
+    // 始终用 XHR 下载（可以获取进度，也能正确处理 PHP 查询参数 URL）
     const xhr=new XMLHttpRequest();
     xhr.open('GET',url,true);
     xhr.responseType='blob';
