@@ -2035,6 +2035,16 @@ body.dragging .dghint{display:block}
           <button class="btn sm danger" id="setReset">恢复默认</button>
         </div>
       </div>
+      <div class="setrow">
+        <div class="setlbl"><b>更新服务器</b><span>远程更新推送的服务器地址，留空则不检查更新</span></div>
+        <div class="setctl"><input class="aurainp" id="updateServer" placeholder="https://update.example.com:8080"></div>
+      </div>
+      <div class="setrow act">
+        <div class="setlbl"><b>检查更新</b><span>当前版本 <b id="currentVer"></b></span></div>
+        <div class="setctl">
+          <button class="btn sm" id="btnCheckUpdate">检查更新</button>
+        </div>
+      </div>
       <div class="setnote">
         <b>录音</b>和<b>通话记录</b>只存在本机内存里，关掉页面就没了 ——
         重要的录音请在「录音」标签页里点保存，落到手机存储上。
@@ -24460,6 +24470,79 @@ window.onAuraWs=function(json){
   }
 };
 
+/* ===================== 远程更新检查 =====================
+ *
+ * 服务端部署 tools/update_server.py，客户端只需配一个 URL。
+ *
+ * 接口：
+ *   GET {server}/api/version?current=当前版本 → {has_update, info}
+ *   GET {server}/api/download/{version}      → APK 文件
+ *
+ * 调用方式：
+ *   Update.check()          检查更新（不弹窗，只返回结果）
+ *   Update.checkAndNotify() 检查更新并弹窗提示
+ *   Update.download(url)    下载 APK（返回 Promise，完成后触发安装）
+ *
+ * 服务端地址存在 localStorage，设置页可改。 */
+const Update = {
+  server: '',
+
+  load(){
+    this.server = String(store.get('updateServer','')||'').trim().replace(/\/+$/,'');
+  },
+  save(url){
+    this.server = String(url||'').trim().replace(/\/+$/,'');
+    store.set('updateServer', this.server);
+  },
+
+  /* 当前版本 —— 和 AndroidManifest 的 versionName 保持一致 */
+  current(){ return '2.10.1'; },
+
+  /** 检查更新，返回 {has_update, info} 或 null（未配置/网络错误） */
+  async check(){
+    if(!this.server)return null;
+    try{
+      const r = await fetch(this.server+'/api/version?current='+encodeURIComponent(this.current()),
+        {headers:{'Accept':'application/json'}});
+      if(!r.ok)return null;
+      return await r.json();
+    }catch(e){ return null; }
+  },
+
+  /** 检查更新并弹窗提示（启动时调用） */
+  async checkAndNotify(){
+    const r = await this.check();
+    if(!r || !r.has_update || !r.info)return;
+
+    const v = r.info;
+    const sizeKb = Math.round((v.size||0)/1024);
+    const msg = '发现新版本 '+v.version+'（'+sizeKb+' KB）\n\n'
+      + (v.changelog||'') + '\n\n'
+      + (v.force ? '⚠ 此版本为强制更新' : '是否下载？');
+
+    if(confirm(msg)){
+      this.download(this.server+v.download);
+    }
+  },
+
+  /** 下载 APK 并触发安装 */
+  download(url){
+    if(typeof Android!=='undefined' && Android.downloadApk){
+      // App 内：走原生下载 + 安装
+      Android.downloadApk(url);
+    }else{
+      // 网页版：直接打开下载链接
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = '';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      toast('已开始下载 APK');
+    }
+  },
+};
+
 /* ===================== AURA 界面 ===================== */
 
 /* 「我的收听」在 AURA 网络下的样子：
@@ -24832,6 +24915,27 @@ function auraPttUp(){
     try{ await AURA.logout(); toast('已注销 AURA'); }
     catch(e){ toast('注销失败：'+(e&&e.message||e)); }
     finally{ busy(false); renderAll(); auraRenderSet(); }
+  });
+
+  /* 远程更新设置 */
+  const ups = document.getElementById('updateServer');
+  if(ups){
+    ups.value = Update.server;
+    ups.addEventListener('change', ()=> Update.save(ups.value));
+  }
+  const cv = document.getElementById('currentVer');
+  if(cv)cv.textContent = Update.current();
+  const bcu = document.getElementById('btnCheckUpdate');
+  if(bcu)bcu.addEventListener('click', async ()=>{
+    if(!Update.server){ toast('先填更新服务器地址'); return; }
+    toast('正在检查更新…');
+    const r = await Update.check();
+    if(!r){ toast('检查失败（网络或服务器不可达）'); return; }
+    if(r.has_update && r.info){
+      Update.checkAndNotify();
+    }else{
+      toast('已是最新版本 '+Update.current());
+    }
   });
 
   auraRenderSet();
@@ -28109,6 +28213,9 @@ function boot(){
   txMarkTarget();
   loadTalkgroups(); loadMasters();
   AURA.load();
+  Update.load();
+  /* 启动后 3 秒检查更新（不阻塞启动） */
+  setTimeout(()=>{ Update.checkAndNotify(); }, 3000);
   if(state.net==='aura'){
     auraRenderSet();
     /* ★ 默认不自动连：这个 App 抢了会话，用户另一台设备就登不上 */
