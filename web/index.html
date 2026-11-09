@@ -24547,16 +24547,93 @@ const Update = {
   async checkAndNotify(){
     const r = await this.check();
     if(!r || !r.has_update || !r.info)return;
+    this.showUpdateDialog(r.info);
+  },
 
-    const v = r.info;
-    const sizeKb = Math.round((v.size||0)/1024);
-    const msg = '发现新版本 '+v.version+'（'+sizeKb+' KB）\n\n'
-      + (v.changelog||'') + '\n\n'
-      + (v.force ? '⚠ 此版本为强制更新' : '是否下载？');
-
-    if(confirm(msg)){
-      this.download(this.server+'/?action=download&ver='+encodeURIComponent(v.version));
+  showUpdateDialog(v){
+    if(document.getElementById('updateModal'))return;
+    const sizeMb=((v.size||0)/1024/1024).toFixed(1);
+    const isForce=!!v.force;
+    const url=this.server+'/?action=download&ver='+encodeURIComponent(v.version);
+    const wrap=document.createElement('div');
+    wrap.id='updateModal';
+    wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;animation:updFadeIn .2s';
+    wrap.innerHTML='<div style="background:#1e293b;border-radius:16px;max-width:380px;width:100%;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5);border:1px solid #334155">'
+      +'<div style="background:linear-gradient(135deg,#3b82f6,#8b5cf6);padding:20px 24px">'
+      +'<div style="font-size:13px;opacity:.85;margin-bottom:4px;color:#fff">发现新版本</div>'
+      +'<div style="font-size:24px;font-weight:700;color:#fff">'+v.version+'</div>'
+      +'<div style="font-size:12px;opacity:.7;margin-top:4px;color:#fff">大小 '+sizeMb+' MB'+(isForce?' · ⚠ 强制更新':'')+'</div>'
+      +'</div>'
+      +'<div style="padding:16px 24px">'
+      +'<div id="updLog" style="color:#94a3b8;font-size:13px;line-height:1.6;max-height:150px;overflow-y:auto;white-space:pre-wrap">'+(v.changelog||'无更新说明')+'</div>'
+      +'<div id="updProgress" style="display:none;margin-top:12px">'
+      +'<div style="background:#0f172a;border-radius:8px;height:8px;overflow:hidden"><div id="updBar" style="height:100%;width:0%;background:linear-gradient(90deg,#3b82f6,#8b5cf6);border-radius:8px;transition:width .3s"></div></div>'
+      +'<div id="updPct" style="color:#64748b;font-size:12px;margin-top:4px;text-align:center">0%</div>'
+      +'</div>'
+      +'</div>'
+      +'<div style="padding:0 24px 20px;display:flex;gap:10px">'
+      +(isForce?'':'<button id="updLater" style="flex:1;padding:12px;border-radius:10px;border:1px solid #334155;background:transparent;color:#94a3b8;font-size:15px;cursor:pointer">稍后再说</button>')
+      +'<button id="updBtn" style="flex:2;padding:12px;border-radius:10px;border:none;background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;font-size:15px;font-weight:600;cursor:pointer;box-shadow:0 4px 15px rgba(59,130,246,.3)">'+(isForce?'立即更新':'立即更新')+'</button>'
+      +'</div></div>';
+    document.body.appendChild(wrap);
+    if(!document.getElementById('updAnim')){
+      const st=document.createElement('style');
+      st.id='updAnim';
+      st.textContent='@keyframes updFadeIn{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}';
+      document.head.appendChild(st);
     }
+    const btn=document.getElementById('updBtn');
+    const later=document.getElementById('updLater');
+    if(later)later.onclick=()=>wrap.remove();
+    btn.onclick=()=>{
+      btn.disabled=true;
+      btn.textContent='下载中…';
+      if(later)later.style.display='none';
+      document.getElementById('updProgress').style.display='block';
+      this.downloadWithProgress(url);
+    };
+  },
+
+  downloadWithProgress(url){
+    const bar=document.getElementById('updBar');
+    const pct=document.getElementById('updPct');
+    const btn=document.getElementById('updBtn');
+    if(typeof Android!=='undefined'&&Android.downloadApk){
+      // App 内：走原生下载（无法获取进度）
+      Android.downloadApk(url);
+      return;
+    }
+    const xhr=new XMLHttpRequest();
+    xhr.open('GET',url,true);
+    xhr.responseType='blob';
+    xhr.onprogress=(e)=>{
+      if(e.lengthComputable&&bar){
+        const p=Math.round(e.loaded/e.total*100);
+        bar.style.width=p+'%';
+        if(pct)pct.textContent=p+'% ('+(e.loaded/1024/1024).toFixed(1)+'/'+(e.total/1024/1024).toFixed(1)+' MB)';
+      }
+    };
+    xhr.onload=()=>{
+      if(xhr.status===200){
+        if(bar)bar.style.width='100%';
+        if(pct)pct.textContent='100% 下载完成';
+        if(btn)btn.textContent='安装';
+        const a=document.createElement('a');
+        a.href=URL.createObjectURL(xhr.response);
+        a.download='';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }else{
+        if(pct)pct.textContent='下载失败 HTTP '+xhr.status;
+        if(btn){btn.disabled=false;btn.textContent='重试';}
+      }
+    };
+    xhr.onerror=()=>{
+      if(pct)pct.textContent='网络错误';
+      if(btn){btn.disabled=false;btn.textContent='重试';}
+    };
+    xhr.send();
   },
 
   /** 下载 APK 并触发安装 */
