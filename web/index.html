@@ -24604,8 +24604,14 @@ const Update = {
     const bar=document.getElementById('updBar');
     const pct=document.getElementById('updPct');
     const btn=document.getElementById('updBtn');
-    // 始终用 XHR 下载（可以获取进度，也能正确处理 PHP 查询参数 URL）
     console.log('[Update] download URL:', url);
+    // 优先用原生下载（更可靠，能处理大文件和超时）
+    if(typeof Android!=='undefined'&&Android.downloadApk){
+      if(pct)pct.textContent='正在下载…';
+      Android.downloadApk(url);
+      return;
+    }
+    // fallback：XHR 下载
     const xhr=new XMLHttpRequest();
     xhr.open('GET',url,true);
     xhr.responseType='blob';
