@@ -1947,6 +1947,10 @@ body.dragging .dghint{display:block}
         <div class="setlbl"><b>安全码</b><span>三位数字，登录时用；不保存、不写日志</span></div>
         <div class="setctl"><input class="aurainp" id="auraCode" inputmode="numeric" maxlength="3" placeholder="318"></div>
       </div>
+      <div class="setrow tog">
+        <div class="setlbl"><b>允许自签名证书</b><span>Hub 用自签证书时才需要打开；打开后这条链路不再校验证书</span></div>
+        <div class="setctl"><label class="sw"><input type="checkbox" id="auraTrustAll"><i></i></label></div>
+      </div>
       <div class="setrow act">
         <div class="setlbl"><b>操作</b><span>第一次：注册 → 自动绑定；以后：填安全码 → 登录</span></div>
         <div class="setctl">
@@ -23527,6 +23531,7 @@ const AURA = {
   load(){
     this.hub=String(store.get('auraHub','')||'').trim().replace(/\/+$/,'');
     this.device=String(store.get('auraDevice','')||'');
+    this.trustAll=store.get('auraTrustAll',false)===true;
     const s=store.get('auraSession',null);
     if(s&&typeof s==='object'){
       this.token=String(s.token||''); this.tokenAt=Number(s.at)||0;
@@ -23639,7 +23644,22 @@ const AURA = {
       add('REST', (e&&e.message||String(e)) + (st?('（HTTP '+st+'）'):''), 'bad');
     }
 
-    /* 2) WS：握手能不能建立。token 是假的，401 也是「连得上」 */
+    /* 2) WS 传输方式先说清楚：https 页面连 ws:// 是浏览器硬拒，不是网络问题 */
+    const nativeWs = this.useNativeWs();
+    if(u.protocol==='http:'&&location.protocol==='https:'){
+      add('WS 通道', nativeWs
+        ? '原生 AuraWs（ws:// 在浏览器里会被硬拒，这里绕开了）'
+        : '浏览器 —— 会被拒绝：HTTPS 页面不能发起 ws://', nativeWs?'ok':'bad');
+    }else{
+      add('WS 通道', nativeWs?'原生 AuraWs':'浏览器 WebSocket','ok');
+    }
+
+    /* 3) WS：握手能不能建立。token 是假的，401 也是「连得上」 */
+    if(!this.hasNativeWs() && u.protocol==='http:' && location.protocol==='https:'){
+      add('WebSocket','跳过：这个环境没有原生 WS，浏览器必拒','bad');
+      const ok1=steps.every(x=>x.s!=='bad');
+      return {ok:ok1, steps};
+    }
     const wsOk=await new Promise(res=>{
       let done=false;
       const finish=v=>{ if(done)return; done=true; res(v); };
@@ -23714,33 +23734,104 @@ const AURA = {
     const b=this.apiBase().replace(/^http/,'ws');
     return b+'/ws/ptt?token='+encodeURIComponent(this.token);
   },
+
+  /* ---------------- WebSocket 传输层 ----------------
+     两条实现，对上层完全一样：
+       · 浏览器 WebSocket —— 只能连 wss（https 页面连 ws:// 会被硬拒：
+         「An insecure WebSocket connection may not be initiated from a page loaded over HTTPS」）
+       · 原生 AuraWs（App 内）—— ws/wss 都能连，还能选择忽略自签名证书
+     什么时候走原生：Hub 是 http（必然是 ws）、或用户打开了「允许自签名」。
+     其它情况用浏览器实现：出错信息更直白，也少一层桥。 */
+  hasNativeWs(){ return !!(window.Android&&typeof Android.auraWsOpen==='function'); },
+  useNativeWs(){
+    if(!this.hasNativeWs())return false;
+    if(/^http:/i.test(this.hub))return true;     /* http Hub → ws://，浏览器连不了 */
+    if(this.trustAll)return true;                /* 自签名证书需要可配置的信任链 */
+    return false;
+  },
   connectWs(){
     if(!this.token)return;
     this.wsClose(true);
+    this.nativeWs=this.useNativeWs();
+    if(this.nativeWs)this.connectNativeWs();
+    else this.connectBrowserWs();
+  },
+  connectBrowserWs(){
     let ws;
     try{ ws=new WebSocket(this.wsUrl()); }
-    catch(e){ this.lastErr=String(e&&e.message||e); return; }
+    catch(e){
+      /* 走到这里基本就是「https 页面连 ws://」—— 说清楚，别让用户猜 */
+      this.lastErr=String(e&&e.message||e);
+      toast('WebSocket 被拒：'+this.lastErr);
+      this.wsOpen=false;
+      return;
+    }
     ws.binaryType='arraybuffer';
     this.ws=ws;
-    ws.onopen=()=>{
-      this.wsOpen=true; this.wsTries=0; this.lastErr='';
-      try{ if(state.net==='aura')txWebMode(); }catch(e){}
-      renderAll();
-    };
+    ws.onopen=()=>this._wsOpened();
     ws.onmessage=(ev)=>{
       if(typeof ev.data==='string')this.onText(ev.data);
       else this.onBinary(ev.data);
     };
-    ws.onclose=()=>{
-      const wasJoined=!!this.cur;
-      this.wsOpen=false; this.cur=null; this.members.clear();
-      if(wasJoined)renderAll();
-      this.scheduleReconnect();
-    };
+    ws.onclose=()=>this._wsClosed('浏览器关闭');
     ws.onerror=()=>{ this.lastErr='WebSocket 错误'; };
+  },
+  connectNativeWs(){
+    this.ws=null;
+    try{ Android.auraWsOpen(this.wsUrl(), !!this.trustAll); }
+    catch(e){
+      this.lastErr='原生 WebSocket 启动失败：'+(e&&e.message||e);
+      this.scheduleReconnect();
+    }
+  },
+  _wsOpened(){
+    this.wsOpen=true; this.wsTries=0; this.lastErr='';
+    try{ if(state.net==='aura')txWebMode(); }catch(e){}
+    renderAll();
+  },
+  _wsClosed(reason){
+    const wasJoined=!!this.cur;
+    this.wsOpen=false; this.cur=null; this.members.clear();
+    if(reason)this.lastErr=String(reason);
+    if(wasJoined)renderAll();
+    this.scheduleReconnect();
+  },
+  /* 原生回传的二进制是 base64 → ArrayBuffer，交给同一个 onBinary */
+  _wsNativeBin(b64){
+    try{
+      const bin=atob(b64), n=bin.length;
+      const u8=new Uint8Array(n);
+      for(let i=0;i<n;i++)u8[i]=bin.charCodeAt(i);
+      this.onBinary(u8.buffer);
+    }catch(e){}
+  },
+  wsSendText(s){
+    if(!this.wsOpen)return false;
+    if(this.nativeWs){
+      try{ Android.auraWsSendText(s); return true; }catch(e){ return false; }
+    }
+    try{ this.ws.send(s); return true; }catch(e){ return false; }
+  },
+  wsSendBin(u8){
+    if(!this.wsOpen)return false;
+    if(this.nativeWs){
+      try{
+        let bin='';
+        for(let i=0;i<u8.length;i+=4096){
+          bin+=String.fromCharCode.apply(null, u8.subarray(i, i+4096));
+        }
+        Android.auraWsSendBin(btoa(bin));
+        return true;
+      }catch(e){ return false; }
+    }
+    try{ this.ws.send(u8); return true; }catch(e){ return false; }
   },
   wsClose(silent){
     if(this.wsTimer){ clearTimeout(this.wsTimer); this.wsTimer=null; }
+    if(this.nativeWs){
+      try{ Android.auraWsClose(); }catch(e){}
+      this.nativeWs=false;
+    }
     if(this.ws){
       try{ this.ws.onclose=null; this.ws.close(); }catch(e){}
       this.ws=null;
@@ -23762,7 +23853,7 @@ const AURA = {
        直接 toast 一句「还没连上」然后什么都不做，用户会以为按钮坏了。 */
     if(!this.wsOpen){ this.pendingEnd=end; toast('正在连接，连上后自动加入'); return; }
     this.pendingEnd=null;
-    this.ws.send(JSON.stringify({type:'join', channel_id:end.channelId, tg_id:end.tgId}));
+    this.wsSendText(JSON.stringify({type:'join', channel_id:end.channelId, tg_id:end.tgId}));
     this.wsTries=0;
   },
   /* 等连接打开（握手是异步的，ensure() 之后立刻 join 会抢跑） */
@@ -23779,13 +23870,13 @@ const AURA = {
     });
   },
   leave(){
-    if(this.ws&&this.wsOpen)try{ this.ws.send(JSON.stringify({type:'leave'})); }catch(e){}
+    if(this.wsOpen)this.wsSendText(JSON.stringify({type:'leave'}));
     this.cur=null; this.members.clear(); renderAll();
   },
   talk(on){
-    if(!this.ws||!this.wsOpen)return false;
+    if(!this.wsOpen)return false;
     if(!this.cur)return false;
-    try{ this.ws.send(JSON.stringify({type:'talk', on:!!on})); }catch(e){ return false; }
+    if(!this.wsSendText(JSON.stringify({type:'talk', on:!!on})))return false;
     this.talkOn=!!on;
     return true;
   },
@@ -23931,7 +24022,7 @@ const AURA = {
         out[1+(i<<1)]=k&0xff;
         out[2+(i<<1)]=(k>>8)&0xff;
       }
-      if(this.ws&&this.wsOpen)try{ this.ws.send(out); }catch(e){}
+      this.wsSendBin(out);
     };
     /* 必须接到 destination 才会跑，但音量拉到 0 —— 否则麦克风原声会从喇叭出来 */
     const sink=ctx.createGain(); sink.gain.value=0;
@@ -23977,6 +24068,21 @@ window.onAuraHttp=function(id,json){
   let o; try{ o=JSON.parse(json); }catch(e){ o={status:0,body:'',error:'回调解析失败'}; }
   _auraPending.delete(id);
   cb(o);
+};
+
+/* 原生 WebSocket 的事件回调（MainActivity → 页面） */
+window.onAuraWs=function(json){
+  let o; try{ o=JSON.parse(json); }catch(e){ return; }
+  switch(o.t){
+    case 'open': AURA._wsOpened(); break;
+    case 'text': AURA.onText(String(o.data||'')); break;
+    case 'bin':  AURA._wsNativeBin(String(o.data||'')); break;
+    case 'close':AURA._wsClosed(String(o.data||'')); break;
+    case 'err':
+      AURA.lastErr='原生 WebSocket：'+(o.data||'');
+      AURA._wsClosed(String(o.data||''));
+      break;
+  }
 };
 
 /* ===================== AURA 界面 ===================== */
@@ -24147,6 +24253,16 @@ function auraPttUp(){
   function busy(on){ AURA.busy=!!on; auraRenderSet(); }
 
   hub.value=AURA.hub||'';
+  const trust=$('#auraTrustAll');
+  if(trust){
+    trust.checked=!!AURA.trustAll;
+    trust.addEventListener('change',()=>{
+      AURA.trustAll=!!trust.checked;
+      store.set('auraTrustAll',AURA.trustAll);
+      /* 换了信任策略要重建连接，否则还挂在旧的那条上 */
+      AURA.wsClose(); if(AURA.tokenValid())AURA.connectWs();
+    });
+  }
   hub.addEventListener('change',()=>{ const v=String(hub.value||'').trim().replace(/\/+$/,'');
     if(v){ AURA.hub=v; store.set('auraHub',v); auraRenderSet(); } });
 

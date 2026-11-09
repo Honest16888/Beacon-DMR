@@ -180,6 +180,60 @@ const bridge = await ev(`
 ok('有原生桥时 REST 走原生（不再用 fetch）', bridge.usedNative === true, bridge);
 ok('原生桥的回调被正确解析', bridge.ok === true, bridge);
 
+console.log('\n=== 4c. 原生 WebSocket 传输（ws:// 在 https 页面里的唯一出路）===');
+const nativeWs = await ev(`
+  /* 装一个假的 Android.auraWs*：验证 useNativeWs() 的判断、文本发送、
+     二进制 base64 发送、以及回调分发（open/text/bin/close）。 */
+  const sent = {text:[], bin:[]};
+  let opened = false;
+  window.Android = {
+    auraWsOpen(url, trustAll){ window.__wsUrl = url; window.__wsTrust = trustAll;
+      setTimeout(()=>window.onAuraWs(JSON.stringify({t:'open'})), 30); },
+    auraWsSendText(s){ sent.text.push(s); },
+    auraWsSendBin(b64){ sent.bin.push(b64.length); },
+    auraWsClose(){ },
+  };
+  /* http Hub → 必须走原生 */
+  AURA.hub='http://127.0.0.1:8099';
+  const choseNative = AURA.useNativeWs();
+  /* https Hub + 不信任自签名 → 用浏览器 */
+  AURA.hub='https://hub.example.com';
+  const choseBrowser = AURA.useNativeWs();
+  AURA.hub='http://127.0.0.1:8099';
+
+  /* 手动驱动一次连接，看回调是否被正确分发 */
+  AURA.token='tok_unit';
+  AURA.connectWs();
+  await new Promise(r=>setTimeout(r,120));
+  const openedOk = AURA.wsOpen === true;
+
+  /* 文本：join/talk 都该走 wsSendText */
+  AURA.cur={channelId:12, tgId:34, tg:460, name:'x'};
+  AURA.join(AURA.cur);
+  AURA.talk(true);
+
+  /* 二进制：4 KB PCM → base64 */
+  const u8=new Uint8Array(4096); u8[0]=1;
+  AURA.wsSendBin(u8);
+
+  /* 下行：原生回一帧 base64 PCM，应该进 onBinary（不报错即可） */
+  const sdrBefore=SDR.cn;
+  const pcm=new Uint8Array(1+160*2); pcm[0]=1;
+  window.onAuraWs(JSON.stringify({t:'bin', data: btoa(String.fromCharCode.apply(null,pcm))}));
+  await new Promise(r=>setTimeout(r,60));
+
+  /* 关闭 */
+  window.onAuraWs(JSON.stringify({t:'close', data:'测试关闭'}));
+  delete window.Android;
+  return {choseNative, choseBrowser, openedOk, texts:sent.text.length, bins:sent.bin.length,
+          pcmIn:sent.bin[0]||0, closed:AURA.wsOpen===false};`);
+ok('http Hub → 选原生 WS（浏览器必拒 ws://）', nativeWs.choseNative === true, nativeWs);
+ok('https Hub 且不信任自签名 → 仍用浏览器 WS', nativeWs.choseBrowser === false, nativeWs);
+ok('原生 open 回调把 wsOpen 置起来', nativeWs.openedOk === true, nativeWs);
+ok('join / talk 走原生文本帧', nativeWs.texts >= 2, nativeWs);
+ok('PCM 走原生二进制帧（base64）', nativeWs.bins >= 1, nativeWs);
+ok('close 回调复位状态', nativeWs.closed === true, nativeWs);
+
 console.log('\n=== 5. 网络切换不串线 ===');
 const sw = await ev(`
   setNet('aura');

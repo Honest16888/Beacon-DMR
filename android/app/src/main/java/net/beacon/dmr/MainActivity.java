@@ -256,6 +256,21 @@ public class MainActivity extends Activity {
         }
     }
 
+    /* AURA 的原生 WebSocket。见 Bridge.auraWsOpen 的注释。 */
+    private AuraWs auraWs;
+
+    private void auraEmitWs(String kind, String data) {
+        JSONObject o = new JSONObject();
+        try {
+            o.put("t", kind);
+            if (data != null) o.put("data", data);
+        } catch (Exception ignored) { }
+        final String js = "window.onAuraWs&&window.onAuraWs(" + JSONObject.quote(o.toString()) + ");";
+        runOnUiThread(() -> {
+            if (web != null) web.evaluateJavascript(js, null);
+        });
+    }
+
     private class AssetClient extends WebViewClient {
 
         @Override
@@ -432,6 +447,57 @@ public class MainActivity extends Activity {
                     if (web != null) web.evaluateJavascript(js, null);
                 });
             }, "aura-http").start();
+        }
+
+        /**
+         * AURA 的 WebSocket 走原生。
+         *
+         * 为什么不能只用页面的 new WebSocket()：页面在 https origin 上，
+         * 连 ws:// 会被直接拒绝 ——
+         *   「An insecure WebSocket connection may not be initiated from a page
+         *     loaded over HTTPS」
+         * 这是浏览器层的硬规则，没有开关。Hub 只给 http 时，REST 能靠原生绕过，
+         * WebSocket 只能自己实现一条（AuraWs，RFC 6455）。
+         *
+         * @param trustAll 允许自签名证书（用户显式打开；默认 false）
+         */
+        @JavascriptInterface
+        public void auraWsOpen(final String url, final boolean trustAll) {
+            auraWsClose();
+            new Thread(() -> {
+                AuraWs c = new AuraWs(url, null, trustAll, new AuraWs.Listener() {
+                    @Override public void onOpen(AuraWs c) { auraEmitWs("open", null); }
+                    @Override public void onBinary(byte[] data) {
+                        auraEmitWs("bin", Base64.encodeToString(data, Base64.NO_WRAP));
+                    }
+                    @Override public void onText(String text) { auraEmitWs("text", text); }
+                    @Override public void onClosed(String reason) { auraEmitWs("close", reason); }
+                });
+                auraWs = c;
+                if (!c.connect()) auraEmitWs("err", "握手失败（地址/端口/证书？看「测试连接」）");
+            }, "aura-ws").start();
+        }
+
+        @JavascriptInterface
+        public void auraWsSendText(String s) {
+            AuraWs c = auraWs;
+            if (c == null) return;
+            try { c.sendText(s); } catch (Exception e) { auraEmitWs("err", "发送失败：" + e); }
+        }
+
+        @JavascriptInterface
+        public void auraWsSendBin(String b64) {
+            AuraWs c = auraWs;
+            if (c == null) return;
+            try { c.send(Base64.decode(b64, Base64.NO_WRAP)); }
+            catch (Exception e) { auraEmitWs("err", "发送失败：" + e); }
+        }
+
+        @JavascriptInterface
+        public void auraWsClose() {
+            AuraWs c = auraWs;
+            auraWs = null;
+            if (c != null) { try { c.close(); } catch (Exception ignored) { } }
         }
 
         /** 读完整响应；超过 cap 截断（诊断用，别被大包拖死） */
