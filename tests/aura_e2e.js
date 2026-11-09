@@ -174,6 +174,24 @@ ok('置 deviceDead 标记', dead.dead === true, dead);
 ok('「我的收听」给出重新核验的出口', dead.hint === true, dead);
 ok('重新核验成功后标记清除', dead.back === true, dead);
 
+console.log('\n=== 1d. 账号自检（把认证链一步走完并报错）===');
+const self = await ev(`
+  const r=await AURA.selfTest(${JSON.stringify(ACC)},'pass1234','318');
+  return {steps:r.steps.map(x=>x.k+' = '+x.v+' ['+(x.s||'-')+']'), bad:r.steps.filter(x=>x.s==='bad').length};
+`);
+ok('自检五步全过（核验/绑定/领凭据/登录/频道）',
+  self.bad === 0 && self.steps.length >= 5, self);
+ok('自检输出里带设备凭据与频道数',
+  /device_credential/.test(self.steps.join(' ')) && /个端点/.test(self.steps.join(' ')), self);
+
+const selfBad = await ev(`
+  AURA.device='dev_broken_credential';
+  const r=await AURA.selfTest(${JSON.stringify(ACC)},'pass1234','318');
+  /* 自检会重新核验并把设备修好，这里只验证它记录了「本机凭据」那一行 */
+  return {first:r.steps[1] && r.steps[1].v, bad:r.steps.filter(x=>x.s==='bad').length};
+`);
+ok('自检能报告本机凭据状态', /device_credential|没有/.test(String(selfBad.first) || ''), selfBad);
+
 console.log('\n=== 2. 频道发现 ===');
 const boot = await ev(`
   const ends = await AURA.bootstrap();

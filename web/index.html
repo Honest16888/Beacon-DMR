@@ -1972,6 +1972,7 @@ body.dragging .dghint{display:block}
           <button class="btn sm danger" id="auraBtnRelease">释放设备</button>
           <button class="btn sm" id="auraBtnReverify">重新核验</button>
           <button class="btn sm" id="auraBtnTest">测试连接</button>
+          <button class="btn sm" id="auraBtnSelf">账号自检</button>
         </div>
       </div>
       <pre class="auradiag" id="auraDiag"></pre>
@@ -23820,6 +23821,54 @@ const AURA = {
     this.saveSession(String(r.token),Number(r.expires_at)||0,String(r.uid||''),String(r.callsign||''));
     return r;
   },
+  /* 账号自检：register(reverify) → bind-device → issue-ptt-key → login → bootstrap。
+     任何一步失败都记下状态码与原文，用户复制出来就能定位是账号问题还是本机问题。 */
+  async selfTest(loginId, password, code){
+    const steps=[];
+    const add=(k,v,ok)=>steps.push({k,v,s:ok?'ok':'bad'});
+    const t0=Date.now();
+    const id=this.normId(loginId), pwd=this.normPwd(password), c=this.normCode(code);
+
+    add('Hub', this.apiBase()||'未填', !!this.apiBase());
+    add('本机凭据', this.device?('device_credential '+this.device.length+' 位 · 会话'
+      +(this.tokenValid()?'有效':'无/过期')):'没有 device_credential', !!this.device);
+    if(!id||!pwd){ add('860 账号/密码','未填，无法核验','warn'); return {steps}; }
+
+    /* ① 重新核验 */
+    let r1=null;
+    try{
+      r1=await this.register(id,pwd,c,true);
+      add('① 重新核验 register(reverify)','200 · '+(r1.callsign||''),true);
+      this.device='';
+      if(r1.enrollment_token)await this.bindDevice(r1.enrollment_token);
+      add('② 绑定设备 bind-device','200 · '+(this.device?this.device.length+' 位':''),true);
+    }catch(e){
+      add('① 重新核验 register(reverify)',
+        (e.status||'')+' '+String(e.message).slice(0,120),false);
+      return {steps, ms:Date.now()-t0};
+    }
+
+    /* ③ 领临时凭据 */
+    try{
+      const k=await this.api('/api/auth/issue-ptt-key',{device_credential:this.device},{noAuth:true});
+      add('③ 领临时凭据','200 · key '+(k.temporary_key?k.temporary_key.length+' 位':''),!!k.temporary_key);
+      /* ④ 换会话 */
+      const lg=await this.api('/api/auth/login',
+        {temporary_key:k.temporary_key,security_code:c},{noAuth:true});
+      this.saveSession(String(lg.token),Number(lg.expires_at)||0,
+        String(lg.uid||''),String(lg.callsign||''));
+      this.deviceDead=false;
+      add('④ 登录 login','200 · '+(lg.callsign||'')+' · '+(lg.role||''),!!lg.token);
+      /* ⑤ 拉频道 */
+      const ends=await this.bootstrap();
+      add('⑤ 频道 bootstrap','200 · '+ends.length+' 个端点',ends.length>0);
+    }catch(e){
+      add('③④⑤',(e.status||'')+' '+String(e.message).slice(0,120),false);
+    }
+    renderAll();
+    return {steps, ms:Date.now()-t0};
+  },
+
   /* 释放本机设备绑定。
      ★ 协议没有 unbind 接口，所以这只是「把本机凭据删干净」；服务端那条记录还在，
        另一台设备要拿回绑定必须走「重新核验」（register + reverify），
@@ -24664,6 +24713,26 @@ function auraPttUp(){
     AURA.disconnect('已手动断开');
     toast('已断开 AURA（设备绑定保留）');
     renderAll();
+  });
+
+  /* 账号自检：会用上面填的 860 账号/密码/安全码真的走一遍重新核验。
+     结果直接打在「测试连接」那块里，可复制。 */
+  $('#auraBtnSelf').addEventListener('click',async()=>{
+    const h=readHub(); if(!h)return;
+    const c=readCode(); if(!c)return;
+    const box=$('#auraDiag');
+    if(box){ box.classList.add('on'); box.textContent='自检中…'; }
+    busy(true);
+    try{
+      const r=await AURA.selfTest(user.value,pass.value,c);
+      if(box){
+        box.innerHTML=r.steps.map(x=>
+          '<span class="'+(x.s||'')+'">'+esc(x.k)+'</span>  '+esc(x.v)).join('\n')
+          +(r.ms?('\n耗时 '+(r.ms)+' ms'):'');
+      }
+      const bad=r.steps.filter(x=>x.s==='bad');
+      toast(bad.length?('自检失败：'+bad[0].k):'自检通过');
+    }finally{ busy(false); auraRenderSet(); renderAll(); }
   });
 
   $('#auraBtnTest').addEventListener('click',async()=>{
