@@ -287,6 +287,40 @@ if (noselect.skip) {
   ok('松手后不留选区', noselect.afterUp === 0, noselect);
 }
 
+console.log('\n=== 5d. AURA 卡片按钮排布（手机端不能被裁）===');
+const auraBtns = await ev(`
+  setView('settings');
+  await new Promise(r=>setTimeout(r,250));
+  const card=document.getElementById('auraCard');
+  /* 设置页的卡片默认可能收起，先展开再量 */
+  if(card&&typeof setFoldSet==='function')setFoldSet(card,true,false);
+  card.scrollIntoView({block:'center'});
+  await new Promise(r=>setTimeout(r,150));
+  const cr=card.getBoundingClientRect();
+  const ids=['auraBtnReg','auraBtnLogin','auraBtnLogout','auraBtnRelease',
+             'auraBtnReverify','auraBtnTest','auraBtnSelf'];
+  const rows={};
+  const out=ids.map(id=>{
+    const el=document.getElementById(id);
+    if(!el)return {id, miss:true};
+    const r=el.getBoundingClientRect();
+    rows[Math.round(r.top)]=true;
+    return {id, ok: r.width>20 && r.right <= cr.right+1 && r.left >= cr.left-1,
+            w:Math.round(r.width), top:Math.round(r.top)};
+  });
+  return {vw:innerWidth, cardW:Math.round(cr.width),
+          全部存在:out.every(x=>!x.miss),
+          全部在卡片内:out.every(x=>x.ok),
+          行数:Object.keys(rows).length,
+          溢出:document.getElementById('auraCard').scrollWidth >
+               document.getElementById('auraCard').clientWidth + 1,
+          detail:out};`);
+ok('AURA 七颗按钮都在（含账号自检）', auraBtns.全部存在 === true, auraBtns.detail);
+ok('手机端七颗按钮全部落在卡片内（不被裁）', auraBtns.全部在卡片内 === true, auraBtns.detail);
+ok('按钮换行排列（不再挤成一行溢出）', auraBtns.行数 >= 2, auraBtns);
+ok('卡片没有横向溢出', auraBtns.溢出 === false, auraBtns);
+await ev(`setView('listen'); return 1;`);
+
 console.log('\n=== 6. 接收音质处理链 ===');
 const q1 = await ev(`const ok0=Audio_.init();
   return {inited:ok0, hasPush:typeof Audio_.push==='function',
