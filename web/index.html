@@ -24442,8 +24442,12 @@ window.onAuraHttp=function(id,json){
     const resolve = window.__updateCbMap[id];
     delete window.__updateCbMap[id];
     try{
-      const d = typeof json === 'string' ? JSON.parse(json) : json;
-      if(d && d.ok !== false) resolve(d); else resolve(null);
+      // auraHttp 回调格式：{"status":200,"body":"原始JSON","error":""}
+      const wrapper = typeof json === 'string' ? JSON.parse(json) : json;
+      if(wrapper && wrapper.status >= 400){ resolve(null); return; }
+      const raw = wrapper && typeof wrapper.body === 'string' ? wrapper.body : JSON.stringify(wrapper);
+      const d = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      resolve(d);
     }catch(e){ resolve(null); }
     return;
   }
