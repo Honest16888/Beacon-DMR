@@ -24489,7 +24489,7 @@ const Update = {
 
   load(){
     // 内置默认更新服务器，用户可在设置页修改
-    this.server = String(store.get('updateServer','http://frp-hip.com:52615')||'http://frp-hip.com:52615').trim().replace(/\/+$/,'');
+    this.server = String(store.get('updateServer','https://frp-hip.com:52615/update')||'https://frp-hip.com:52615/update').trim().replace(/\/+$/,'');
   },
   save(url){
     this.server = String(url||'').trim().replace(/\/+$/,'');
