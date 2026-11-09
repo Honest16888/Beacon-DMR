@@ -1140,6 +1140,12 @@ body.simple .foot .fc{display:none}
 .panel.folded #tabTools,.panel.folded #tabBody{display:none}
 .panel.folded .ph{border-bottom:none}
 
+/* ---------- AURA 设置卡里的文本输入 ---------- */
+.aurainp{width:100%;max-width:270px;padding:6px 9px;border-radius:8px;
+  border:1px solid var(--border);background:var(--panel2);color:var(--text);
+  font:inherit;font-size:12px;min-width:0}
+.aurainp:focus{outline:none;border-color:var(--accent)}
+
 /* ===================== 我的收听：静音 + 长按拖动排序（v2.4.8） ===================== */
 /* 被静音的行整体压暗，但话组号和名字仍然看得清 —— 静音是「不播」，
    不是「从列表里消失」，用户还得能找到它并解除。 */
@@ -1251,6 +1257,7 @@ body.dragging .dghint{display:block}
         <div class="seg segnet" id="segNet">
           <button data-net="bm" class="on">🌍 国际 BM</button>
           <button data-net="cn">🇨🇳 国内 DMR</button>
+          <button data-net="aura">☁️ AURA</button>
         </div>
         <span class="netinfo" id="netInfo">BrandMeister Hoseline</span>
       </div>
@@ -1908,6 +1915,43 @@ body.dragging .dghint{display:block}
       <div class="txbtns" style="margin-top:10px">
         <button class="btn" id="txBtnClr">清空</button>
         <button class="btn" id="txBtnCopyLog">复制日志</button>
+      </div>
+    </div>
+
+    <div class="setcard" id="auraCard">
+      <h3>☁️ AURA 云端对讲</h3>
+      <div class="setrow">
+        <div class="setlbl"><b>Hub 地址</b><span>部署方给的 https://…，不带结尾斜杠</span></div>
+        <div class="setctl"><input class="aurainp" id="auraHub" placeholder="https://hub.example.com"></div>
+      </div>
+      <div class="setrow">
+        <div class="setlbl"><b>状态</b><span id="auraDevState">未绑定</span></div>
+        <div class="setctl"><span class="setbadge" id="auraState">未配置</span></div>
+      </div>
+      <div class="setrow">
+        <div class="setlbl"><b>860 账号</b><span>注册 / 重新核验时用</span></div>
+        <div class="setctl"><input class="aurainp" id="auraUser" placeholder="860 账号"></div>
+      </div>
+      <div class="setrow">
+        <div class="setlbl"><b>860 密码</b><span>只用于注册，发完就丢，不保存</span></div>
+        <div class="setctl"><input class="aurainp" id="auraPass" type="password" placeholder="860 密码"></div>
+      </div>
+      <div class="setrow">
+        <div class="setlbl"><b>安全码</b><span>三位数字，登录时用；不保存、不写日志</span></div>
+        <div class="setctl"><input class="aurainp" id="auraCode" inputmode="numeric" maxlength="3" placeholder="318"></div>
+      </div>
+      <div class="setrow act">
+        <div class="setlbl"><b>操作</b><span>第一次：注册 → 自动绑定；以后：填安全码 → 登录</span></div>
+        <div class="setctl">
+          <button class="btn sm" id="auraBtnReg">注册</button>
+          <button class="btn sm pri" id="auraBtnLogin">登录</button>
+          <button class="btn sm" id="auraBtnLogout">注销</button>
+        </div>
+      </div>
+      <div class="setnote">
+        AURA 是<b>第三条链路</b>，和 BM / 国内 DMR 并列：认证走 Hub 的 REST，
+        语音走 <code>/ws/ptt</code> 的二进制帧（PCM 8 kHz），不经过 MMDVM、不需要声码器。
+        <br>设备凭据保存在本机（WebView 私有目录），安全码与 860 密码<b>不保存</b>。
       </div>
     </div>
 
@@ -20650,6 +20694,8 @@ function rxReset(){
      BM(HOSE)  增量：[GROUP_JOIN,[ids]] / [GROUP_LEAVE,[ids]]
      CN(radiowo) 全量：{action:'subscribe',talkgroups:[全部]}  */
 function syncSubs(){
+  /* AURA 一次只加入一个端点（join 会替换），没有「增量订阅」这回事 */
+  if(state.net==='aura'){ renderMine(); return; }
   if(state.net==='cn'){ syncRwSubs(); return; }
   const sp=state.spotter, want=effSubs();
   if(!sp.ws||sp.ws.readyState!==1)return;
@@ -20660,17 +20706,27 @@ function syncSubs(){
   sp.subscribed=want.slice();
   renderMine(); renderTab();
 }
+function ensureAura(){
+  if(state.net!=='aura')return;
+  if(!AURA.loggedIn())return;
+  if(AURA.wsOpen)return;
+  if(AURA.wsTimer)return;
+  AURA.ensure();
+}
 function ensureSpotter(){
+  if(state.net==='aura'){ ensureAura(); return; }
   if(state.net==='cn'){ ensureRw(); return; }
   if(effSubs().length){ state.spotter.retry=0; spotterConnect(); }
   else spotterClose();
 }
 function addTg(id,silent){
   id=Number(id);
-  if(!Number.isFinite(id)||id<=90){ if(!silent)toast('话组号需大于 90'); return false; }
+  /* AURA 的端点号可以很小（协议没规定下限），BM/国内 仍然按 >90 兜住误输入 */
+  const minOk = state.net==='aura' ? id>0 : id>90;
+  if(!Number.isFinite(id)||!minOk){ if(!silent)toast(state.net==='aura'?'端点号无效':'话组号需大于 90'); return false; }
   if(state.subscribed.includes(id)){ if(!silent)toast('话组 '+id+' 已在收听列表'); return false; }
   state.subscribed.push(id);
-  store.set('subscribed',state.subscribed);
+  store.set(netSubKey(state.net),state.subscribed.slice());
   if(state.net!=='cn'&&(!state.tgReady||!tgName(id)))ensureTg(id);   // 国内话组名已内嵌，不必再去 BM 查
   syncSubs(); ensureSpotter(); renderMine(); renderLib(); renderLive(true);
   if(!silent)toast('已添加 '+(tgName(id)||'话组 '+id));
@@ -20679,7 +20735,8 @@ function addTg(id,silent){
 function removeTg(id){
   state.subscribed=state.subscribed.filter(n=>n!==id);
   if(state.solo===id)state.solo=null;
-  store.set('subscribed',state.subscribed);
+  if(state.net==='aura'&&AURA.cur&&AURA.cur.tg===id)AURA.leave();
+  store.set(netSubKey(state.net),state.subscribed.slice());
   syncSubs(); ensureSpotter(); renderMine(); renderLib(); renderLive(true);
 }
 function toggleSolo(id){
@@ -22244,8 +22301,14 @@ function renderHtSum(){
 
 /* ============================ 渲染：我的收听 ============================ */
 /* 当前生效链路的状态 —— 供 UI 读取，免得每处都写 state.net==='cn'?…:… */
-function linkOpen(){ return state.net==='cn'?state.rw.open:state.spotter.open; }
-function linkSubs(){ return state.net==='cn'?state.rw.subscribed:state.spotter.subscribed; }
+function linkOpen(){
+  if(state.net==='aura')return !!AURA.wsOpen;
+  return state.net==='cn'?state.rw.open:state.spotter.open;
+}
+function linkSubs(){
+  if(state.net==='aura')return state.subscribed;
+  return state.net==='cn'?state.rw.subscribed:state.spotter.subscribed;
+}
 
 /* ============================ 网络切换 ============================ */
 /* 国际 BrandMeister 与国内 China DMR 是两套独立网络：
@@ -22255,9 +22318,9 @@ function linkSubs(){ return state.net==='cn'?state.rw.subscribed:state.spotter.s
    所以订阅列表按网络分开存，切过去时各用各的，不互相污染。 */
 const NET_CN_DEFAULT = [460, 860];      // 国内两个全国公共话组
 
-function netSubKey(n){ return n==='cn'?'subscribedCN':'subscribed'; }
+function netSubKey(n){ return n==='aura'?'subscribedAURA':(n==='cn'?'subscribedCN':'subscribed'); }
 function setNet(n, silent){
-  n = n==='cn'?'cn':'bm';
+  n = (n==='cn'||n==='aura')?n:'bm';
   if(n===state.net){ renderNetInfo(); return; }
 
   /* 1) 存下当前网络的订阅 + 当前网络那套发射身份 */
@@ -22283,7 +22346,9 @@ function setNet(n, silent){
   }
 
   /* 2) 关掉旧链路（切换瞬间不能同时占着两条） */
-  if(state.net==='cn') rwClose(); else spotterClose();
+  if(state.net==='aura'){ AURA.talkOff(); AURA.micStop(); AURA.wsClose(); }
+  else if(state.net==='cn') rwClose();
+  else spotterClose();
 
   /* 3) 切过去，载入目标网络的订阅 */
   state.net=n;
@@ -22302,8 +22367,11 @@ function setNet(n, silent){
   txLoad();
   txNetHint();
   renderAll();
-  ensureSpotter();
-  ensureLive();
+  if(n==='aura'){
+    AURA.load(); ensureAura();
+    try{ txWebMode(); }catch(e){}
+  }
+  else { ensureSpotter(); ensureLive(); }
   /* 6) 切换前本来是连着的 → 用新身份自动重新登录。
      留 900 ms 让旧会话的 RPTCL 先发出去：主站对同一个 Radio ID 只允许一个会话，
      断开和登录贴太近会被判成「还没退干净」而回 MSTNAK。 */
@@ -22315,25 +22383,33 @@ function setNet(n, silent){
       txConnect();
     },900);
   }
-  if(!silent)toast(n==='cn'?'已切到国内 China DMR 网络':'已切到国际 BrandMeister 网络');
+  if(!silent)toast(n==='aura'?'已切到 AURA 云端对讲':(n==='cn'?'已切到国内 China DMR 网络':'已切到国际 BrandMeister 网络'));
 }
 function renderNetInfo(){
   const el=$('#netInfo');
   if(!el)return;
   /* 文案刻意做短：这一条和切换按钮同处一行，手机上多几个字就会把整条挤成两行。
      长短两版用 CSS 切换，省掉 JS 里判断屏宽再重算的麻烦。 */
-  const full = state.net==='cn'
-    ? ('China DMR · '+(CN.tgList.length?CN.tgList.length+' 组':'未加载'))
-    : 'BrandMeister · 全球';
-  const short = state.net==='cn'
-    ? (CN.tgList.length?CN.tgList.length+' 组':'—')
-    : '全球';
+  const auraOn = state.net==='aura';
+  const full = auraOn
+    ? ('AURA · '+(AURA.cur?(AURA.cur.name||('TG '+AURA.cur.tg))
+        :(AURA.loggedIn()?(AURA.wsOpen?'已连接':'未连接'):'未登录')))
+    : (state.net==='cn'
+        ? ('China DMR · '+(CN.tgList.length?CN.tgList.length+' 组':'未加载'))
+        : 'BrandMeister · 全球');
+  const short = auraOn
+    ? (AURA.cur?String(AURA.cur.tg):(AURA.loggedIn()?'在线':'未登录'))
+    : (state.net==='cn'
+        ? (CN.tgList.length?CN.tgList.length+' 组':'—')
+        : '全球');
   el.innerHTML='<span class="ni-full">'+esc(full)+'</span><span class="ni-short">'+esc(short)+'</span>';
-  el.title = state.net==='cn'
+  el.title = auraOn
+    ? 'AURA 云端 PTT：认证与频道走 Hub 的 REST，语音走 /ws/ptt（PCM 8 kHz 二进制帧）。'
+    : (state.net==='cn'
     ? '国内收听走 radiowo 的 WebSocket（服务端已解码，不需要声码器）；'
       +'发射走 8600.radiowo.com:62031。话组表来自 860.radiowo.com/api/v1/talkgroups。'
     : '国际收听走 hose.brandmeister.network；'
-      +'发射走 <主站ID>.master.brandmeister.network:62031。';
+      +'发射走 <主站ID>.master.brandmeister.network:62031。');
   const seg=$('#segNet');
   if(seg)[...seg.children].forEach(b=>b.classList.toggle('on',b.dataset.net===state.net));
   renderHtSum();      /* 折叠摘要里的网络名跟着换 */
@@ -22341,6 +22417,7 @@ function renderNetInfo(){
 function renderAll(){
   renderNetInfo(); renderMine(); renderTab(); renderLib(); renderLive(true); renderStatus();
   renderNow(); renderTxIdent();
+  try{ auraRenderSet(); }catch(e){}
 }
 
 /* 长按拖动的运行状态。放在 renderMine 之前 —— renderMine 要读 DG.on 判断
@@ -22358,6 +22435,7 @@ function renderMine(){
    * 所以拖动期间只记一个「欠一次重绘」，等松手后再补。
    * 拖动本身只改 DOM 顺序，不需要重绘配合。 */
   if(DG.on){ DG.pending=true; return; }
+  if(state.net==='aura'){ auraRenderMine(); return; }
   const list=$('#mineList'), subs=state.subscribed;
   $('#mineCount').textContent=subs.length;
   if(!subs.length){
@@ -22565,6 +22643,8 @@ function renderLiveCats(rows){
   }).join('');
 }
 function renderLive(force){
+  if(state.net==='aura'){ auraRenderLive(); return; }
+  const cat=$('#liveCat'); if(cat)cat.style.display='';
   const q=state.liveQuery.trim().toLowerCase();
   let rows=[...state.active.values()];
   if(q)rows=rows.filter(s=>{
@@ -23392,6 +23472,640 @@ function drawSpectrum() {
   if (state.tab !== 'cw') return;
   if (state.cwMode === 'model') CW.draw(); else SDR.draw();
 }
+
+/* ===================== AURA 云端 PTT（第三条链路） =====================
+ *
+ * 协议见桌面上的 APP_INTEGRATION.md。它和 BM / 国内 DMR 是**完全不同的三件事**：
+ *
+ *              国际 BM                国内 radiowo            AURA
+ *   收听   HOSE WebSocket(μ-law)   radiowo WS(服务端解码)    /ws/ptt 二进制帧
+ *   发射   MMDVM UDP + AMBE        MMDVM UDP + AMBE          /ws/ptt 二进制帧（PCM）
+ *   身份   DMR ID + 热点密码        同左                      Hub 账号 + 设备凭据 + 安全码
+ *
+ * 三条链路里只有 AURA 是「REST 登录 + WebSocket 语音」，所以它不进 MMDVM 那条老路：
+ *   · 认证：860 账号注册 → 绑定设备拿 device_credential → 每次登录领 temporary_key
+ *          → temporary_key + 三位安全码换 PTT token
+ *   · 频道：GET /api/ptt/bootstrap → channels[].tgs[]；join 必须 channel_id + tg_id
+ *   · 语音：文本帧是控制（join/leave/talk），二进制帧首字节是编码标签
+ *           0x01 = PCM s16le 8kHz mono（v1 只收发这一种）
+ *           0x02 = Opus 48kHz（没有解码器，收到直接忽略，不报错）
+ *
+ * ★ 凭据纪律（协议第 2、8 节）：
+ *   - security_code 三位数字，**不持久化**，登录用完就丢（输入框也清空）
+ *   - temporary_key 一次性，每次登录前重新领，失败后不得重放
+ *   - device_credential 是长期敏感凭据，只原样保存与提交，不写日志
+ *   本版存在 localStorage（WebView 私有目录）。上架/多用户场景应换成
+ *   Android Keystore 加密存储 —— 见 AURA.storageNote。
+ */
+const AURA = {
+  hub:'',            // https://hub.example.com（不带尾斜杠）
+  device:'',         // device_credential
+  token:'',          // PTT session token
+  tokenAt:0,         // 过期时刻（Unix 秒）
+  uid:'', callsign:'',
+  channels:[],       // bootstrap 原始 channels
+  ends:[],           // 扁平化：[{tg,name,channelId,tgId,channelName}]
+  endByTg:new Map(),
+  ws:null, wsOpen:false, wsTries:0, wsTimer:null,
+  cur:null,          // 当前加入的端点 {channelId,tgId,tg,name}
+  talkOn:false,
+  members:new Map(), // callsign -> talking
+  micStream:null, micCtx:null, micNode:null, micSink:null,
+  busy:false, lastErr:'',
+  storageNote:'device_credential 存在本机 localStorage（WebView 私有目录）',
+
+  /* ---------------- 存取 ---------------- */
+  load(){
+    this.hub=String(store.get('auraHub','')||'').trim().replace(/\/+$/,'');
+    this.device=String(store.get('auraDevice','')||'');
+    const s=store.get('auraSession',null);
+    if(s&&typeof s==='object'){
+      this.token=String(s.token||''); this.tokenAt=Number(s.at)||0;
+      this.uid=String(s.uid||''); this.callsign=String(s.callsign||'');
+    }
+  },
+  saveSession(token,at,uid,callsign){
+    this.token=token; this.tokenAt=at; this.uid=uid||this.uid; this.callsign=callsign||this.callsign;
+    store.set('auraSession',{token:this.token, at:this.tokenAt, uid:this.uid, callsign:this.callsign});
+  },
+  clearSession(){
+    this.token=''; this.tokenAt=0;
+    store.set('auraSession',null);
+  },
+  tokenValid(){
+    if(!this.token)return false;
+    if(!this.tokenAt)return true;                    // 服务端没给过期时间就当成有效
+    return this.tokenAt*1000>Date.now()+30000;       // 留 30 秒余量
+  },
+  loggedIn(){ return this.tokenValid(); },
+
+  /* ---------------- REST ---------------- */
+  apiBase(){ return this.hub.replace(/\/+$/,''); },
+  async api(path, body, opt){
+    opt=opt||{};
+    const base=this.apiBase();
+    if(!base)throw new Error('还没填 Hub 地址');
+    const headers={'Accept':'application/json'};
+    if(body!==undefined)headers['Content-Type']='application/json';
+    if(this.token&&!opt.noAuth)headers['Authorization']='Bearer '+this.token;
+    const ctl=(typeof AbortController!=='undefined')?new AbortController():null;
+    const timer=ctl?setTimeout(()=>ctl.abort(),15000):null;
+    let res;
+    try{
+      res=await fetch(base+path,{
+        method: body===undefined?'GET':'POST',
+        headers,
+        body: body===undefined?undefined:JSON.stringify(body),
+        signal: ctl?ctl.signal:undefined,
+      });
+    }catch(e){
+      if(timer)clearTimeout(timer);
+      throw new Error('连不上 Hub：'+(e&&e.message||e));
+    }
+    if(timer)clearTimeout(timer);
+    const text=await res.text();
+    let data=null;
+    if(text){ try{ data=JSON.parse(text); }catch(e){ data={raw:text}; } }
+    if(!res.ok){
+      const code=(data&&data.error_code)||'';
+      const msg=(data&&(data.error||data.message))||('HTTP '+res.status);
+      const err=new Error(msg);
+      err.status=res.status; err.code=code;
+      throw err;
+    }
+    return data||{};
+  },
+
+  /* 注册（或带 reverify 重新核验）→ enrollment_token */
+  async register(loginId,password,code,reverify){
+    const body={login_id:String(loginId||''), password:String(password||''), security_code:String(code||'')};
+    if(reverify)body.reverify=true;
+    return this.api('/api/auth/register',body,{noAuth:true});
+  },
+  /* 用一次性令牌换 device_credential */
+  async bindDevice(enrollToken){
+    const r=await this.api('/api/auth/bind-device',{enrollment_token:String(enrollToken||'')},{noAuth:true});
+    this.device=String(r.device_credential||'');
+    if(!this.device)throw new Error('Hub 没有下发设备凭据');
+    store.set('auraDevice',this.device);
+    return this.device;
+  },
+  /* 每次登录：先领一次性临时凭据，再用它 + 安全码换 PTT 会话。
+     失败后必须重新领 —— 同一个 temporary_key 只允许一次尝试（协议 4.2）。 */
+  async login(code){
+    if(!this.device)throw new Error('设备未绑定，请先注册或重新核验');
+    const k=await this.api('/api/auth/issue-ptt-key',{device_credential:this.device},{noAuth:true});
+    const key=String(k.temporary_key||'');
+    if(!key)throw new Error('Hub 没有下发临时凭据');
+    const r=await this.api('/api/auth/login',{temporary_key:key,security_code:String(code||'')},{noAuth:true});
+    if(!r.token)throw new Error('Hub 没有返回会话令牌');
+    this.saveSession(String(r.token),Number(r.expires_at)||0,String(r.uid||''),String(r.callsign||''));
+    return r;
+  },
+  async logout(){
+    try{ if(this.token)await this.api('/api/auth/logout',{}); }catch(e){ /* 已失效也算注销成功 */ }
+    this.clearSession(); this.wsClose(); this.talkOff();
+  },
+
+  /* ---------------- 频道发现 ---------------- */
+  async bootstrap(){
+    const r=await this.api('/api/ptt/bootstrap');
+    this.channels=Array.isArray(r.channels)?r.channels:[];
+    this.ends=[]; this.endByTg.clear();
+    for(const c of this.channels){
+      const cid=Number(c&&c.id)||0, cname=String(c&&c.name||'');
+      for(const t of (c&&c.tgs)||[]){
+        const e={tg:Number(t.tg)||0, name:String(t.name||''), channelId:cid,
+                 tgId:Number(t.id)||0, channelName:cname};
+        if(!e.tg||!e.tgId)continue;
+        this.ends.push(e);
+        this.endByTg.set(e.tg,e);
+      }
+    }
+    return this.ends;
+  },
+  endName(tg){ const e=this.endByTg.get(Number(tg)); return e?e.name:''; },
+  endChannel(tg){ const e=this.endByTg.get(Number(tg)); return e?e.channelName:''; },
+
+  /* ---------------- WebSocket ---------------- */
+  wsUrl(){
+    const b=this.apiBase().replace(/^http/,'ws');
+    return b+'/ws/ptt?token='+encodeURIComponent(this.token);
+  },
+  connectWs(){
+    if(!this.token)return;
+    this.wsClose(true);
+    let ws;
+    try{ ws=new WebSocket(this.wsUrl()); }
+    catch(e){ this.lastErr=String(e&&e.message||e); return; }
+    ws.binaryType='arraybuffer';
+    this.ws=ws;
+    ws.onopen=()=>{
+      this.wsOpen=true; this.wsTries=0; this.lastErr='';
+      try{ if(state.net==='aura')txWebMode(); }catch(e){}
+      renderAll();
+    };
+    ws.onmessage=(ev)=>{
+      if(typeof ev.data==='string')this.onText(ev.data);
+      else this.onBinary(ev.data);
+    };
+    ws.onclose=()=>{
+      const wasJoined=!!this.cur;
+      this.wsOpen=false; this.cur=null; this.members.clear();
+      if(wasJoined)renderAll();
+      this.scheduleReconnect();
+    };
+    ws.onerror=()=>{ this.lastErr='WebSocket 错误'; };
+  },
+  wsClose(silent){
+    if(this.wsTimer){ clearTimeout(this.wsTimer); this.wsTimer=null; }
+    if(this.ws){
+      try{ this.ws.onclose=null; this.ws.close(); }catch(e){}
+      this.ws=null;
+    }
+    this.wsOpen=false;
+    if(!silent){ this.cur=null; this.members.clear(); }
+  },
+  /* 断线重连：带抖动的指数退避（协议 6.6）。重连后必须重新 welcome → join。 */
+  scheduleReconnect(){
+    if(state.net!=='aura'||!this.token)return;
+    if(this.wsTimer)return;
+    const n=Math.min(this.wsTries++,6);
+    const delay=Math.min(30000,700*Math.pow(2,n))*(0.75+Math.random()*0.5);
+    this.wsTimer=setTimeout(()=>{ this.wsTimer=null; if(state.net==='aura')this.connectWs(); },delay);
+  },
+  join(end){
+    if(!end)return;
+    /* 连接还在握手时点的「加入」不能丢 —— 记下来，welcome 到了自动发。
+       直接 toast 一句「还没连上」然后什么都不做，用户会以为按钮坏了。 */
+    if(!this.wsOpen){ this.pendingEnd=end; toast('正在连接，连上后自动加入'); return; }
+    this.pendingEnd=null;
+    this.ws.send(JSON.stringify({type:'join', channel_id:end.channelId, tg_id:end.tgId}));
+    this.wsTries=0;
+  },
+  /* 等连接打开（握手是异步的，ensure() 之后立刻 join 会抢跑） */
+  waitOpen(ms){
+    if(this.wsOpen)return Promise.resolve(true);
+    return new Promise(res=>{
+      const t0=Date.now();
+      const tick=()=>{
+        if(this.wsOpen)return res(true);
+        if(Date.now()-t0>(ms||5000))return res(false);
+        setTimeout(tick,50);
+      };
+      tick();
+    });
+  },
+  leave(){
+    if(this.ws&&this.wsOpen)try{ this.ws.send(JSON.stringify({type:'leave'})); }catch(e){}
+    this.cur=null; this.members.clear(); renderAll();
+  },
+  talk(on){
+    if(!this.ws||!this.wsOpen)return false;
+    if(!this.cur)return false;
+    try{ this.ws.send(JSON.stringify({type:'talk', on:!!on})); }catch(e){ return false; }
+    this.talkOn=!!on;
+    return true;
+  },
+  talkOff(){
+    if(this.talkOn)this.talk(false);
+    this.talkOn=false;
+  },
+
+  /* ---------------- 服务端事件 ---------------- */
+  onText(s){
+    let m; try{ m=JSON.parse(s); }catch(e){ return; }
+    const t=m.type||m.cmd;
+    switch(t){
+      case 'welcome':
+        if(m.uid)this.uid=String(m.uid);
+        if(m.callsign)this.callsign=String(m.callsign);
+        /* 重连后自动恢复加入（协议 6.6 第 2 步）；握手期间点的也在这里补发 */
+        if(this.cur)this.join(this.cur);
+        else if(this.pendingEnd){ const e=this.pendingEnd; this.pendingEnd=null; this.join(e); }
+        renderAll();
+        break;
+      case 'joined': {
+        const tg=Number(m.tg)||0, cid=Number(m.channel_id)||0, tid=Number(m.tg_id)||0;
+        const e=this.endByTg.get(tg)||{tg,name:'',channelId:cid,tgId:tid,channelName:''};
+        this.cur={channelId:cid||e.channelId, tgId:tid||e.tgId, tg, name:e.name};
+        /* 发射目标跟着端点走：AURA 的 talk 是「对当前 join 的端点说话」，
+           顶部那个话组框如果还停在别的号上，用户会以为发错了地方。 */
+        { const el=document.getElementById('txTg'); if(el)el.value=String(tg); }
+        this.members.clear();
+        for(const mm of (m.members||[]))if(mm&&mm.callsign)this.members.set(String(mm.callsign),!!mm.talking);
+        try{ txWebMode(); }catch(e){}
+        renderAll(); renderLive(true);
+        break;
+      }
+      case 'left':
+        this.cur=null; this.members.clear(); this.talkOff();
+        try{ txWebMode(); }catch(e){}
+        renderAll(); renderLive(true);
+        break;
+      case 'peer_joined':
+        if(m.callsign)this.members.set(String(m.callsign),false);
+        renderLive(true); break;
+      case 'peer_left':
+        if(m.callsign)this.members.delete(String(m.callsign));
+        renderLive(true); break;
+      case 'talker': {
+        const call=String(m.callsign||'');
+        if(call)this.members.set(call,!!m.on);
+        if(m.on){
+          state.current={srcId:0, tg:Number(m.tg)||(this.cur&&this.cur.tg)||0,
+                         alias:call, start:Date.now()};
+          state.lastRx={call, name:'', tg:Number(m.tg)||(this.cur&&this.cur.tg)||0,
+                        priv:false, at:Date.now()};
+        }else if(state.current&&state.current.alias===call){
+          state.current=null;
+        }
+        renderNow(); renderLive(true);
+        break;
+      }
+      case 'error': {
+        const code=String(m.code||''), msg=String(m.message||m.error||'');
+        this.lastErr=msg||code;
+        toast('AURA：'+(msg||code));
+        if(code==='unauthorized'){
+          /* 会话失效：停音频、退出端点、清凭据，让用户重新登录 */
+          this.talkOff(); this.clearSession(); this.wsClose();
+          renderAll();
+        }else if(code==='forbidden'||code==='invalid_endpoint'||code==='ambiguous_tg'||code==='not_talking'){
+          this.talkOff();
+        }
+        break;
+      }
+      default: break;   /* 未知事件安全忽略 */
+    }
+  },
+
+  /* ---------------- 二进制音频（下行） ----------------
+     首字节是编码标签；0x01 = PCM s16le 8kHz mono。
+     收到的 PCM 直接进 Audio_ 和频谱（和 HOSE 消费的是同一个出口），
+     不经过 μ-law 解码，所以不走 Audio_.decode()。 */
+  onBinary(buf){
+    let u8;
+    try{ u8=buf instanceof ArrayBuffer?new Uint8Array(buf):new Uint8Array(buf.buffer||buf); }
+    catch(e){ return; }
+    if(u8.length<3)return;
+    const tag=u8[0];
+    if(tag!==0x01)return;                       // 0x02 Opus：没有解码器，忽略
+    const body=u8.length-1;
+    if(body<2||(body&1))return;                 // 空 body / 奇数字节：丢弃
+    const n=body>>1;
+    if(n>3200)return;                           // 6400 字节上限
+    const f=new Float32Array(n);
+    for(let i=0;i<n;i++){
+      const lo=u8[1+(i<<1)], hi=u8[2+(i<<1)];
+      let v=(hi<<8)|lo;
+      if(v>=0x8000)v-=0x10000;
+      f[i]=v/32768;
+    }
+    try{ feedSpectrum(f); }catch(e){}
+    Audio_.push(f);
+  },
+
+  /* ---------------- 麦克风（上行） ----------------
+     8 kHz 单声道 s16le，每帧 2048 样本（256 ms / 4096 字节，低于 6400 上限）。
+     用 ScriptProcessor 而不是 AudioWorklet：这个页面在 WebView 里跑，
+     worklet 的模块加载要 data URL，音频上行不值得再引一套。 */
+  async micStart(){
+    if(this.micStream)return true;
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+      toast('这个环境不支持麦克风采集');
+      return false;
+    }
+    let st;
+    try{
+      st=await navigator.mediaDevices.getUserMedia({
+        audio:{channelCount:1, echoCancellation:false, noiseSuppression:false, autoGainControl:false},
+        video:false
+      });
+    }catch(e){
+      toast('麦克风打不开：'+(e&&e.name||e));
+      return false;
+    }
+    this.micStream=st;
+    const AC=window.AudioContext||window.webkitAudioContext;
+    let ctx;
+    try{ ctx=new AC({sampleRate:8000}); }
+    catch(e){ try{ ctx=new AC(); }catch(e2){ toast('音频上下文创建失败'); return false; } }
+    this.micCtx=ctx;
+    const src=ctx.createMediaStreamSource(st);
+    const proc=ctx.createScriptProcessor(2048,1,1);
+    this.micNode=proc;
+    proc.onaudioprocess=(ev)=>{
+      if(!this.talkOn)return;
+      const inp=ev.inputBuffer.getChannelData(0);
+      const n=inp.length;
+      const out=new Uint8Array(1+n*2);
+      out[0]=0x01;
+      for(let i=0;i<n;i++){
+        let v=inp[i];
+        if(v>1)v=1; else if(v<-1)v=-1;
+        const s=v<0?v*0x8000:v*0x7fff;
+        const k=Math.round(s);
+        out[1+(i<<1)]=k&0xff;
+        out[2+(i<<1)]=(k>>8)&0xff;
+      }
+      if(this.ws&&this.wsOpen)try{ this.ws.send(out); }catch(e){}
+    };
+    /* 必须接到 destination 才会跑，但音量拉到 0 —— 否则麦克风原声会从喇叭出来 */
+    const sink=ctx.createGain(); sink.gain.value=0;
+    this.micSink=sink;
+    src.connect(proc); proc.connect(sink); sink.connect(ctx.destination);
+    try{ if(ctx.state==='suspended')ctx.resume(); }catch(e){}
+    return true;
+  },
+  micStop(){
+    if(this.micNode){ try{ this.micNode.disconnect(); }catch(e){} this.micNode.onaudioprocess=null; this.micNode=null; }
+    if(this.micSink){ try{ this.micSink.disconnect(); }catch(e){} this.micSink=null; }
+    if(this.micCtx){ try{ this.micCtx.close(); }catch(e){} this.micCtx=null; }
+    if(this.micStream){
+      try{ this.micStream.getTracks().forEach(t=>t.stop()); }catch(e){}
+      this.micStream=null;
+    }
+  },
+
+  /* ---------------- 会话准备 ---------------- */
+  async ensure(){
+    this.load();
+    if(!this.hub)return false;
+    if(!this.tokenValid())return false;
+    try{
+      await this.bootstrap();
+    }catch(e){
+      this.lastErr=String(e&&e.message||e);
+      if(e&&e.status===401){ this.clearSession(); renderAll(); return false; }
+      toast('AURA 取频道失败：'+this.lastErr);
+      return false;
+    }
+    this.connectWs();
+    await this.waitOpen(5000);
+    renderAll();
+    return true;
+  },
+};
+
+/* ===================== AURA 界面 ===================== */
+
+/* 「我的收听」在 AURA 网络下的样子：
+   一行 = 一个 AURA 端点（频道 + 话组）。和 BM 的列表长得一样，但语义不同 ——
+   AURA 一次只能加入一个端点（join 会替换），所以行尾的状态是「已加入 / 未加入」，
+   而不是「已订阅」。 */
+function auraRenderMine(){
+  const list=$('#mineList');
+  const subs=state.subscribed;
+  $('#mineCount').textContent=subs.length;
+  if(!state.net||state.net!=='aura')return;
+  if(!AURA.loggedIn()){
+    list.innerHTML='<div class="empty"><b>AURA 还没登录</b>'
+      +'去「设置 → ☁️ AURA 云端对讲」填 Hub 地址和 860 账号，<br>登录后频道会出现在这里</div>';
+    return;
+  }
+  if(!AURA.ends.length){
+    list.innerHTML='<div class="empty"><b>没有可用频道</b>'
+      +'<button class="btn sm" data-act="auraRefresh" style="margin-top:8px">重新拉取频道</button></div>';
+    return;
+  }
+  if(!subs.length){
+    list.innerHTML='<div class="empty"><b>还没选频道</b>从右侧「话组库」点 ＋，<br>或在「实时活动」里点一行</div>';
+    return;
+  }
+  list.innerHTML=subs.map(id=>{
+    const e=AURA.endByTg.get(Number(id))||{tg:id,name:'未知端点',channelName:''};
+    const joined=!!(AURA.cur&&AURA.cur.tg===Number(id));
+    const tx=joined&&AURA.talkOn;
+    const inScan=state.scan.list.includes(Number(id));
+    const muted=state.rxMuteTg.indexOf(Number(id))>=0;
+    return '<div class="row'+(tx?' tx':'')+(muted?' muted':'')+' pinned" data-id="'+id+'">'+
+      '<span class="lamp'+(joined?' on':'')+'"></span>'+
+      '<span class="tgnum">'+id+'</span>'+
+      '<div class="tginfo"><div class="tgname">'+esc(e.name||('TG '+id))+'</div>'+
+      '<div class="tgsub"><span>'+esc(e.channelName||'—')+'</span>'
+        +'<span> · '+(muted?'已静音':(joined?(AURA.wsOpen?'已加入':'连接中…'):'未加入'))+'</span>'
+        +(inScan?'<span> · 在扫描列表</span>':'')+'</div></div>'+
+      '<div class="acts">'+
+        '<button class="mini'+(muted?' act':'')+'" data-act="mute" title="静音这个端点">'+(muted?'🔇':'🔊')+'</button>'+
+        '<button class="mini'+(joined?' act':'')+'" data-act="auraJoin" title="'+(joined?'离开':'加入')+'">'+(joined?'⏏':'▶')+'</button>'+
+        '<button class="mini danger" data-act="del" title="移出列表">✕</button>'+
+      '</div></div>';
+  }).join('');
+}
+
+/* 话组库在 AURA 网络下 = 所有可访问端点（bootstrap 拉回来的） */
+function auraRenderLib(){
+  const list=$('#libList');
+  const q=String(state.libQuery||'').trim().toLowerCase();
+  let rows=AURA.ends.slice();
+  if(q)rows=rows.filter(e=>String(e.tg).includes(q)
+    ||String(e.name||'').toLowerCase().includes(q)
+    ||String(e.channelName||'').toLowerCase().includes(q));
+  rows.sort((a,b)=>a.tg-b.tg);
+  $('#libCount').textContent=AURA.ends.length;
+  if(!AURA.ends.length){
+    list.innerHTML='<div class="empty"><b>频道表是空的</b>'
+      +(AURA.loggedIn()?'点「重新拉取频道」':'登录后自动拉取')+'</div>';
+    return;
+  }
+  list.innerHTML=rows.map(e=>{
+    const has=state.subscribed.includes(e.tg);
+    if(has)return '';
+    return '<div class="row" data-id="'+e.tg+'">'+
+      '<span class="tgnum">'+e.tg+'</span>'+
+      '<div class="tginfo"><div class="tgname">'+esc(e.name||('TG '+e.tg))+'</div>'+
+      '<div class="tgsub"><span>'+esc(e.channelName||'—')+'</span></div></div>'+
+      '<div class="acts"><button class="mini" data-act="add" title="加入我的收听">＋</button></div></div>';
+  }).join('')||'<div class="empty">都加进来了</div>';
+}
+
+/* 实时活动在 AURA 网络下 = 当前端点的成员列表（谁在线、谁在说） */
+function auraRenderLive(){
+  const box=$('#liveList');
+  if(!box)return;
+  /* BM/国内那套「全部/订阅/国内/国际/个呼」分类条对 AURA 没有意义（这里只有成员），
+     先收起来；切回 BM 时 renderLive 会重新填内容。 */
+  const cat=$('#liveCat'); if(cat)cat.style.display='none';
+  const mem=[...AURA.members.entries()];
+  $('#liveCount').textContent=mem.length;
+  $('#liveHint').textContent=AURA.cur
+    ? ('AURA · '+(AURA.cur.name||('TG '+AURA.cur.tg)))
+    : 'AURA · 未加入端点';
+  if(!AURA.cur){
+    box.innerHTML='<div class="empty"><b>还没加入端点</b>在「我的收听」点 ▶</div>';
+    return;
+  }
+  if(!mem.length){
+    box.innerHTML='<div class="empty">这个端点当前只有你</div>';
+    return;
+  }
+  box.innerHTML=mem.map(([call,talking])=>
+    '<div class="live-row'+(talking?' mine':'')+'">'
+    +'<span class="tgpill">'+(talking?'说':'听')+'</span>'
+    +'<div class="tginfo"><div class="tgname">'+esc(call)+'</div>'
+    +'<div class="tgsub">'+(talking?'正在发言':'在线')+'</div></div></div>'
+  ).join('');
+}
+
+/* 设置页里的 AURA 卡片状态 */
+function auraRenderSet(){
+  const st=$('#auraState');
+  if(st){
+    if(!AURA.hub){ st.textContent='未配置 Hub 地址'; st.className='badge'; }
+    else if(!AURA.loggedIn()){ st.textContent='Hub 已配置 · 未登录'; st.className='badge warn'; }
+    else {
+      st.textContent='已登录 '+(AURA.callsign||AURA.uid||'')
+        +(AURA.wsOpen?' · 已连接':' · 未连接')
+        +(AURA.cur?(' · 已加入 '+(AURA.cur.name||AURA.cur.tg)):'');
+      st.className='badge ok';
+    }
+  }
+  const dev=$('#auraDevState');
+  if(dev)dev.textContent=AURA.device?('已绑定（'+AURA.device.length+' 位）'):'未绑定';
+  const btnL=$('#auraBtnLogin');
+  if(btnL)btnL.disabled=AURA.busy;
+}
+
+/* ===================== AURA 的 PTT =====================
+   和 MMDVM 那条路的分工：
+     · MMDVM：Android.dmrPtt() → 原生 AudioRecord → AMBE → DMRD（UDP）
+     · AURA ：talk(on) → getUserMedia → s16le → /ws/ptt 二进制帧
+   所以这里不需要 Android 桥，也不需要声码器；web 版和 App 走的是同一条。
+   失败时必须把 TX.pttHeld / TX.txing 复位，否则 PTT 会卡在「发射中」。 */
+async function auraPttDown(){
+  if(!AURA.loggedIn()){ toast('先登录 AURA（设置 → ☁️ AURA）'); return; }
+  if(!AURA.wsOpen){ toast('AURA 连接还没建立'); return; }
+  if(!AURA.cur){ toast('先加入一个端点'); return; }
+  if(!AURA.talk(true)){ toast('talk 指令没发出去'); return; }
+  TX.pttHeld=true; TX.txing=true;
+  const p=txEl('txPtt'); if(p)p.classList.add('live');
+  renderNow(); renderStatus();
+  const ok=await AURA.micStart();
+  if(!ok){
+    AURA.talk(false);
+    TX.pttHeld=false; TX.txing=false;
+    if(p)p.classList.remove('live');
+    renderNow(); renderStatus();
+  }
+}
+function auraPttUp(){
+  AURA.talk(false);
+  AURA.micStop();
+  TX.txing=false;
+  renderNow(); renderStatus();
+}
+
+/* ===================== AURA 设置卡接线 ===================== */
+(function wireAura(){
+  const hub=$('#auraHub'), user=$('#auraUser'), pass=$('#auraPass'), code=$('#auraCode');
+  if(!hub||!user||!pass||!code)return;
+
+  function readHub(){
+    const v=String(hub.value||'').trim().replace(/\/+$/,'');
+    if(!v){ toast('先填 Hub 地址'); return null; }
+    if(!/^https?:\/\//i.test(v)){ toast('Hub 地址要以 https:// 开头'); return null; }
+    AURA.hub=v; store.set('auraHub',v);
+    return v;
+  }
+  function readCode(){
+    const c=String(code.value||'').trim();
+    if(!/^[0-9]{3}$/.test(c)){ toast('安全码是三位数字'); return null; }
+    return c;
+  }
+  function busy(on){ AURA.busy=!!on; auraRenderSet(); }
+
+  hub.value=AURA.hub||'';
+  hub.addEventListener('change',()=>{ const v=String(hub.value||'').trim().replace(/\/+$/,'');
+    if(v){ AURA.hub=v; store.set('auraHub',v); auraRenderSet(); } });
+
+  /* 注册：成功就直接用返回的一次性令牌绑定设备，少一步手抄 */
+  $('#auraBtnReg').addEventListener('click',async()=>{
+    const h=readHub(); if(!h)return;
+    const c=readCode(); if(!c)return;
+    const uid=String(user.value||'').trim(), pwd=String(pass.value||'');
+    if(!uid||!pwd){ toast('注册要填 860 账号和密码'); return; }
+    busy(true);
+    try{
+      const r=await AURA.register(uid,pwd,c,false);
+      if(r.enrollment_token)await AURA.bindDevice(r.enrollment_token);
+      toast('注册成功'+(r.callsign?' · '+r.callsign:''));
+      pass.value='';                 /* 密码只活到这一行 */
+      code.value='';
+      await AURA.login(c);
+      toast('已登录 AURA'+(AURA.callsign?' · '+AURA.callsign:''));
+      await AURA.ensure();
+      renderAll();
+    }catch(e){
+      toast('注册失败：'+(e&&e.message||e));
+    }finally{ busy(false); auraRenderSet(); }
+  });
+
+  /* 登录：设备凭据 + 安全码。失败后临时凭据已作废，重试会自动重新领取 */
+  $('#auraBtnLogin').addEventListener('click',async()=>{
+    const h=readHub(); if(!h)return;
+    const c=readCode(); if(!c)return;
+    busy(true);
+    try{
+      await AURA.login(c);
+      code.value='';
+      toast('已登录 AURA'+(AURA.callsign?' · '+AURA.callsign:''));
+      await AURA.ensure();
+      renderAll();
+    }catch(e){
+      toast('登录失败：'+(e&&e.message||e));
+    }finally{ busy(false); auraRenderSet(); }
+  });
+
+  $('#auraBtnLogout').addEventListener('click',async()=>{
+    busy(true);
+    try{ await AURA.logout(); toast('已注销 AURA'); }
+    catch(e){ toast('注销失败：'+(e&&e.message||e)); }
+    finally{ busy(false); renderAll(); auraRenderSet(); }
+  });
+
+  auraRenderSet();
+})();
 
 function renderTab(){
   const t=state.tab;
@@ -24598,6 +25312,9 @@ function txBanner(mode,arg){
   };
 
   if(mode==='web'){
+    /* AURA 不走 MMDVM：认证是 REST、语音是 WebSocket，浏览器里本来是能收发的。
+       这条「只能收听、不能发射」的横幅在 AURA 网络下是错的，直接不显示。 */
+    if(state.net==='aura'){ box.style.display='none'; return; }
     /* 浏览器预览模式：这里没有 Android 原生层，登录/发射根本发不出去。
      * 与其让用户点半天只弹一句「当前不在 App 内」，不如一进来就说清楚。 */
     set('web','🌐','浏览器预览模式 —— 只能收听，不能登录 / 发射',
@@ -24849,12 +25566,23 @@ function txMicSync(){
  * 只改可交互状态，不动样式 —— 用户仍然能看到完整界面长什么样。 */
 function txWebMode(){
   const c=txEl('txBtnConn'), p=txEl('txPtt'), d=txEl('txBtnDisc');
+  const h=txEl('txHint'), s=txEl('txIdState');
+  /* AURA 用 REST + WebSocket，浏览器里本来就能收发 —— 这里不该置灰。
+     PTT 在 AURA 下走 auraPttDown()，不碰 Android 桥。 */
+  if(state.net==='aura'){
+    if(c){ c.disabled=false; c.textContent='连接'; c.title='AURA 直接连 Hub，不需要原生层'; }
+    if(d){ d.disabled=!AURA.wsOpen; }
+    if(p){ p.disabled=false; p.title='按住说话：AURA 走 WebSocket 传 PCM'; }
+    if(h)h.textContent=AURA.loggedIn()
+      ? ('AURA · '+(AURA.wsOpen?'已连接':'未连接')+(AURA.cur?(' · 已加入 '+(AURA.cur.name||AURA.cur.tg)):''))
+      : 'AURA 未登录 —— 去「设置 → ☁️ AURA 云端对讲」登录';
+    if(s)s.textContent=AURA.loggedIn()?(AURA.callsign||AURA.uid||'已登录'):'未登录';
+    return;
+  }
   if(c){ c.disabled=true; c.textContent='需装 App'; c.title='浏览器里没有 UDP 原生层，无法登录主站'; }
   if(d){ d.disabled=true; }
   if(p){ p.disabled=true; p.title='浏览器里没有声码器和 UDP 链路，无法发射'; }
-  const h=txEl('txHint');
   if(h)h.textContent='浏览器预览模式：只能收听。登录主站与 PTT 发射需要安装 BeaconDMR App';
-  const s=txEl('txIdState');
   if(s)s.textContent='仅 App 可用';
 }
 function txEnter(){
@@ -25262,6 +25990,9 @@ function pttOnUp(e){
 function txPttDown(e){
   if(e)e.preventDefault();
   if(TX.pttHeld)return;
+  /* AURA 的发射不走 MMDVM：不需要 Android 桥、不需要声码器，
+     只有「talk on + 麦克风 PCM 帧」。 */
+  if(state.net==='aura'){ auraPttDown(); return; }
   if(typeof Android==='undefined')return;
   if(!TX.conn||!TX.voc){ toast('尚未就绪'); return; }
   const tg=parseInt(txEl('txTg').value,10)||0;
@@ -25281,6 +26012,7 @@ function txPttUp(e){
   if(!TX.pttHeld)return;
   TX.pttHeld=false;
   const p=txEl('txPtt'); if(p)p.classList.remove('live');
+  if(state.net==='aura'){ auraPttUp(); return; }
   try{ Android.dmrPtt(false,0,2,1,false); }catch(ex){}
 }
 window.onDmrEvent=function(json){
@@ -25774,6 +26506,7 @@ function setSyncTx(){
   }
 }
 function renderSet(){
+  try{ auraRenderSet(); }catch(e){}
   const q=id=>document.getElementById(id);
   const st=q('segTheme');
   if(st)[...st.children].forEach(b=>b.classList.toggle('on',b.dataset.val===state.theme));
@@ -26229,6 +26962,13 @@ document.addEventListener('click',e=>{
     const id=Number(b.dataset.id!=null?b.dataset.id:(row?(row.dataset.id||row.dataset.tg):0));
     switch(act){
       case 'add': addTg(id); return;
+      case 'auraJoin': {
+        if(state.net!=='aura')return;
+        if(AURA.cur&&AURA.cur.tg===id){ AURA.leave(); toast('已离开 '+id); }
+        else { const e=AURA.endByTg.get(id); if(e){ AURA.join(e); toast('正在加入 '+(e.name||id)); } }
+        return;
+      }
+      case 'auraRefresh': AURA.ensure(); toast('正在重新拉取频道'); return;
       case 'del': removeTg(id); toast('已移出 '+id); return;
       case 'solo': toggleSolo(id); toast(state.solo===id?'独听 '+id:'已退出独听'); return;
       case 'mute': toggleMuteTg(id); return;
@@ -26552,7 +27292,8 @@ function boot(){
   state.micGain=Math.max(-24,Math.min(12,Number(store.get('micGain',0))||0));
   state.recOn=store.get('recOn',true);
   /* 网络选择要早于订阅载入 —— 两套网络的订阅列表是分开存的 */
-  state.net=store.get('net','bm')==='cn'?'cn':'bm';
+  { const n=store.get('net','bm');
+    state.net=(n==='cn'||n==='aura')?n:'bm'; }
   {
     const dft=state.net==='cn'?NET_CN_DEFAULT.slice():[91];
     state.subscribed=(store.get(netSubKey(state.net),dft)||[])
@@ -26636,7 +27377,10 @@ function boot(){
     });
   }
   txMarkTarget();
-  loadTalkgroups(); loadMasters(); ensureLive();
+  loadTalkgroups(); loadMasters();
+  AURA.load();
+  if(state.net==='aura'){ auraRenderSet(); ensureAura(); }
+  else ensureLive();
   setInterval(()=>{ renderNowTimer(); renderVu(); drawSpectrum(); },100);
   setInterval(liveTick,1000);
   setInterval(renderStatus,2000);

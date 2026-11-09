@@ -15,6 +15,7 @@ import android.provider.MediaStore;
 import android.util.Base64;
 import android.view.View;
 import android.webkit.JavascriptInterface;
+import android.webkit.PermissionRequest;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -102,7 +103,7 @@ public class MainActivity extends Activity {
         }
 
         web.setWebViewClient(new AssetClient());
-        web.setWebChromeClient(new WebChromeClient());
+        web.setWebChromeClient(new MicChromeClient());
         web.addJavascriptInterface(new Bridge(), "Android");
         WebView.setWebContentsDebuggingEnabled(true);
 
@@ -208,6 +209,47 @@ public class MainActivity extends Activity {
         if (n.endsWith(".webp")) return "image/webp";
         if (n.endsWith(".woff2")) return "font/woff2";
         return "application/octet-stream";
+    }
+
+    /**
+     * 只为一件事存在：让页面里的 getUserMedia 拿到麦克风。
+     *
+     * 为什么需要它：WebView 的默认实现是**拒绝一切**权限请求，而 AURA 的发射
+     * 走的是「页面采集 PCM → WebSocket 二进制帧」，不是原生的 AudioRecord，
+     * 所以没有这一段，AURA 按 PTT 会直接 NotAllowedError。
+     *
+     * 放行范围刻意收窄：
+     *   · 只认本应用自己的 https origin（assets 是 appassets.androidplatform.net）；
+     *   · 只认 RESOURCE_AUDIO_CAPTURE，视频/屏幕共享一律拒。
+     */
+    private class MicChromeClient extends WebChromeClient {
+        @Override
+        public void onPermissionRequest(final PermissionRequest request) {
+            String origin = null;
+            try { origin = request.getOrigin() == null ? null : request.getOrigin().toString(); }
+            catch (Throwable ignored) { }
+
+            boolean ourOrigin = origin != null && origin.contains(ASSET_HOST);
+            boolean wantAudio = false;
+            try {
+                for (String r : request.getResources()) {
+                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(r)) wantAudio = true;
+                }
+            } catch (Throwable ignored) { }
+
+            if (!ourOrigin || !wantAudio) {
+                try { request.deny(); } catch (Throwable ignored) { }
+                return;
+            }
+            /* 运行时权限没给的话先要系统权限；给了再 grant，否则 grant 了也采不到音 */
+            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) {
+                runOnUiThread(() -> requestPermissions(
+                        new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC));
+            }
+            try { request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE}); }
+            catch (Throwable ignored) { }
+        }
     }
 
     private class AssetClient extends WebViewClient {

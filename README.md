@@ -45,6 +45,9 @@
 - 自动录音，WAV 落到公共音乐目录
 - 扫描模式：轮流守听一批话组，可自动跟进最活跃的那个
 - 接收过滤：只收当前话组 / 屏蔽名单 / 单独静音某话组
+- **AURA 云端对讲（第三条链路）**：账号制 PTT ——860 账号注册 → 设备绑定 →
+  三位安全码登录，语音走 Hub 的 `/ws/ptt`（PCM 8 kHz 二进制帧），
+  **不需要声码器，浏览器里也能收发**。和 BM / 国内 DMR 并列，订阅与身份各自独立
 - **实时活动分类查看**：全部 / 订阅 / 国内 / 国际 / 个呼，各带条数，单选并记住选择，
   和搜索框叠加。「国内」既认国内网话组，也认中国台站（呼号 B 开头 / DMR ID 460 段）
 - **音频频谱（SDR 式实时视图）**：「频谱」页签把正在听的音频画成
@@ -443,6 +446,13 @@ python tests/deepcw/spec_ref.py --out tests/out/deepcw
 node   tests/deepcw/verify.js --dir tests/out/deepcw
 # 顺手出图（不经过浏览器，图里的像素就是金标准的数值）
 python tests/deepcw/render_png.py --dir tests/out/deepcw
+```
+
+AURA 端到端（真起一个 mock hub，真开无头 Chrome 带假麦克风）：
+
+```bash
+python tests/aura_mock_hub.py --port 8099 &      # Hub 本地替身
+node   tests/aura_e2e.js                         # 注册/绑定/登录/join/talk/收发音频
 ```
 
 模型那一段（**只到「能不能跑、跑得对不对」，没接进 App**）：
