@@ -267,6 +267,42 @@ const micDenied = await ev(`
 ok('权限被拒时不开采集（并提示去系统设置）',
   micDenied.ok === false && micDenied.native === false, micDenied);
 
+console.log('\n=== 4e. 会话归属：别抢另一台设备的登录 ===');
+const sess = await ev(`
+  const out={};
+  /* ① 默认不开机自动连 */
+  AURA.autoConnect=false;
+  AURA.disconnect('测试');
+  await new Promise(r=>setTimeout(r,150));
+  out.afterDisc={open:AURA.wsOpen, tok:AURA.tokenValid(), hold:AURA.holdOff===true};
+  /* ② autoConnect 关着时 ensureAura() 不该建会话 */
+  ensureAura();
+  await new Promise(r=>setTimeout(r,400));
+  out.autoOff=AURA.wsOpen;
+  /* ③ 手动连接可以恢复 */
+  await AURA.ensure();
+  out.reconnect=AURA.wsOpen;
+  /* ④ 连续失败到上限就停手，不无限重连（scheduleReconnect 只在 aura 网络下跑） */
+  const netKeep=state.net; state.net='aura';
+  AURA.wsTries=5; AURA.holdOff=false;
+  AURA.scheduleReconnect();
+  state.net=netKeep;
+  out.capped={hold:AURA.holdOff===true, timer:!!AURA.wsTimer};
+  /* ⑤ 服务端说 unauthorized → 停手 + 清会话（不要在两边互相顶） */
+  AURA.holdOff=false; AURA.wsTries=0;
+  AURA.onText(JSON.stringify({type:'error',code:'unauthorized',message:'会话失效'}));
+  out.unauth={hold:AURA.holdOff===true, tok:AURA.token};
+  /* 收尾：重新登录，后面的用例还要用 */
+  await AURA.login('318');
+  await AURA.ensure();
+  return out;`);
+ok('断开后保留设备绑定（token 还在）', sess.afterDisc.open === false && sess.afterDisc.tok === true, sess);
+ok('autoConnect 关着时 ensureAura() 不建会话', sess.autoOff === false, sess);
+ok('手动连接能恢复', sess.reconnect === true, sess);
+ok('重连有上限（到顶就停手）', sess.capped.hold === true, sess);
+ok('unauthorized 后停手并清掉会话',
+  sess.unauth.hold === true && !sess.unauth.tok, sess);
+
 console.log('\n=== 4b. 连接诊断 + 原生 HTTP 桥 ===');
 const diag = await ev(`
   const r = await AURA.testConn();
@@ -351,18 +387,24 @@ ok('close 回调复位状态', nativeWs.closed === true, nativeWs);
 console.log('\n=== 5. 网络切换不串线 ===');
 const sw = await ev(`
   setNet('aura');
-  await new Promise(r=>setTimeout(r,600));
+  await new Promise(r=>setTimeout(r,300));
+  /* 2.10.6 起切网络不再自动建会话（避免抢另一台设备的登录），这里显式连 */
+  if(!AURA.wsOpen)await AURA.ensure();
   const openBefore = AURA.wsOpen;
   setNet('bm');
   await new Promise(r=>setTimeout(r,150));
   const auraOpen = AURA.wsOpen;
   const net1 = state.net;
   setNet('aura');
-  await new Promise(r=>setTimeout(r,400));
-  return {openBefore, net1, auraOpenAfterLeave:auraOpen, net2:state.net, wsRe:AURA.wsOpen, hub:AURA.hub};`);
+  await new Promise(r=>setTimeout(r,200));
+  const autoRe = AURA.wsOpen;          /* 不自动连：应为 false */
+  if(!AURA.wsOpen)await AURA.ensure(); /* 显式连 */
+  return {openBefore, net1, auraOpenAfterLeave:auraOpen, net2:state.net,
+          autoRe, wsRe:AURA.wsOpen, hub:AURA.hub};`);
 ok('切到 BM 会关掉 AURA 的 WS',
   sw.openBefore === true && sw.net1 === 'bm' && sw.auraOpenAfterLeave === false, sw);
-ok('切回 AURA 能重新连上', sw.net2 === 'aura' && sw.wsRe === true, sw);
+ok('切回 AURA 不自动抢会话（要手动连）', sw.autoRe === false, sw);
+ok('显式点连接后能重新连上', sw.net2 === 'aura' && sw.wsRe === true, sw);
 
 console.log('\n=== 6. UI 接线 ===');
 const ui = await ev(`

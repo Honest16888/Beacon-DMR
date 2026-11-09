@@ -1951,6 +1951,18 @@ body.dragging .dghint{display:block}
         <div class="setlbl"><b>允许自签名证书</b><span>Hub 用自签证书时才需要打开；打开后这条链路不再校验证书</span></div>
         <div class="setctl"><label class="sw"><input type="checkbox" id="auraTrustAll"><i></i></label></div>
       </div>
+      <div class="setrow tog">
+        <div class="setlbl"><b>开机自动连接</b><span>默认关。打开后每次启动都会占住这个账号的会话，
+          可能让你另一台设备登不上</span></div>
+        <div class="setctl"><label class="sw"><input type="checkbox" id="auraAuto"><i></i></label></div>
+      </div>
+      <div class="setrow act">
+        <div class="setlbl"><b>会话</b><span id="auraSessState">未连接</span></div>
+        <div class="setctl">
+          <button class="btn sm pri" id="auraBtnConn">连接</button>
+          <button class="btn sm" id="auraBtnDisc">断开</button>
+        </div>
+      </div>
       <div class="setrow act">
         <div class="setlbl"><b>操作</b><span>第一次：注册 → 自动绑定；以后：填安全码 → 登录</span></div>
         <div class="setctl">
@@ -20729,7 +20741,7 @@ function ensureAura(){
   AURA.ensure();
 }
 function ensureSpotter(){
-  if(state.net==='aura'){ ensureAura(); return; }
+  if(state.net==='aura'){ if(AURA.autoConnect)ensureAura(); return; }
   if(state.net==='cn'){ ensureRw(); return; }
   if(effSubs().length){ state.spotter.retry=0; spotterConnect(); }
   else spotterClose();
@@ -22383,7 +22395,9 @@ function setNet(n, silent){
   txNetHint();
   renderAll();
   if(n==='aura'){
-    AURA.load(); ensureAura();
+    AURA.load();
+    /* 只有用户打开「开机自动连接」时才主动建会话 —— 见 AURA.autoConnect 的注释 */
+    if(AURA.autoConnect)ensureAura(); else renderAll();
     try{ txWebMode(); }catch(e){}
   }
   else { ensureSpotter(); ensureLive(); }
@@ -23534,6 +23548,7 @@ const AURA = {
     this.hub=String(store.get('auraHub','')||'').trim().replace(/\/+$/,'');
     this.device=String(store.get('auraDevice','')||'');
     this.trustAll=store.get('auraTrustAll',false)===true;
+    this.autoConnect=store.get('auraAuto',false)===true;
     const s=store.get('auraSession',null);
     if(s&&typeof s==='object'){
       this.token=String(s.token||''); this.tokenAt=Number(s.at)||0;
@@ -23793,7 +23808,8 @@ const AURA = {
   },
   async logout(){
     try{ if(this.token)await this.api('/api/auth/logout',{}); }catch(e){ /* 已失效也算注销成功 */ }
-    this.clearSession(); this.wsClose(); this.talkOff();
+    this.clearSession(); this.wsClose(); this.talkOff(); this.micStop();
+    this.holdOff=true; this.pendingEnd=null; this.wsTries=0;
   },
 
   /* ---------------- 频道发现 ---------------- */
@@ -23938,13 +23954,38 @@ const AURA = {
     this.wsOpen=false;
     if(!silent){ this.cur=null; this.members.clear(); }
   },
-  /* 断线重连：带抖动的指数退避（协议 6.6）。重连后必须重新 welcome → join。 */
+  /* 断线重连：带抖动的指数退避（协议 6.6）。重连后必须重新 welcome → join。
+     ★ 但**不能无限抢**：同一账号在别的设备上也登录着时，两边会互相顶，
+       表现就是「这边一登录，那边就掉」。所以连续失败若干次、或服务端明确
+       说 unauthorized 之后，停手，等用户手动点「连接」。 */
   scheduleReconnect(){
     if(state.net!=='aura'||!this.token)return;
+    if(this.holdOff)return;
     if(this.wsTimer)return;
+    if(this.wsTries>=5){
+      this.holdOff=true;
+      this.lastErr='多次重连失败，已停止自动重连';
+      toast('AURA 多次重连失败 —— 可能账号已在别处登录；点「连接」可再试');
+      renderAll();
+      return;
+    }
     const n=Math.min(this.wsTries++,6);
     const delay=Math.min(30000,700*Math.pow(2,n))*(0.75+Math.random()*0.5);
     this.wsTimer=setTimeout(()=>{ this.wsTimer=null; if(state.net==='aura')this.connectWs(); },delay);
+  },
+  /* 用户主动连接：清掉「停手」标记再试 */
+  connect(){
+    this.holdOff=false; this.wsTries=0;
+    if(!this.tokenValid()){ toast('先登录 AURA'); return; }
+    this.connectWs();
+  },
+  /* 断开：只放掉会话与端点，**保留设备绑定**（下次点连接直接连，不用再输安全码） */
+  disconnect(reason){
+    this.talkOff(); this.micStop();
+    this.wsClose();
+    this.holdOff=true;            /* 断开期间不要被重连逻辑拉起来 */
+    this.lastErr=reason||'已断开';
+    renderAll();
   },
   join(end){
     if(!end)return;
@@ -24045,6 +24086,8 @@ const AURA = {
         this.lastErr=msg||code;
         toast('AURA：'+(msg||code));
         if(code==='unauthorized'){
+          /* 会话被别人顶掉 / 过期 / 注销：不要重连，否则两边互相踢 */
+          this.holdOff=true;
           /* 会话失效：停音频、退出端点、清凭据，让用户重新登录 */
           this.talkOff(); this.clearSession(); this.wsClose();
           renderAll();
@@ -24390,6 +24433,15 @@ function auraRenderSet(){
   if(dev)dev.textContent=AURA.device?('已绑定（'+AURA.device.length+' 位）'):'未绑定';
   const btnL=$('#auraBtnLogin');
   if(btnL)btnL.disabled=AURA.busy;
+  const sess=$('#auraSessState');
+  if(sess){
+    sess.textContent = !AURA.loggedIn() ? '未登录'
+      : AURA.wsOpen ? ('已连接'+(AURA.cur?(' · 已加入 '+(AURA.cur.name||AURA.cur.tg)):''))
+      : (AURA.holdOff ? '已断开（不会自动重连）' : '未连接');
+  }
+  const bc=$('#auraBtnConn'), bd=$('#auraBtnDisc');
+  if(bc)bc.disabled=!AURA.loggedIn()||AURA.wsOpen||AURA.busy;
+  if(bd)bd.disabled=!AURA.wsOpen&&!AURA.cur;
 }
 
 /* ===================== AURA 的 PTT =====================
@@ -24467,6 +24519,15 @@ function auraPttUp(){
   function busy(on){ AURA.busy=!!on; auraRenderSet(); }
 
   hub.value=AURA.hub||'';
+  const auto=$('#auraAuto');
+  if(auto){
+    auto.checked=!!AURA.autoConnect;
+    auto.addEventListener('change',()=>{
+      AURA.autoConnect=!!auto.checked;
+      store.set('auraAuto',AURA.autoConnect);
+      toast(AURA.autoConnect?'下次启动会自动连接（会占住账号会话）':'已关闭自动连接');
+    });
+  }
   const trust=$('#auraTrustAll');
   if(trust){
     trust.checked=!!AURA.trustAll;
@@ -24540,6 +24601,23 @@ function auraPttUp(){
     }catch(e){
       toast(e&&e.message||String(e));
     }finally{ busy(false); auraRenderSet(); }
+  });
+
+  /* 连接：显式建立会话（等价于「我确定要让这台机器占住账号」） */
+  $('#auraBtnConn').addEventListener('click',async()=>{
+    const h=readHub(); if(!h)return;
+    busy(true);
+    try{
+      if(!(await AURA.ensure()))toast('连不上 Hub —— 点「测试连接」看是哪一步');
+    }finally{ busy(false); auraRenderSet(); }
+  });
+
+  /* 断开：放掉会话与端点，保留设备绑定。
+     这是「我这台先不占着」的入口 —— 另一台设备就能登上了。 */
+  $('#auraBtnDisc').addEventListener('click',()=>{
+    AURA.disconnect('已手动断开');
+    toast('已断开 AURA（设备绑定保留）');
+    renderAll();
   });
 
   $('#auraBtnTest').addEventListener('click',async()=>{
@@ -27836,8 +27914,11 @@ function boot(){
   txMarkTarget();
   loadTalkgroups(); loadMasters();
   AURA.load();
-  if(state.net==='aura'){ auraRenderSet(); ensureAura(); }
-  else ensureLive();
+  if(state.net==='aura'){
+    auraRenderSet();
+    /* ★ 默认不自动连：这个 App 抢了会话，用户另一台设备就登不上 */
+    if(AURA.autoConnect)ensureAura();
+  }else ensureLive();
   setInterval(()=>{ renderNowTimer(); renderVu(); drawSpectrum(); },100);
   setInterval(liveTick,1000);
   setInterval(renderStatus,2000);
