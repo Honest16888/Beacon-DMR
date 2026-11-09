@@ -153,6 +153,33 @@ ok('音频帧到达 Hub（0x01 PCM）', tx.after.audio_in > tx.before.audio_in,
   { in: tx.after.audio_in, bytes: tx.after.audio_bytes });
 ok('talk off 到达 Hub', tx.after2.talk_off > tx.before.talk_off, tx.after2);
 
+console.log('\n=== 4b. 连接诊断 + 原生 HTTP 桥 ===');
+const diag = await ev(`
+  const r = await AURA.testConn();
+  return {ok:r.ok, steps:r.steps.map(x=>x.k+'='+x.v+' ['+(x.s||'-')+']')};`);
+ok('诊断：REST 与 WebSocket 都通', diag.ok === true, diag);
+ok('诊断把通道写成「页面 fetch」（浏览器里没有原生桥）',
+  (diag.steps || []).some(x => x.startsWith('通道=页面 fetch')), diag);
+
+const bridge = await ev(`
+  /* 装一个假的 Android.auraHttp：验证 JS 会优先走原生桥，并正确解析回调 */
+  const calls = [];
+  window.Android = {
+    auraHttp(id, method, url, headersJson, bodyJson) {
+      calls.push({method, url, headers:JSON.parse(headersJson||'{}'), body:bodyJson});
+      fetch(url, {method, headers:JSON.parse(headersJson||'{}'),
+                  body: bodyJson == null ? undefined : bodyJson})
+        .then(r => r.text().then(t => window.onAuraHttp(id, JSON.stringify({status:r.status, body:t, error:''}))))
+        .catch(e => window.onAuraHttp(id, JSON.stringify({status:0, body:'', error:String(e)})));
+    }
+  };
+  const r = await AURA.api('/api/public/overview', undefined, {noAuth:true});
+  const usedNative = calls.length === 1 && calls[0].url.indexOf('/api/public/overview') > 0;
+  delete window.Android;
+  return {usedNative, calls:calls.length, ok:!!r.ok};`);
+ok('有原生桥时 REST 走原生（不再用 fetch）', bridge.usedNative === true, bridge);
+ok('原生桥的回调被正确解析', bridge.ok === true, bridge);
+
 console.log('\n=== 5. 网络切换不串线 ===');
 const sw = await ev(`
   setNet('aura');

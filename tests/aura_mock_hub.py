@@ -250,6 +250,19 @@ async def my_appeals(req: web.Request):
     return web.json_response({"ok": True, "appeals": []}, headers=CORS)
 
 
+async def public_overview(req: web.Request):
+    """协议 5.6：无需登录的公开目录。客户端拿它当连通性探针。"""
+    return web.json_response({
+        "ok": True,
+        "channels": [{"id": c["id"], "name": c["name"], "is_public": True,
+                      "status": "active"} for c in CHANNELS],
+        "operators": [{"callsign": "BH6RGQ", "channels": 1}],
+        "stats": {"channels": len(CHANNELS),
+                  "tgs": sum(len(c["tgs"]) for c in CHANNELS),
+                  "online": 0},
+    }, headers=CORS)
+
+
 async def stats(req: web.Request):
     return web.json_response({"ok": True, "stats": HUB.stats,
                               "users": len(HUB.users),
@@ -366,6 +379,7 @@ def build_app() -> web.Application:
     app.router.add_post("/api/auth/issue-ptt-key", issue_key)
     app.router.add_post("/api/auth/login", login)
     app.router.add_post("/api/auth/logout", logout)
+    app.router.add_get("/api/public/overview", public_overview)
     app.router.add_get("/api/ptt/bootstrap", bootstrap)
     app.router.add_get("/api/ptt/channels", bootstrap)
     app.router.add_get("/api/ptt/my/joins", my_joins)

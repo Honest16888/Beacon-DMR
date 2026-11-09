@@ -1145,6 +1145,13 @@ body.simple .foot .fc{display:none}
   border:1px solid var(--border);background:var(--panel2);color:var(--text);
   font:inherit;font-size:12px;min-width:0}
 .aurainp:focus{outline:none;border-color:var(--accent)}
+.auradiag{margin:0 12px 10px;padding:8px 10px;border-radius:8px;background:var(--panel2);
+  border:1px solid var(--border2);font-family:ui-monospace,Consolas,monospace;
+  font-size:11px;line-height:1.6;color:var(--muted);white-space:pre-wrap;display:none}
+.auradiag.on{display:block}
+.auradiag .bad{color:var(--bad)}
+.auradiag .ok{color:var(--ok)}
+.auradiag .warn{color:var(--warn)}
 
 /* ===================== 我的收听：静音 + 长按拖动排序（v2.4.8） ===================== */
 /* 被静音的行整体压暗，但话组号和名字仍然看得清 —— 静音是「不播」，
@@ -1946,8 +1953,10 @@ body.dragging .dghint{display:block}
           <button class="btn sm" id="auraBtnReg">注册</button>
           <button class="btn sm pri" id="auraBtnLogin">登录</button>
           <button class="btn sm" id="auraBtnLogout">注销</button>
+          <button class="btn sm" id="auraBtnTest">测试连接</button>
         </div>
       </div>
+      <pre class="auradiag" id="auraDiag"></pre>
       <div class="setnote">
         AURA 是<b>第三条链路</b>，和 BM / 国内 DMR 并列：认证走 Hub 的 REST，
         语音走 <code>/ws/ptt</code> 的二进制帧（PCM 8 kHz），不经过 MMDVM、不需要声码器。
@@ -23541,6 +23550,22 @@ const AURA = {
 
   /* ---------------- REST ---------------- */
   apiBase(){ return this.hub.replace(/\/+$/,''); },
+  /* 原生 HTTP 桥（App 内才有）。见 MainActivity.Bridge.auraHttp。
+     为什么必须走它：页面在 https origin 上，fetch 明文 http 是混合内容，浏览器层
+     直接拦；Android 9+ 又默认禁明文。两条任意命中都只报「Failed to fetch」。 */
+  hasNativeHttp(){ return !!(window.Android&&typeof Android.auraHttp==='function'); },
+  nativeReq(method,url,headers,bodyText){
+    return new Promise(res=>{
+      const id='h'+Date.now().toString(36)+Math.random().toString(36).slice(2,8);
+      let done=false;
+      const finish=v=>{ if(done)return; done=true; _auraPending.delete(id); res(v); };
+      _auraPending.set(id,finish);
+      try{ Android.auraHttp(id,method,url,JSON.stringify(headers||{}),
+                           bodyText==null?null:bodyText); }
+      catch(e){ finish({status:0,body:'',error:String(e&&e.message||e)}); }
+      setTimeout(()=>finish({status:0,body:'',error:'请求超时（25 秒）'}),26000);
+    });
+  },
   async api(path, body, opt){
     opt=opt||{};
     const base=this.apiBase();
@@ -23548,32 +23573,89 @@ const AURA = {
     const headers={'Accept':'application/json'};
     if(body!==undefined)headers['Content-Type']='application/json';
     if(this.token&&!opt.noAuth)headers['Authorization']='Bearer '+this.token;
-    const ctl=(typeof AbortController!=='undefined')?new AbortController():null;
-    const timer=ctl?setTimeout(()=>ctl.abort(),15000):null;
-    let res;
-    try{
-      res=await fetch(base+path,{
-        method: body===undefined?'GET':'POST',
-        headers,
-        body: body===undefined?undefined:JSON.stringify(body),
-        signal: ctl?ctl.signal:undefined,
-      });
-    }catch(e){
+    const method=body===undefined?'GET':'POST';
+    const bodyText=body===undefined?undefined:JSON.stringify(body);
+
+    let status=0, text='';
+    if(this.hasNativeHttp()){
+      const r=await this.nativeReq(method,base+path,headers,bodyText);
+      if(r.error)throw new Error('连不上 Hub：'+r.error);
+      status=r.status; text=r.body||'';
+    }else{
+      const ctl=(typeof AbortController!=='undefined')?new AbortController():null;
+      const timer=ctl?setTimeout(()=>ctl.abort(),15000):null;
+      let res;
+      try{
+        res=await fetch(base+path,{method,headers,body:bodyText,
+          signal:ctl?ctl.signal:undefined});
+      }catch(e){
+        if(timer)clearTimeout(timer);
+        throw new Error('连不上 Hub：'+(e&&e.message||e));
+      }
       if(timer)clearTimeout(timer);
-      throw new Error('连不上 Hub：'+(e&&e.message||e));
+      status=res.status; text=await res.text();
     }
-    if(timer)clearTimeout(timer);
-    const text=await res.text();
+
     let data=null;
     if(text){ try{ data=JSON.parse(text); }catch(e){ data={raw:text}; } }
-    if(!res.ok){
+    if(status<200||status>=300){
       const code=(data&&data.error_code)||'';
-      const msg=(data&&(data.error||data.message))||('HTTP '+res.status);
+      const msg=(data&&(data.error||data.message))||('HTTP '+status);
       const err=new Error(msg);
-      err.status=res.status; err.code=code;
+      err.status=status; err.code=code;
       throw err;
     }
     return data||{};
+  },
+
+  /* ---------- 连接诊断 ----------
+     用户只看到「注册失败」时，这几步能把原因缩到一句话：地址写错 / 明文被拦 /
+     域名解析不了 / 证书不认 / CORS / 服务端 5xx。 */
+  async testConn(){
+    const steps=[];
+    const add=(k,v,s)=>steps.push({k,v,s:s||''});
+    const hub=this.apiBase();
+    if(!hub){ add('地址','未填写','bad'); return {ok:false,steps}; }
+
+    let u=null;
+    try{ u=new URL(hub); }catch(e){ add('地址格式',hub+' 不是合法 URL','bad'); return {ok:false,steps}; }
+    add('地址', u.origin + (u.pathname!=='/'?u.pathname:''), 'ok');
+    if(u.protocol==='https:')add('协议','https（推荐）','ok');
+    else if(u.protocol==='http:')add('协议','http —— 明文。网页版会被混合内容拦，'
+      +'App 内走原生可以，但 WS 仍可能连不上','warn');
+    else { add('协议',u.protocol+' 不支持','bad'); return {ok:false,steps}; }
+
+    if(location.protocol==='https:'&&u.protocol==='http:'&&!this.hasNativeHttp())
+      add('混合内容','https 页面不能请求 http：浏览器会在发出前就拦掉','bad');
+    add('通道', this.hasNativeHttp()?'原生 HttpURLConnection':'页面 fetch','ok');
+
+    /* 1) REST：公开目录不需要登录（协议 5.6），拿它当探针 */
+    const t0=Date.now();
+    try{
+      await this.api('/api/public/overview', undefined, {noAuth:true});
+      add('REST','HTTP 200（'+((Date.now()-t0))+' ms）','ok');
+    }catch(e){
+      const st=e&&e.status;
+      add('REST', (e&&e.message||String(e)) + (st?('（HTTP '+st+'）'):''), 'bad');
+    }
+
+    /* 2) WS：握手能不能建立。token 是假的，401 也是「连得上」 */
+    const wsOk=await new Promise(res=>{
+      let done=false;
+      const finish=v=>{ if(done)return; done=true; res(v); };
+      let sock;
+      try{
+        const wsUrl=this.apiBase().replace(/^http/,'ws')+'/ws/ptt?token=probe';
+        sock=new WebSocket(wsUrl);
+      }catch(e){ finish({ok:false,msg:String(e&&e.message||e)}); return; }
+      sock.onopen=()=>{ try{sock.close();}catch(e){} finish({ok:true,msg:'握手成功'}); };
+      sock.onerror=()=>{ try{sock.close();}catch(e){} finish({ok:true,msg:'握手被拒（多半是 401，正常）'}); };
+      setTimeout(()=>{ try{sock.close();}catch(e){} finish({ok:false,msg:'5 秒内没有任何响应'}); },5000);
+    });
+    add('WebSocket', wsOk.msg, wsOk.ok?'ok':'bad');
+
+    const ok=steps.every(x=>x.s!=='bad');
+    return {ok, steps};
   },
 
   /* 注册（或带 reverify 重新核验）→ enrollment_token */
@@ -23888,6 +23970,15 @@ const AURA = {
   },
 };
 
+/* 原生 HTTP 的异步回调：MainActivity 发完请求后调 window.onAuraHttp(id,json) */
+const _auraPending=new Map();
+window.onAuraHttp=function(id,json){
+  const cb=_auraPending.get(id); if(!cb)return;
+  let o; try{ o=JSON.parse(json); }catch(e){ o={status:0,body:'',error:'回调解析失败'}; }
+  _auraPending.delete(id);
+  cb(o);
+};
+
 /* ===================== AURA 界面 ===================== */
 
 /* 「我的收听」在 AURA 网络下的样子：
@@ -24095,6 +24186,18 @@ function auraPttUp(){
     }catch(e){
       toast('登录失败：'+(e&&e.message||e));
     }finally{ busy(false); auraRenderSet(); }
+  });
+
+  $('#auraBtnTest').addEventListener('click',async()=>{
+    const h=readHub(); if(!h)return;
+    const box=$('#auraDiag');
+    if(box){ box.classList.add('on'); box.textContent='正在测试…'; }
+    const r=await AURA.testConn();
+    if(box){
+      box.innerHTML=r.steps.map(x=>
+        '<span class="'+(x.s||'')+'">'+esc(x.k)+'</span>  '+esc(x.v)).join('\n');
+    }
+    toast(r.ok?'连接正常':'有问题，看下面那几行');
   });
 
   $('#auraBtnLogout').addEventListener('click',async()=>{

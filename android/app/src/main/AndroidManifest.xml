@@ -35,7 +35,11 @@
         android:label="@string/app_name"
         android:supportsRtl="false"
         android:theme="@style/AppTheme"
-        android:usesCleartextTraffic="false">
+        android:usesCleartextTraffic="true">
+        <!-- AURA 的 Hub 地址是用户在设置里自己填的，可能是 http://（内网/自建）。
+             页面在 https origin 上，fetch 明文会被混合内容规则拦，所以 REST 走原生
+             （Bridge.auraHttp）；原生同样受这条开关约束，故放开明文。
+             HOSE / radiowo / MMDVM 都是 wss 或 UDP，不受影响。 -->
 
         <activity
             android:name=".MainActivity"

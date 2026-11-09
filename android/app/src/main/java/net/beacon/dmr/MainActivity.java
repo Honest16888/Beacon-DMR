@@ -29,7 +29,11 @@ import org.json.JSONObject;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.util.Iterator;
 import java.io.OutputStream;
 import java.util.HashMap;
 import java.util.Map;
@@ -370,6 +374,81 @@ public class MainActivity extends Activity {
 
     /** 暴露给页面的 window.Android */
     public class Bridge {
+
+        /**
+         * AURA 的 REST 走原生发。
+         *
+         * 为什么不能用页面的 fetch：
+         *   ① 页面 origin 是 https://appassets.androidplatform.net，
+         *      fetch 到 http://… 是混合内容，浏览器层直接拦，请求根本不发；
+         *   ② Android 9+ 默认 usesCleartextTraffic=false，明文 HTTP 一律拒绝。
+         * 两条命中任意一条，页面只能看到「Failed to fetch」，看不出原因。
+         *
+         * 这里用 HttpURLConnection（框架自带，不引依赖），把状态码和真实异常
+         * 原样带回页面；网络操作不在主线程。
+         */
+        @JavascriptInterface
+        public void auraHttp(final String reqId, final String method, final String url,
+                             final String headersJson, final String bodyJson) {
+            new Thread(() -> {
+                JSONObject out = new JSONObject();
+                HttpURLConnection c = null;
+                try {
+                    c = (HttpURLConnection) new URL(url).openConnection();
+                    c.setRequestMethod(method == null ? "GET" : method);
+                    c.setConnectTimeout(15000);
+                    c.setReadTimeout(25000);
+                    c.setInstanceFollowRedirects(true);
+                    c.setRequestProperty("Accept", "application/json");
+                    if (headersJson != null && !headersJson.isEmpty()) {
+                        JSONObject h = new JSONObject(headersJson);
+                        for (Iterator<String> it = h.keys(); it.hasNext(); ) {
+                            String k = it.next();
+                            c.setRequestProperty(k, h.optString(k));
+                        }
+                    }
+                    if (bodyJson != null) {
+                        byte[] bytes = bodyJson.getBytes("UTF-8");
+                        c.setDoOutput(true);
+                        c.setFixedLengthStreamingMode(bytes.length);
+                        c.getOutputStream().write(bytes);
+                    }
+                    int code = c.getResponseCode();
+                    java.io.InputStream in = code >= 400 ? c.getErrorStream() : c.getInputStream();
+                    String text = readAll(in, 512 * 1024);
+                    out.put("status", code).put("body", text).put("error", "");
+                } catch (Exception e) {
+                    /* 类名要带上：UnknownHost / SSLHandshake / Connect 一眼能分 */
+                    String msg = e.getClass().getSimpleName();
+                    if (e.getMessage() != null) msg += ": " + e.getMessage();
+                    try { out.put("status", 0).put("body", "").put("error", msg); }
+                    catch (Exception ignored) { }
+                } finally {
+                    if (c != null) c.disconnect();
+                }
+                final String js = "window.onAuraHttp&&window.onAuraHttp("
+                        + JSONObject.quote(reqId) + "," + JSONObject.quote(out.toString()) + ");";
+                runOnUiThread(() -> {
+                    if (web != null) web.evaluateJavascript(js, null);
+                });
+            }, "aura-http").start();
+        }
+
+        /** 读完整响应；超过 cap 截断（诊断用，别被大包拖死） */
+        private String readAll(java.io.InputStream in, int cap) throws IOException {
+            if (in == null) return "";
+            ByteArrayOutputStream bos = new ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n, total = 0;
+            while ((n = in.read(buf)) > 0) {
+                int keep = Math.min(n, Math.max(0, cap - total));
+                if (keep > 0) bos.write(buf, 0, keep);
+                total += n;
+                if (total >= cap) break;
+            }
+            try { in.close(); } catch (Exception ignored) { }
+            return bos.toString("UTF-8");
+        }
 
         private OutputStream out;
         private Uri mediaUri;
