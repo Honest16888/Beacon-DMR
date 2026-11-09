@@ -1981,8 +1981,10 @@ body.dragging .dghint{display:block}
         语音走 <code>/ws/ptt</code> 的二进制帧（PCM 8 kHz），不经过 MMDVM、不需要声码器。
         <br>设备凭据保存在本机（WebView 私有目录），安全码与 860 密码<b>不保存</b>。
         <br><b>⚠ 一个账号一份设备凭据</b>（据实测）：在这台注册/核验之后，别的设备
-        上的 App 会提示登录失败，需要在那边<b>重新核验</b>才能把绑定抢回去；反过来也一样。
-        要换回原 App，点上面的<b>「释放设备」</b>，再去那边重新核验。
+        上的 OpenRF 会提示登录失败。要换回去：先点上面的<b>「释放设备」</b>，
+        再到 OpenRF 的<b>「设置 → 国服 ID / 重新绑定 / 证书状态」</b>点
+        <b>「重新绑定」</b>（或「手动重新核验」）—— 它会换发一张新证书、把绑定抢回去，
+        同时作废本机这份。
       </div>
     </div>
 
@@ -24617,7 +24619,9 @@ function auraPttUp(){
     const uid=AURA.normId(user.value), pwd=String(pass.value||'');
     if(!uid||!pwd){ toast('重新核验要填 860 账号和密码'); return; }
     if(!confirm('重新核验会撤销这个账号原来的设备凭据和所有会话。\n'
-      +'本机将作为新设备重新绑定，其它已登录的设备会被踢下线。\n\n继续？'))return;
+      +'本机将作为新设备重新绑定，其它已登录的设备（包括 OpenRF / 脉冲）会立刻失效。\n\n'
+      +'想换回去时：在 OpenRF 的「设置 → 国服 ID / 重新绑定 / 证书状态」里点\n'
+      +'「手动重新核验」或「重新绑定」，它会换发一张新证书并把绑定抢回去。\n\n继续？'))return;
     busy(true); AURA.logClear();
     try{
       const r=await AURA.register(uid,pwd,c,true);
@@ -24670,7 +24674,9 @@ function auraPttUp(){
     busy(true);
     try{
       const r=await AURA.releaseDevice();
-      toast(r.cleared?'已释放本机设备绑定 —— 去原 App 重新核验一次':'已清除会话');
+      toast(r.cleared
+        ? '已释放 —— 去 OpenRF「设置 → 国服 ID / 重新绑定」点「重新绑定」或「手动重新核验」'
+        : '已清除会话');
       auraRenderSet();
     }finally{ busy(false); }
   });
