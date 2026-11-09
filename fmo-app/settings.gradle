@@ -1,0 +1,11 @@
+// FMO 独立 App —— 从 OpenRF (com.nrl.pulse) 架构逆向而来
+// 仅保留 FMO 模块，去掉 BM/CN DMR/AURA 等无关链路
+pluginManagement {
+    repositories { google(); mavenCentral(); gradlePluginPortal() }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories { google(); mavenCentral() }
+}
+rootProject.name = "FMO-Pulse"
+include ':app'

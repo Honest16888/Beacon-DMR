@@ -1,0 +1,16 @@
+# Gradle
+.gradle/
+build/
+local.properties
+
+# IDE
+.idea/
+*.iml
+
+# APK
+*.apk
+*.aab
+
+# JNI
+*.so
+!app/src/main/jniLibs/**/*.so

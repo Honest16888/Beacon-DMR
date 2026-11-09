@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="4dp"
+            android:text="FMO Pulse"
+            android:textSize="22sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:text="MQTT + mTLS · 信标/广播/APRS/语音/电台"
+            android:textSize="13sp"
+            android:textColor="#888" />
+
+        <!-- MQTT Broker -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:layout_marginBottom="8dp">
+            <TextView android:layout_width="70dp" android:layout_height="wrap_content"
+                android:text="Broker" android:textStyle="bold" />
+            <EditText android:id="@+id/etBroker"
+                android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:hint="ssl://mqtt.example.com:8883"
+                android:inputType="textUri" />
+        </LinearLayout>
+
+        <!-- API 地址 -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:layout_marginBottom="8dp">
+            <TextView android:layout_width="70dp" android:layout_height="wrap_content"
+                android:text="API" android:textStyle="bold" />
+            <EditText android:id="@+id/etApi"
+                android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:hint="https://api.example.com"
+                android:inputType="textUri" />
+        </LinearLayout>
+
+        <!-- 呼号 -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:layout_marginBottom="8dp">
+            <TextView android:layout_width="70dp" android:layout_height="wrap_content"
+                android:text="呼号" android:textStyle="bold" />
+            <EditText android:id="@+id/etCallsign"
+                android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:hint="BH6RGQ"
+                android:inputType="textCapCharacters" />
+        </LinearLayout>
+
+        <!-- 连接按钮 -->
+        <Button android:id="@+id/btnConnect"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:text="连接" />
+
+        <!-- 状态 -->
+        <TextView android:id="@+id/tvStatus"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:text="未连接" android:textSize="13sp" android:textColor="#888" />
+
+        <!-- 功能按钮 -->
+        <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:orientation="horizontal" android:layout_marginBottom="12dp">
+            <Button android:id="@+id/btnBeacon"
+                android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:text="📡 信标" />
+            <Button android:id="@+id/btnBroadcast"
+                android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:text="📢 广播" />
+            <Button android:id="@+id/btnStations"
+                android:layout_width="0dp" android:layout_height="wrap_content"
+                android:layout_weight="1" android:text="📻 电台" />
+        </LinearLayout>
+
+        <!-- 发证书 -->
+        <Button android:id="@+id/btnIssueCert"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:text="🔐 发证书（生成密钥 + CSR + 绑定）" />
+
+        <!-- 电台列表 -->
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:text="电台列表" android:textStyle="bold" />
+        <TextView android:id="@+id/tvStations"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:minLines="3" android:fontFamily="monospace"
+            android:textSize="11sp" android:textColor="#555"
+            android:text="（点「电台」按钮获取）" />
+
+        <!-- 日志 -->
+        <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="日志" android:textStyle="bold" />
+        <TextView android:id="@+id/tvLog"
+            android:layout_width="match_parent" android:layout_height="wrap_content"
+            android:minLines="10" android:fontFamily="monospace"
+            android:textSize="11sp" android:textColor="#555" />
+
+    </LinearLayout>
+</ScrollView>
