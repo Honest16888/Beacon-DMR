@@ -112,6 +112,44 @@ const reuse = await ev(`
   return {first, second};`);
 ok('临时凭据只能登录一次（第二次被拒）', reuse.first === true && reuse.second === false, reuse);
 
+console.log('\n=== 1b. 注册失败的分诊（860 验证 / 重复 / 全角输入）===');
+const wrongPwd = await ev(`
+  AURA.logClear();
+  const acc='860bad'+Date.now();
+  try{
+    await AURA.register(acc,'bad860','318',false);
+    return {ok:true};
+  }catch(e){
+    return {ok:false, msg:e.message,
+      log:(AURA.logLines||[]).join(' | ').slice(0,200)};
+  }`);
+ok('820 验证失败 → 明确说「860 账号或密码不对」',
+  wrongPwd.ok === false && /860 账号或密码/.test(wrongPwd.msg || ''), wrongPwd);
+ok('失败也有请求日志（状态码可见）', /401/.test(wrongPwd.log || ''), wrongPwd);
+
+const dup = await ev(`
+  try{ await AURA.register(${JSON.stringify(ACC)},'pass1234','318',false); return {ok:true}; }
+  catch(e){ return {ok:false, msg:e.message, status:e.status}; }`);
+ok('重复注册 → 提示去点「重新核验」',
+  dup.ok === false && /重新核验/.test(dup.msg || ''), dup);
+
+const fullwidth = await ev(`
+  /* 账号里塞全角数字 + 前后空格、安全码用全角 —— 规范化之后必须能注册成功 */
+  const acc='860fw'+Date.now();
+  const r=await AURA.register('  '+acc+'  ','pass1234','３１８',false);
+  return {ok:!!r.uid, code:r.enrollment_token?318:0};`);
+ok('全角数字/空格被规范化后注册成功', fullwidth.ok === true, fullwidth);
+
+const reverify = await ev(`
+  const r=await AURA.register(${JSON.stringify(ACC)},'pass1234','318',true);
+  const dev=await AURA.bindDevice(r.enrollment_token);
+  /* reverify 会撤销该账号所有旧会话，这里必须重新登录，
+     否则后面的用例拿到的是废 token（WS 永远连不上） */
+  await AURA.login('318');
+  return {ok:!!r.enrollment_token, dev:!!dev, tok:AURA.tokenValid()};`);
+ok('重新核验拿到新的一次性令牌并能重新绑定',
+  reverify.ok === true && reverify.dev === true && reverify.tok === true, reverify);
+
 console.log('\n=== 2. 频道发现 ===');
 const boot = await ev(`
   const ends = await AURA.bootstrap();

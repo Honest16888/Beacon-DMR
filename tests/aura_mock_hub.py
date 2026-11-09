@@ -123,6 +123,11 @@ async def register(req: web.Request):
     if not (len(code) == 3 and code.isdigit() and code.isascii()):
         return HUB.err(400, "security_code 必须是三位 ASCII 数字")
     HUB.stats["register"] += 1
+    # 测试钩子：密码固定为 bad860 时模拟「860 身份验证失败」（协议 7.2 的 401）
+    if password == "bad860":
+        return web.json_response({"ok": False, "error": "860 身份验证失败"},
+                                 status=401, headers=CORS)
+
 
     u = HUB.users.get(login_id)
     if u and not b.get("reverify"):

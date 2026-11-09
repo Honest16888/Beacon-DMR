@@ -1957,10 +1957,12 @@ body.dragging .dghint{display:block}
           <button class="btn sm" id="auraBtnReg">注册</button>
           <button class="btn sm pri" id="auraBtnLogin">登录</button>
           <button class="btn sm" id="auraBtnLogout">注销</button>
+          <button class="btn sm" id="auraBtnReverify">重新核验</button>
           <button class="btn sm" id="auraBtnTest">测试连接</button>
         </div>
       </div>
       <pre class="auradiag" id="auraDiag"></pre>
+      <pre class="auradiag" id="auraLog"></pre>
       <div class="setnote">
         AURA 是<b>第三条链路</b>，和 BM / 国内 DMR 并列：认证走 Hub 的 REST，
         语音走 <code>/ws/ptt</code> 的二进制帧（PCM 8 kHz），不经过 MMDVM、不需要声码器。
@@ -23553,6 +23555,69 @@ const AURA = {
   },
   loggedIn(){ return this.tokenValid(); },
 
+  /* ---------------- 输入规范化 ----------------
+     全角数字/空格/首尾空白是最常见的「我明明填对了」：860 账号复制粘贴、
+     安全码用中文输入法敲，都会带进来。协议要求 ASCII 三位数字。 */
+  normId(v){
+    return String(v==null?'':v)
+      .replace(/[\uFF01-\uFF5E]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0))
+      .replace(/\u3000/g,' ')
+      .trim();
+  },
+  normCode(v){ return this.normId(v).replace(/\s+/g,''); },
+  normPwd(v){ return String(v==null?'':v); },   /* 密码不动，只提示首尾空白 */
+  inputWarnings(loginId,password,code){
+    const w=[];
+    if(/^\s|\s$/.test(String(password||'')))
+      w.push('860 密码首尾有空白字符 —— 如果密码本身没有空格，多半是粘贴带进来的');
+    if(!/^[0-9]{3}$/.test(String(code||'')))
+      w.push('安全码必须是三位 ASCII 数字（不是全角、不是字母）');
+    return w;
+  },
+
+  /* ---------------- 请求日志 ----------------
+     出问题时用户只需要把这块复制过来，不用猜「身份验证失败」是哪一步。 */
+  logClear(){ this.logLines=[]; this.logRender(); },
+  log(line){
+    this.logLines=this.logLines||[];
+    const t=new Date().toTimeString().slice(0,8);
+    this.logLines.push('['+t+'] '+line);
+    if(this.logLines.length>60)this.logLines.shift();
+    this.logRender();
+  },
+  logRender(){
+    const el=document.getElementById('auraLog');
+    if(!el)return;
+    el.classList.add('on');
+    el.textContent=(this.logLines||[]).join('\n')||'';
+    el.scrollTop=el.scrollHeight;
+  },
+
+  /* 把 HTTP 错误翻译成人话：状态码比 error 文本可靠（协议 7 节） */
+  errText(e,what,mode){
+    const st=e&&e.status, code=(e&&e.code)||'';
+    const raw=(e&&e.message)||'';
+    if(!st)return what+'：连不上 Hub（'+raw+'）';
+    if(st===401){
+      /* 401 在不同步骤含义不同，混着说就会误导（协议 7.2） */
+      if(mode==='login')return what+'：安全码不对，或这条临时凭据已经用过（每次登录都会重新领）';
+      if(mode==='device')return what+'：设备凭据失效 —— 换过机或被重新核验过，点「重新核验」';
+      return what+'：860 账号或密码不对（服务端验证 860 身份失败）';
+    }
+    if(st===503)return what+'：Hub 没有配置 860 验证器（服务端问题，不是你的账号）';
+    if(st===409)return what+'：该账号已经注册过'+(/reverify/i.test(raw)?'，需要重新核验':'')+' —— 设备丢了请点「重新核验」';
+    if(st===400)return what+'：字段不合法（'+raw+'）';
+    if(st===403)return what+'：账号被禁用或不允许该操作（'+raw+'）';
+    return what+'：'+raw+(code?' ['+code+']':'')+'（HTTP '+st+'）';
+  },
+
+  /* 把翻译后的文案连同一个 status 一起抛出去（调用方/测试要看状态码） */
+  wrapErr(e,msg){
+    const err=new Error(msg);
+    err.status=e&&e.status; err.code=e&&e.code; err.body=e&&e.body;
+    return err;
+  },
+
   /* ---------------- REST ---------------- */
   apiBase(){ return this.hub.replace(/\/+$/,''); },
   /* 原生 HTTP 桥（App 内才有）。见 MainActivity.Bridge.auraHttp。
@@ -23582,9 +23647,13 @@ const AURA = {
     const bodyText=body===undefined?undefined:JSON.stringify(body);
 
     let status=0, text='';
+    const t0=Date.now();
     if(this.hasNativeHttp()){
       const r=await this.nativeReq(method,base+path,headers,bodyText);
-      if(r.error)throw new Error('连不上 Hub：'+r.error);
+      if(r.error){
+        this.log(method+' '+path+'  ✗ '+r.error);
+        throw new Error('连不上 Hub：'+r.error);
+      }
       status=r.status; text=r.body||'';
     }else{
       const ctl=(typeof AbortController!=='undefined')?new AbortController():null;
@@ -23595,11 +23664,14 @@ const AURA = {
           signal:ctl?ctl.signal:undefined});
       }catch(e){
         if(timer)clearTimeout(timer);
+        this.log(method+' '+path+'  ✗ '+(e&&e.message||e));
         throw new Error('连不上 Hub：'+(e&&e.message||e));
       }
       if(timer)clearTimeout(timer);
       status=res.status; text=await res.text();
     }
+    this.log(method+' '+path+'  '+status+'  '+(Date.now()-t0)+'ms'
+      +(text?('  '+String(text).slice(0,240)):''));
 
     let data=null;
     if(text){ try{ data=JSON.parse(text); }catch(e){ data={raw:text}; } }
@@ -23607,7 +23679,8 @@ const AURA = {
       const code=(data&&data.error_code)||'';
       const msg=(data&&(data.error||data.message))||('HTTP '+status);
       const err=new Error(msg);
-      err.status=status; err.code=code;
+      err.status=status; err.code=code; err.body=text;
+      this.log('  ↳ '+status+(code?(' '+code):'')+' '+String(msg).slice(0,160));
       throw err;
     }
     return data||{};
@@ -23680,9 +23753,17 @@ const AURA = {
 
   /* 注册（或带 reverify 重新核验）→ enrollment_token */
   async register(loginId,password,code,reverify){
-    const body={login_id:String(loginId||''), password:String(password||''), security_code:String(code||'')};
+    const body={login_id:this.normId(loginId), password:this.normPwd(password),
+                security_code:this.normCode(code)};
     if(reverify)body.reverify=true;
-    return this.api('/api/auth/register',body,{noAuth:true});
+    this.log('注册 login_id='+JSON.stringify(body.login_id)
+      +' 密码长度='+body.password.length+' 安全码='+body.security_code
+      +(reverify?'（reverify）':''));
+    try{
+      return await this.api('/api/auth/register',body,{noAuth:true});
+    }catch(e){
+      throw this.wrapErr(e,this.errText(e,'注册失败','register'));
+    }
   },
   /* 用一次性令牌换 device_credential */
   async bindDevice(enrollToken){
@@ -23696,10 +23777,16 @@ const AURA = {
      失败后必须重新领 —— 同一个 temporary_key 只允许一次尝试（协议 4.2）。 */
   async login(code){
     if(!this.device)throw new Error('设备未绑定，请先注册或重新核验');
-    const k=await this.api('/api/auth/issue-ptt-key',{device_credential:this.device},{noAuth:true});
+    const c=this.normCode(code);
+    this.log('登录 安全码='+c);
+    let k;
+    try{ k=await this.api('/api/auth/issue-ptt-key',{device_credential:this.device},{noAuth:true}); }
+    catch(e){ throw this.wrapErr(e,this.errText(e,'领临时凭据失败','device')); }
     const key=String(k.temporary_key||'');
     if(!key)throw new Error('Hub 没有下发临时凭据');
-    const r=await this.api('/api/auth/login',{temporary_key:key,security_code:String(code||'')},{noAuth:true});
+    let r;
+    try{ r=await this.api('/api/auth/login',{temporary_key:key,security_code:c},{noAuth:true}); }
+    catch(e){ throw this.wrapErr(e,this.errText(e,'登录失败','login')); }
     if(!r.token)throw new Error('Hub 没有返回会话令牌');
     this.saveSession(String(r.token),Number(r.expires_at)||0,String(r.uid||''),String(r.callsign||''));
     return r;
@@ -24270,9 +24357,11 @@ function auraPttUp(){
   $('#auraBtnReg').addEventListener('click',async()=>{
     const h=readHub(); if(!h)return;
     const c=readCode(); if(!c)return;
-    const uid=String(user.value||'').trim(), pwd=String(pass.value||'');
+    const uid=AURA.normId(user.value), pwd=String(pass.value||'');
     if(!uid||!pwd){ toast('注册要填 860 账号和密码'); return; }
+    AURA.inputWarnings(uid,pwd,c).forEach(w=>AURA.log('⚠ '+w));
     busy(true);
+    AURA.logClear();
     try{
       const r=await AURA.register(uid,pwd,c,false);
       if(r.enrollment_token)await AURA.bindDevice(r.enrollment_token);
@@ -24301,6 +24390,28 @@ function auraPttUp(){
       renderAll();
     }catch(e){
       toast('登录失败：'+(e&&e.message||e));
+    }finally{ busy(false); auraRenderSet(); }
+  });
+
+  /* 重新核验：账号已注册、但设备凭据丢了（换机/清数据）时用。
+     协议 3.3 —— 只有用户明确发起恢复才带 reverify，所以这里是显式按钮 + 二次确认。 */
+  $('#auraBtnReverify').addEventListener('click',async()=>{
+    const h=readHub(); if(!h)return;
+    const c=readCode(); if(!c)return;
+    const uid=AURA.normId(user.value), pwd=String(pass.value||'');
+    if(!uid||!pwd){ toast('重新核验要填 860 账号和密码'); return; }
+    if(!confirm('重新核验会撤销这个账号原来的设备凭据和所有会话。\n'
+      +'本机将作为新设备重新绑定，其它已登录的设备会被踢下线。\n\n继续？'))return;
+    busy(true); AURA.logClear();
+    try{
+      const r=await AURA.register(uid,pwd,c,true);
+      if(r.enrollment_token)await AURA.bindDevice(r.enrollment_token);
+      pass.value=''; code.value='';
+      await AURA.login(c);
+      toast('已重新核验并登录'+(AURA.callsign?' · '+AURA.callsign:''));
+      await AURA.ensure(); renderAll();
+    }catch(e){
+      toast(e&&e.message||String(e));
     }finally{ busy(false); auraRenderSet(); }
   });
 
