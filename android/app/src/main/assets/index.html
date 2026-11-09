@@ -24554,7 +24554,7 @@ const Update = {
     if(document.getElementById('updateModal'))return;
     const sizeMb=((v.size||0)/1024/1024).toFixed(1);
     const isForce=!!v.force;
-    const url=this.server+'/?action=download&ver='+encodeURIComponent(v.version);
+    const url=this.server+'/'+(v.download||('?action=download&ver='+encodeURIComponent(v.version)));
     const wrap=document.createElement('div');
     wrap.id='updateModal';
     wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;animation:updFadeIn .2s';
