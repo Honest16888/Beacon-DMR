@@ -1,4 +1,9 @@
 <?php
+// 提高上传限制（部分主机支持 ini_set）
+@ini_set('upload_max_filesize', '200M');
+@ini_set('post_max_size', '200M');
+@ini_set('memory_limit', '256M');
+
 /**
  * Beacon-DMR 更新推送系统（PHP 版）
  *
@@ -155,7 +160,24 @@ if ($action === 'upload' && $_SERVER['REQUEST_METHOD'] === 'POST') {
     if (empty($_FILES['apk'])) json_response(['error' => '没有收到文件'], 400);
 
     $file = $_FILES['apk'];
-    if ($file['error'] !== UPLOAD_ERR_OK) json_response(['error' => '上传失败: ' . $file['error']], 500);
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        $errors = [
+            UPLOAD_ERR_INI_SIZE => '文件超过服务器限制（php.ini upload_max_filesize）',
+            UPLOAD_ERR_FORM_SIZE => '文件超过表单限制',
+            UPLOAD_ERR_PARTIAL => '文件只上传了一部分',
+            UPLOAD_ERR_NO_FILE => '没有收到文件',
+            UPLOAD_ERR_NO_TMP_DIR => '服务器临时目录缺失',
+            UPLOAD_ERR_CANT_WRITE => '服务器写入失败',
+            UPLOAD_ERR_EXTENSION => 'PHP 扩展阻止了上传',
+        ];
+        $msg = $errors[$file['error']] ?? ('上传失败 (错误码 ' . $file['error'] . ')');
+        json_response(['error' => $msg . ' | 文件: ' . $file['name'] . ' (' . round($file['size']/1024/1024, 1) . ' MB)'], 500);
+    }
+
+    // 检查文件大小
+    if ($file['size'] > 200 * 1024 * 1024) {
+        json_response(['error' => '文件超过 200MB 限制'], 400);
+    }
 
     $fname = basename($file['name']);
     if (!str_ends_with($fname, '.apk')) json_response(['error' => '只支持 .apk 文件'], 400);
