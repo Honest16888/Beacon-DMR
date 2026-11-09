@@ -174,22 +174,39 @@ ok('置 deviceDead 标记', dead.dead === true, dead);
 ok('「我的收听」给出重新核验的出口', dead.hint === true, dead);
 ok('重新核验成功后标记清除', dead.back === true, dead);
 
-console.log('\n=== 1d. 账号自检（把认证链一步走完并报错）===');
+console.log('\n=== 1d. 账号自检（非破坏性 + 含 WebSocket）===');
 const self = await ev(`
+  const devBefore=AURA.device;
   const r=await AURA.selfTest(${JSON.stringify(ACC)},'pass1234','318');
-  return {steps:r.steps.map(x=>x.k+' = '+x.v+' ['+(x.s||'-')+']'), bad:r.steps.filter(x=>x.s==='bad').length};
+  return {steps:r.steps.map(x=>x.k+' = '+x.v+' ['+(x.s||'-')+']'),
+          bad:r.steps.filter(x=>x.s==='bad').length,
+          devUnchanged: AURA.device===devBefore,
+          ws: r.steps.some(x=>x.k==='⑥ WebSocket')};
 `);
-ok('自检五步全过（核验/绑定/领凭据/登录/频道）',
-  self.bad === 0 && self.steps.length >= 5, self);
+ok('自检六步（核验→绑定→凭据→登录→频道→WebSocket）没有失败项',
+  self.bad === 0 && self.steps.length >= 6, self);
+ok('有凭据时跳过重新核验（自检不再顶掉别的设备）', self.devUnchanged === true, self);
+ok('自检包含 ⑥ WebSocket 一行且通过',
+  self.ws === true && /⑥ WebSocket/.test(self.steps.join(' ')), self);
 ok('自检输出里带设备凭据与频道数',
   /device_credential/.test(self.steps.join(' ')) && /个端点/.test(self.steps.join(' ')), self);
 
 const selfBad = await ev(`
+  /* 凭据坏掉 → ③ 领临时凭据必须红（401），并且不会自动核验修好 */
+  const good=AURA.device;
   AURA.device='dev_broken_credential';
   const r=await AURA.selfTest(${JSON.stringify(ACC)},'pass1234','318');
-  /* 自检会重新核验并把设备修好，这里只验证它记录了「本机凭据」那一行 */
-  return {first:r.steps[1] && r.steps[1].v, bad:r.steps.filter(x=>x.s==='bad').length};
-`);
+  const out={bad:r.steps.filter(x=>x.s==='bad').length,
+             has401:r.steps.some(x=>x.s==='bad'&&/401|凭据/.test(x.v)),
+             first:r.steps[1]&&r.steps[1].v,
+             deviceStillBroken:AURA.device==='dev_broken_credential'};
+  /* 恢复现场：后面的用例还要用真实凭据（自检不再自己修复了） */
+  AURA.device=good;
+  if(!AURA.tokenValid())await AURA.login('318');
+  return out;`);
+ok('凭据坏掉时自检在 ③ 报红（401）', selfBad.bad >= 1 && selfBad.has401 === true, selfBad);
+ok('凭据坏掉时不会悄悄重新核验（非破坏）',
+  selfBad.deviceStillBroken === true, selfBad);
 ok('自检能报告本机凭据状态', /device_credential|没有/.test(String(selfBad.first) || ''), selfBad);
 
 console.log('\n=== 2. 频道发现 ===');
