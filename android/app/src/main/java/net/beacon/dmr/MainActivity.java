@@ -32,6 +32,13 @@ import java.io.IOException;
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.net.HttpURLConnection;
+import javax.net.ssl.HostnameVerifier;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSession;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+import java.security.cert.X509Certificate;
 import java.net.URL;
 import java.util.Iterator;
 import java.io.OutputStream;
@@ -441,6 +448,23 @@ public class MainActivity extends Activity {
                 HttpURLConnection c = null;
                 try {
                     c = (HttpURLConnection) new URL(url).openConnection();
+                    // 信任自签证书（FRP 隧道的自动 HTTPS）
+                    if (c instanceof HttpsURLConnection) {
+                        HttpsURLConnection hc = (HttpsURLConnection) c;
+                        TrustManager[] trustAll = new TrustManager[]{new X509TrustManager() {
+                            public X509Certificate[] getAcceptedIssuers() { return new X509Certificate[0]; }
+                            public void checkClientTrusted(X509Certificate[] certs, String authType) {}
+                            public void checkServerTrusted(X509Certificate[] certs, String authType) {}
+                        }};
+                        try {
+                            SSLContext sc = SSLContext.getInstance("TLS");
+                            sc.init(null, trustAll, new java.security.SecureRandom());
+                            hc.setSSLSocketFactory(sc.getSocketFactory());
+                        } catch (Exception ignored) {}
+                        hc.setHostnameVerifier(new HostnameVerifier() {
+                            public boolean verify(String hostname, SSLSession session) { return true; }
+                        });
+                    }
                     c.setRequestMethod(method == null ? "GET" : method);
                     c.setConnectTimeout(15000);
                     c.setReadTimeout(25000);
