@@ -425,6 +425,15 @@ public class MainActivity extends Activity {
          * 原样带回页面；网络操作不在主线程。
          */
         @JavascriptInterface
+        public String getVersion() {
+            try {
+                return getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+            } catch (Exception e) {
+                return "0.0.0";
+            }
+        }
+
+        @JavascriptInterface
         public void auraHttp(final String reqId, final String method, final String url,
                              final String headersJson, final String bodyJson) {
             new Thread(() -> {

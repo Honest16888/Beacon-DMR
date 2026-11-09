@@ -24437,6 +24437,16 @@ const AURA = {
 /* 原生 HTTP 的异步回调：MainActivity 发完请求后调 window.onAuraHttp(id,json) */
 const _auraPending=new Map();
 window.onAuraHttp=function(id,json){
+  /* 更新检查的回调分发 */
+  if(window.__updateCbMap && window.__updateCbMap[id]){
+    const resolve = window.__updateCbMap[id];
+    delete window.__updateCbMap[id];
+    try{
+      const d = typeof json === 'string' ? JSON.parse(json) : json;
+      if(d && d.ok !== false) resolve(d); else resolve(null);
+    }catch(e){ resolve(null); }
+    return;
+  }
   const cb=_auraPending.get(id); if(!cb)return;
   let o; try{ o=JSON.parse(json); }catch(e){ o={status:0,body:'',error:'回调解析失败'}; }
   _auraPending.delete(id);
@@ -24497,17 +24507,36 @@ const Update = {
   },
 
   /* 当前版本 —— 和 AndroidManifest 的 versionName 保持一致 */
-  current(){ return '2.10.15'; },
+  current(){
+    // 优先从 Android 读真实版本号，fallback 到硬编码
+    try{
+      if(typeof Android!=='undefined' && Android.getVersion){
+        return Android.getVersion() || '2.10.17';
+      }
+    }catch(e){}
+    return '2.10.17';
+  },
 
   /** 检查更新，返回 {has_update, info} 或 null（未配置/网络错误） */
   async check(){
     if(!this.server)return null;
-    try{
-      const r = await fetch(this.server+'/?action=version&current='+encodeURIComponent(this.current()),
-        {headers:{'Accept':'application/json'}});
-      if(!r.ok)return null;
-      return await r.json();
-    }catch(e){ return null; }
+    // 用原生 HTTP 桥（可以信任自签证书），fetch() 会拒绝
+    const url = this.server+'/?action=version&current='+encodeURIComponent(this.current());
+    return new Promise((resolve)=>{
+      const reqId = 'upd-'+Date.now();
+      window.__updateCbMap = window.__updateCbMap || {};
+      window.__updateCbMap[reqId] = resolve;
+      if(typeof Android!=='undefined' && Android.auraHttp){
+        // auraHttp(reqId, method, url, headers, body)
+        Android.auraHttp(reqId, 'GET', url, '{}', '');
+      }else{
+        // 网页版 fallback 到 fetch
+        fetch(url, {headers:{'Accept':'application/json'}})
+          .then(r=>r.ok?r.json():null)
+          .then(d=>{ resolve(d); })
+          .catch(()=>{ resolve(null); });
+      }
+    });
   },
 
   /** 检查更新并弹窗提示（启动时调用） */
