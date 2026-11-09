@@ -1969,6 +1969,7 @@ body.dragging .dghint{display:block}
           <button class="btn sm" id="auraBtnReg">注册</button>
           <button class="btn sm pri" id="auraBtnLogin">登录</button>
           <button class="btn sm" id="auraBtnLogout">注销</button>
+          <button class="btn sm danger" id="auraBtnRelease">释放设备</button>
           <button class="btn sm" id="auraBtnReverify">重新核验</button>
           <button class="btn sm" id="auraBtnTest">测试连接</button>
         </div>
@@ -1979,6 +1980,9 @@ body.dragging .dghint{display:block}
         AURA 是<b>第三条链路</b>，和 BM / 国内 DMR 并列：认证走 Hub 的 REST，
         语音走 <code>/ws/ptt</code> 的二进制帧（PCM 8 kHz），不经过 MMDVM、不需要声码器。
         <br>设备凭据保存在本机（WebView 私有目录），安全码与 860 密码<b>不保存</b>。
+        <br><b>⚠ 一个账号一份设备凭据</b>（据实测）：在这台注册/核验之后，别的设备
+        上的 App 会提示登录失败，需要在那边<b>重新核验</b>才能把绑定抢回去；反过来也一样。
+        要换回原 App，点上面的<b>「释放设备」</b>，再去那边重新核验。
       </div>
     </div>
 
@@ -23806,6 +23810,22 @@ const AURA = {
     this.saveSession(String(r.token),Number(r.expires_at)||0,String(r.uid||''),String(r.callsign||''));
     return r;
   },
+  /* 释放本机设备绑定。
+     ★ 协议没有 unbind 接口，所以这只是「把本机凭据删干净」；服务端那条记录还在，
+       另一台设备要拿回绑定必须走「重新核验」（register + reverify），
+       而那一步会把旧设备凭据（也就是本机这份）作废 —— 两边只能轮流占。 */
+  async releaseDevice(){
+    const r={logout:false, cleared:false};
+    try{ if(this.token){ await this.api('/api/auth/logout',{}); r.logout=true; } }catch(e){}
+    this.clearSession();
+    this.device='';
+    try{ store.set('auraDevice',''); r.cleared=true; }catch(e){}
+    this.wsClose(); this.talkOff(); this.micStop();
+    this.holdOff=true; this.pendingEnd=null; this.wsTries=0;
+    this.log('已释放本机设备绑定（device_credential 已清除）');
+    renderAll();
+    return r;
+  },
   async logout(){
     try{ if(this.token)await this.api('/api/auth/logout',{}); }catch(e){ /* 已失效也算注销成功 */ }
     this.clearSession(); this.wsClose(); this.talkOff(); this.micStop();
@@ -24029,6 +24049,14 @@ const AURA = {
   onText(s){
     let m; try{ m=JSON.parse(s); }catch(e){ return; }
     const t=m.type||m.cmd;
+    /* talker 太频繁（每次开口/闭口一条），其余都记 —— 排障时这几行最有用 */
+    if(t&&t!=='talker'){
+      this.log('WS ← '+t
+        +(m.callsign?(' '+m.callsign):'')
+        +(m.tg!=null?(' TG'+m.tg):'')
+        +(m.code?(' ['+m.code+']'):'')
+        +(m.message?(' '+m.message):''));
+    }
     switch(t){
       case 'welcome':
         if(m.uid)this.uid=String(m.uid);
@@ -24630,6 +24658,21 @@ function auraPttUp(){
         '<span class="'+(x.s||'')+'">'+esc(x.k)+'</span>  '+esc(x.v)).join('\n');
     }
     toast(r.ok?'连接正常':'有问题，看下面那几行');
+  });
+
+  /* 释放设备：清掉本机的 device_credential。
+     换回原 App 时如果那边提示「设备失效 / 登录失败」，就点这个，再去原 App
+     重新核验一次（它会把绑定抢回去）。 */
+  $('#auraBtnRelease').addEventListener('click',async()=>{
+    if(!confirm('这会删掉本机的设备凭据（device_credential）与会话。\n\n'
+      +'AURA 看起来是「一个账号一份设备凭据」：本机释放之后，原 App 需要重新\n'
+      +'核验/注册一次才能把账号绑回去；那一步之后本机也要重新注册。\n\n继续？'))return;
+    busy(true);
+    try{
+      const r=await AURA.releaseDevice();
+      toast(r.cleared?'已释放本机设备绑定 —— 去原 App 重新核验一次':'已清除会话');
+      auraRenderSet();
+    }finally{ busy(false); }
   });
 
   $('#auraBtnLogout').addEventListener('click',async()=>{

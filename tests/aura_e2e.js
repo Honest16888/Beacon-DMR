@@ -303,6 +303,21 @@ ok('重连有上限（到顶就停手）', sess.capped.hold === true, sess);
 ok('unauthorized 后停手并清掉会话',
   sess.unauth.hold === true && !sess.unauth.tok, sess);
 
+console.log('\n=== 4f. 释放设备（换回原 App 的唯一干净做法）===');
+const rel = await ev(`
+  const before={tok:AURA.tokenValid(), dev:!!AURA.device};
+  const r=await AURA.releaseDevice();
+  const after={tok:AURA.tokenValid(), dev:AURA.device, ls:String(localStorage.getItem('dmr.auraDevice')||'')};
+  /* 释放之后要能重新走核验把绑定拿回来（协议 3.3） */
+  const again=await AURA.register(${JSON.stringify(ACC)},'pass1234','318',true);
+  await AURA.bindDevice(again.enrollment_token);
+  await AURA.login('318');
+  return {before, after, r, back:{dev:!!AURA.device, tok:AURA.tokenValid()}};`);
+ok('释放前有 token 且已绑定', rel.before.tok === true && rel.before.dev === true, rel);
+ok('释放后会话与 device_credential 都清掉',
+  rel.after.tok === false && rel.after.dev === '' && (rel.after.ls === '' || rel.after.ls === '""'), rel);
+ok('释放后可重新核验并绑回来', rel.back.dev === true && rel.back.tok === true, rel);
+
 console.log('\n=== 4b. 连接诊断 + 原生 HTTP 桥 ===');
 const diag = await ev(`
   const r = await AURA.testConn();
