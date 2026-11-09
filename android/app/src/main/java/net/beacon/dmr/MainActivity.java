@@ -162,6 +162,15 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(code, perms, granted);
         if (code != REQ_MIC) return;
         boolean ok = granted.length > 0 && granted[0] == PackageManager.PERMISSION_GRANTED;
+        /* 挂了半截的 getUserMedia 请求在这里收尾 */
+        PermissionRequest pr = pendingMicReq;
+        pendingMicReq = null;
+        if (pr != null) {
+            try {
+                if (ok) pr.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE});
+                else pr.deny();
+            } catch (Throwable ignored) { }
+        }
         if (web != null) {
             web.evaluateJavascript(
                     "window.onMicPermission&&window.onMicPermission(" + (ok ? "true" : "false") + ");",
@@ -245,11 +254,15 @@ public class MainActivity extends Activity {
                 try { request.deny(); } catch (Throwable ignored) { }
                 return;
             }
-            /* 运行时权限没给的话先要系统权限；给了再 grant，否则 grant 了也采不到音 */
+            /* ★ 必须先有系统权限再 grant。以前这两步同时做，系统权限还没批就 grant，
+               getUserMedia 照样 NotAllowedError —— 表现就是「麦克风打不开」。
+               现在把这次请求存着，等 onRequestPermissionsResult 再决定 grant/deny。 */
             if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                     != PackageManager.PERMISSION_GRANTED) {
+                pendingMicReq = request;
                 runOnUiThread(() -> requestPermissions(
                         new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC));
+                return;
             }
             try { request.grant(new String[]{PermissionRequest.RESOURCE_AUDIO_CAPTURE}); }
             catch (Throwable ignored) { }
@@ -258,6 +271,10 @@ public class MainActivity extends Activity {
 
     /* AURA 的原生 WebSocket。见 Bridge.auraWsOpen 的注释。 */
     private AuraWs auraWs;
+    /** 挂在 onPermissionRequest 上、等系统权限结果的那次请求 */
+    private PermissionRequest pendingMicReq;
+    /** AURA 的原生麦克风采集 */
+    private AuraMic auraMic;
 
     private void auraEmitWs(String kind, String data) {
         JSONObject o = new JSONObject();
@@ -491,6 +508,40 @@ public class MainActivity extends Activity {
             if (c == null) return;
             try { c.send(Base64.decode(b64, Base64.NO_WRAP)); }
             catch (Exception e) { auraEmitWs("err", "发送失败：" + e); }
+        }
+
+        /**
+         * AURA 发射用的麦克风：原生 AudioRecord，8 kHz / s16le / 单声道，
+         * 按 160 ms 一块 base64 回传（window.onAuraMic）。
+         *
+         * 不用 getUserMedia 的原因见 AuraMic 的类注释：WebView 两层权限任何一层
+         * 没跟上就只报 NotAllowedError，而且部分版本根本不支持。
+         */
+        @JavascriptInterface
+        public boolean auraMicStart() {
+            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) {
+                runOnUiThread(() -> requestPermissions(
+                        new String[]{android.Manifest.permission.RECORD_AUDIO}, REQ_MIC));
+                return false;
+            }
+            if (auraMic == null) auraMic = new AuraMic();
+            return auraMic.start(new AuraMic.Sink() {
+                @Override public void onChunk(String b64) {
+                    final String js = "window.onAuraMic&&window.onAuraMic("
+                            + JSONObject.quote(b64) + ");";
+                    runOnUiThread(() -> {
+                        if (web != null) web.evaluateJavascript(js, null);
+                    });
+                }
+                @Override public void onError(String msg) { auraEmitWs("err", "麦克风：" + msg); }
+            });
+        }
+
+        @JavascriptInterface
+        public void auraMicStop() {
+            AuraMic m = auraMic;
+            if (m != null) m.stop();
         }
 
         @JavascriptInterface

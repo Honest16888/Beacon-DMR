@@ -24087,12 +24087,69 @@ const AURA = {
      8 kHz 单声道 s16le，每帧 2048 样本（256 ms / 4096 字节，低于 6400 上限）。
      用 ScriptProcessor 而不是 AudioWorklet：这个页面在 WebView 里跑，
      worklet 的模块加载要 data URL，音频上行不值得再引一套。 */
+  hasNativeMic(){ return !!(window.Android&&typeof Android.auraMicStart==='function'); },
+
+  /* 系统麦克风权限：App 内先确认拿到了再去开采集。
+     WebView 的 getUserMedia 和原生 AudioRecord 都要这一层，只是报错方式不同。 */
+  ensureMicPerm(){
+    return new Promise(res=>{
+      if(!(window.Android&&typeof Android.hasMicPermission==='function'))return res(true);
+      let ok=false;
+      try{ ok=!!Android.hasMicPermission(); }catch(e){}
+      if(ok)return res(true);
+      let done=false;
+      const prev=window.onMicPermission;
+      const fin=v=>{
+        if(done)return;
+        done=true;
+        window.onMicPermission=prev;
+        res(!!v);
+      };
+      window.onMicPermission=function(v){
+        if(prev){ try{ prev(v); }catch(e){} }
+        fin(v);
+      };
+      try{ Android.requestMicPermission(); }
+      catch(e){ fin(false); return; }
+      setTimeout(()=>fin(false), 20000);
+    });
+  },
+
   async micStart(){
-    if(this.micStream)return true;
-    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
-      toast('这个环境不支持麦克风采集');
+    if(this.micStream||this.nativeMic)return true;
+
+    const perm=await this.ensureMicPerm();
+    if(!perm){
+      toast('麦克风权限被拒绝 —— 到系统设置里给 BeaconDMR 打开「麦克风」，再按一次 PTT');
+      this.log('麦克风权限被拒绝');
       return false;
     }
+
+    /* App 内优先原生：不依赖 WebView 的 getUserMedia 支持，也不需要重采样 */
+    if(this.hasNativeMic())return this.micStartNative();
+
+    if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+      toast('这个环境不支持麦克风采集（网页版需要 https 且浏览器支持 getUserMedia）');
+      return false;
+    }
+    return this.micStartWeb();
+  },
+
+  micStartNative(){
+    let ok=false;
+    try{ ok=Android.auraMicStart(); }
+    catch(e){ this.log('原生麦克风启动异常：'+e); }
+    if(!ok){
+      /* 第一次调用会顺带申请权限并返回 false：不是失败，是「还没批」 */
+      toast('正在申请麦克风权限，批准后再按一次 PTT');
+      return false;
+    }
+    this.nativeMic=true;
+    this.log('麦克风：原生 AudioRecord 8 kHz');
+    return true;
+  },
+
+  async micStartWeb(){
     let st;
     try{
       st=await navigator.mediaDevices.getUserMedia({
@@ -24100,10 +24157,18 @@ const AURA = {
         video:false
       });
     }catch(e){
-      toast('麦克风打不开：'+(e&&e.name||e));
+      const name=(e&&e.name)||'';
+      const why = name==='NotAllowedError' ? '系统没给麦克风权限'
+        : name==='NotFoundError' ? '这台设备上没找到麦克风'
+        : name==='NotReadableError' ? '麦克风被别的程序占着（比如正在通联的 MMDVM）'
+        : name==='AbortError' ? '采集被系统中断'
+        : (e&&e.message||String(e));
+      toast('麦克风打不开：'+why);
+      this.log('getUserMedia 失败：'+name+' '+why);
       return false;
     }
     this.micStream=st;
+    this.log('麦克风：getUserMedia');
     const AC=window.AudioContext||window.webkitAudioContext;
     let ctx;
     try{ ctx=new AC({sampleRate:8000}); }
@@ -24136,6 +24201,10 @@ const AURA = {
     return true;
   },
   micStop(){
+    if(this.nativeMic){
+      try{ Android.auraMicStop(); }catch(e){}
+      this.nativeMic=false;
+    }
     if(this.micNode){ try{ this.micNode.disconnect(); }catch(e){} this.micNode.onaudioprocess=null; this.micNode=null; }
     if(this.micSink){ try{ this.micSink.disconnect(); }catch(e){} this.micSink=null; }
     if(this.micCtx){ try{ this.micCtx.close(); }catch(e){} this.micCtx=null; }
@@ -24172,6 +24241,18 @@ window.onAuraHttp=function(id,json){
   let o; try{ o=JSON.parse(json); }catch(e){ o={status:0,body:'',error:'回调解析失败'}; }
   _auraPending.delete(id);
   cb(o);
+};
+
+/* 原生麦克风的 PCM（MainActivity → 页面）：补上 0x01 标签再发 */
+window.onAuraMic=function(b64){
+  if(!AURA.nativeMic||!AURA.talkOn)return;
+  try{
+    const s=atob(b64), n=s.length;
+    const u8=new Uint8Array(1+n);
+    u8[0]=0x01;
+    for(let i=0;i<n;i++)u8[1+i]=s.charCodeAt(i);
+    AURA.wsSendBin(u8);
+  }catch(e){}
 };
 
 /* 原生 WebSocket 的事件回调（MainActivity → 页面） */

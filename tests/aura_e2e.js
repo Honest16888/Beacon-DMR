@@ -229,6 +229,44 @@ const rowJoin = await ev(`
 ok('点整行即加入（不是只有那颗 ▶）',
   rowJoin.hasRow === true && rowJoin.cur === 460, rowJoin);
 
+console.log('\n=== 4d. 麦克风：App 内优先原生 / 权限被拒 ===');
+const micNative = await ev(`
+  const sent=[];
+  window.Android = {
+    hasMicPermission(){ return true; },
+    requestMicPermission(){ window.onMicPermission(true); },
+    auraMicStart(){ window.__micOn=true; return true; },
+    auraMicStop(){ window.__micOn=false; },
+    auraWsSendBin(b64){ sent.push(b64.length); },
+    auraWsOpen(){ }, auraWsSendText(){ }, auraWsClose(){ },
+  };
+  AURA.nativeWs=true; AURA.wsOpen=true;
+  const ok=await AURA.micStart();
+  AURA.talkOn=true;
+  const pcm=new Uint8Array(1+2560); pcm[0]=1;
+  window.onAuraMic(btoa(String.fromCharCode.apply(null,pcm)));
+  await new Promise(r=>setTimeout(r,60));
+  const out={ok, native:AURA.nativeMic===true, started:window.__micOn===true, sent:sent.length};
+  AURA.talkOn=false; AURA.micStop(); AURA.nativeWs=false;
+  delete window.Android;
+  return out;`);
+ok('App 内优先用原生麦克风', micNative.ok === true && micNative.native === true, micNative);
+ok('原生 PCM 被装进 WS 二进制帧', micNative.sent >= 1, micNative);
+
+const micDenied = await ev(`
+  window.Android = {
+    hasMicPermission(){ return false; },
+    requestMicPermission(){ window.onMicPermission(false); },
+    auraMicStart(){ return true; }, auraMicStop(){ },
+    auraWsSendBin(){ }, auraWsOpen(){ }, auraWsSendText(){ }, auraWsClose(){ },
+  };
+  const ok=await AURA.micStart();
+  const out={ok, native:AURA.nativeMic===true};
+  delete window.Android;
+  return out;`);
+ok('权限被拒时不开采集（并提示去系统设置）',
+  micDenied.ok === false && micDenied.native === false, micDenied);
+
 console.log('\n=== 4b. 连接诊断 + 原生 HTTP 桥 ===');
 const diag = await ev(`
   const r = await AURA.testConn();
