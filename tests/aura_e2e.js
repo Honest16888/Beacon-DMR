@@ -150,6 +150,30 @@ const reverify = await ev(`
 ok('重新核验拿到新的一次性令牌并能重新绑定',
   reverify.ok === true && reverify.dev === true && reverify.tok === true, reverify);
 
+console.log('\n=== 1c. 设备凭据失效 → 指引重新核验 ===');
+const dead = await ev(`
+  /* 把本地设备凭据改成一个假的，让 issue-ptt-key 必然 401 */
+  AURA.token=''; store.set('auraSession',null);
+  AURA.device='dev_this_is_not_valid';
+  let msg='', st=0;
+  try{ await AURA.login('318'); }
+  catch(e){ msg=e.message; st=e.status; }
+  const dead=AURA.deviceDead===true;
+  /* #mineList 只有在 aura 网络下才是 AURA 的列表 */
+  const keepNet=state.net; state.net='aura'; renderMine();
+  const mine=(document.getElementById('mineList')||{}).textContent||'';
+  state.net=keepNet; renderMine();
+  /* 收尾：重新核验把设备绑回来，后面的用例还要用 */
+  const r=await AURA.register(${JSON.stringify(ACC)},'pass1234','318',true);
+  await AURA.bindDevice(r.enrollment_token);
+  await AURA.login('318');
+  return {msg, st, dead, hint:/重新核验/.test(mine), back:AURA.deviceDead===false};`);
+ok('设备凭据失效时抛的是 401', dead.st === 401, dead);
+ok('错误文案指向「重新核验」', /重新核验|设备凭据/.test(dead.msg || ''), dead);
+ok('置 deviceDead 标记', dead.dead === true, dead);
+ok('「我的收听」给出重新核验的出口', dead.hint === true, dead);
+ok('重新核验成功后标记清除', dead.back === true, dead);
+
 console.log('\n=== 2. 频道发现 ===');
 const boot = await ev(`
   const ends = await AURA.bootstrap();

@@ -23802,13 +23802,21 @@ const AURA = {
     this.log('登录 安全码='+c);
     let k;
     try{ k=await this.api('/api/auth/issue-ptt-key',{device_credential:this.device},{noAuth:true}); }
-    catch(e){ throw this.wrapErr(e,this.errText(e,'领临时凭据失败','device')); }
+    catch(e){
+      if(e&&e.status===401){
+        /* 设备凭据被作废（换机 / 被别的设备重新核验过）。唯一解法是重新核验。 */
+        this.deviceDead=true;
+        try{ renderAll(); }catch(_){}
+      }
+      throw this.wrapErr(e,this.errText(e,'领临时凭据失败','device'));
+    }
     const key=String(k.temporary_key||'');
     if(!key)throw new Error('Hub 没有下发临时凭据');
     let r;
     try{ r=await this.api('/api/auth/login',{temporary_key:key,security_code:c},{noAuth:true}); }
     catch(e){ throw this.wrapErr(e,this.errText(e,'登录失败','login')); }
     if(!r.token)throw new Error('Hub 没有返回会话令牌');
+    this.deviceDead=false;
     this.saveSession(String(r.token),Number(r.expires_at)||0,String(r.uid||''),String(r.callsign||''));
     return r;
   },
@@ -24355,8 +24363,13 @@ function auraRenderMine(){
   $('#mineCount').textContent=subs.length;
   if(!state.net||state.net!=='aura')return;
   if(!AURA.loggedIn()){
-    list.innerHTML='<div class="empty"><b>AURA 还没登录</b>'
-      +'去「设置 → ☁️ AURA 云端对讲」填 Hub 地址和 860 账号，<br>登录后频道会出现在这里</div>';
+    list.innerHTML=AURA.deviceDead
+      ? ('<div class="empty"><b>设备凭据已失效</b>'
+         +'这台设备原来的设备凭据已经被作废（换过机，或在别的设备重新绑定过）。<br>'
+         +'去「设置 → ☁️ AURA 云端对讲」点<b>「重新核验」</b>，'
+         +'用 860 账号 + 密码 + 安全码重新绑定这台设备。</div>')
+      : ('<div class="empty"><b>AURA 还没登录</b>'
+         +'去「设置 → ☁️ AURA 云端对讲」填 Hub 地址和 860 账号，<br>登录后频道会出现在这里</div>');
     return;
   }
   if(!AURA.ends.length){
@@ -24465,7 +24478,8 @@ function auraRenderSet(){
   if(btnL)btnL.disabled=AURA.busy;
   const sess=$('#auraSessState');
   if(sess){
-    sess.textContent = !AURA.loggedIn() ? '未登录'
+    sess.textContent = AURA.deviceDead ? '设备凭据已失效 —— 需要重新核验'
+      : !AURA.loggedIn() ? '未登录'
       : AURA.wsOpen ? ('已连接'+(AURA.cur?(' · 已加入 '+(AURA.cur.name||AURA.cur.tg)):''))
       : (AURA.holdOff ? '已断开（不会自动重连）' : '未连接');
   }
