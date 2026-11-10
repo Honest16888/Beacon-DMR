@@ -715,8 +715,32 @@ footer .copy{font-size:12px;color:var(--dim)}
       <div class="faq-a">最低支持 Android 8.0（API 26）。建议 Android 10 以上以获得最佳体验。App 体积仅约 2.3 MB，对设备性能要求极低。</div>
     </div>
     <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
-      <div class="faq-q"><span>什么是 FMO 中继？湖北 FMO 是什么？</span><span class="faq-arrow">›</span></div>
-      <div class="faq-a">FMO（Frequency Modulation Operation）是一种数字业余无线电中继制式。湖北 FMO 中继已接入 OpenRF、RLlink、HT 三大链路，实现多协议互通。你可以通过 Beacon-DMR 或 OpenRF 客户端接入湖北 FMO 中继进行通联。</div>
+      <div class="faq-q"><span>什么是 FMO？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">FMO（NFM over Internet）是窄带调频互联网语音设备，由主板、屏蔽电源板、射频背板组成，USB-C 5V/2A 供电。FMO 不是传统中继台，而是<b>传播层节点</b>——优先级低、可被替代，建服是贡献。支持语音通联、APRS 报文、频谱保护等功能。<br>更多信息请访问 <a href="https://bg5esn.com/kb/" target="_blank" style="color:#60a5fa">BG5ESN 知识库</a></div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>FMO 如何激活（注册与审核）？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">首次使用需要：① 连接 WiFi ② 扫码注册 ③ 等待人工审核 ④ 审核通过后<b>长按旋钮</b>完成设备激活。激活时收集操作证号、呼号、姓名、联系方式与设备 ID。激活失败可参考错误码对照表（设备侧 0x1101~0x11FF 与服务端拒绝原因）。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>FMO 如何配网、切换服务器？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">通过配网页面连接/更换 WiFi。<b>旋转旋钮</b>切换服务器，短按进入快捷菜单查看服务器列表，收藏后可从收藏列表快速连接。界面服务器名称下方右侧的呼号是<b>服务器主管理员</b>，较大的服务器可能有协管理员。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>FMO 固件如何升级（OTA）？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">FMO 支持在线 OTA 与背板 OTA，内置<b>稳定、内测、金丝雀</b>三个升级通道。恢复出厂：菜单重置设备，或主界面同时按住菜单键+旋钮约 30 秒（固件 4.0.27+）。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>FMO 数字证书与隐私保护是什么？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">FMO 使用<b>信任链与数字证书</b>体系。私钥是呼号身份的数学化身，<b>绝对不要使用在线导出工具</b>提取私钥，泄露会被审计自动拉黑。转赠或出售前务必删除设备私钥。注销设备：升级到最新版后，通过配网页面「高危操作」删除日志与私钥。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>如何自建 FMO 语音服务器？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">自建服务器需要 <b>EMQX Broker + SAS 认证服务</b>，配置完成后你的服务器会自动出现在所有 FMO 的列表中。注意：管理员的 FMO 必须连着自己的服务器才会广播；活跃 24 小时后消失属正常机制。桥接第三方源与加入集群需自行承担风险。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>湖北 FMO 中继已接入哪些链路？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">湖北 FMO 中继已全面接入 <b>OpenRF</b>（开放无线电网络）、<b>RLlink</b>（语音链路）、<b>HT 链路</b>（手持台互通）三大链路，实现多协议互通、全网互联。你可以通过 Beacon-DMR 或 OpenRF 客户端接入湖北 FMO 中继进行通联。</div>
     </div>
     <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
       <div class="faq-q"><span>PTT 对讲怎么用？</span><span class="faq-arrow">›</span></div>
@@ -740,6 +764,11 @@ footer .copy{font-size:12px;color:var(--dim)}
       <div class="glossary-item"><b>热点</b><span>个人微型中继（Hotspot）</span></div>
       <div class="glossary-item"><b>个呼</b><span>Private Call，一对一私聊</span></div>
       <div class="glossary-item"><b>组呼</b><span>Group Call，一对多群呼</span></div>
+      <div class="glossary-item"><b>FMO</b><span>NFM over Internet，窄带调频互联网语音</span></div>
+      <div class="glossary-item"><b>CWO</b><span>CW over Internet，互联网 CW 通联</span></div>
+      <div class="glossary-item"><b>SAS</b><span>认证服务，FMO 服务器的身份验证</span></div>
+      <div class="glossary-item"><b>EMQX</b><span>MQTT Broker，FMO 服务器核心组件</span></div>
+      <div class="glossary-item"><b>AIRP</b><span>FMO 的语音数据协议</span></div>
     </div>
   </div>
 </section>
