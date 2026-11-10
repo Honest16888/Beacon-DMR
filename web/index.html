@@ -24255,8 +24255,21 @@ const AURA = {
           /* 会话失效：停音频、退出端点、清凭据，让用户重新登录 */
           this.talkOff(); this.clearSession(); this.wsClose();
           renderAll();
-        }else if(code==='forbidden'||code==='invalid_endpoint'||code==='ambiguous_tg'||code==='not_talking'){
-          this.talkOff();
+        }else if(code==='forbidden'){
+          /* 协议 6.5：ACL 撤销/无权限 → 停音频、退出端点、刷新频道状态；不登出 */
+          this.talkOff(); this.micStop();
+          if(this.cur)this.leave();
+          toast('无权限加入该端点 —— 可点「申请」按钮提交加入申请');
+          this.api('/api/ptt/bootstrap').then(()=>{ renderAll(); renderLive(true); }).catch(()=>{});
+        }else if(code==='invalid_endpoint'){
+          this.talkOff(); this.micStop(); if(this.cur)this.leave();
+          toast('端点参数无效，请重新选择');
+        }else if(code==='ambiguous_tg'){
+          this.talkOff(); toast('端点歧义：请重新选择频道');
+        }else if(code==='not_talking'){
+          /* 恢复有效 join 状态；用户仍按住 PTT 时才恢复发言 */
+          this.talkOn=false;
+          if(this.cur)this.join(this.cur);
         }
         break;
       }
@@ -24286,6 +24299,8 @@ const AURA = {
       if(v>=0x8000)v-=0x10000;
       f[i]=v/32768;
     }
+    Audio_.lastAt=Date.now();  /* AURA 不走 decode()，必须手动更新，否则自动解除静音永远不触发 */
+    Audio_.level=Audio_.level*0.65+Math.sqrt(f.reduce((a,x)=>a+x*x,0)/n)*0.35;
     try{ feedSpectrum(f); }catch(e){}
     Audio_.push(f);
   },
@@ -24540,6 +24555,8 @@ function auraRenderMine(){
       '<div class="acts">'+
         '<button class="mini'+(muted?' act':'')+'" data-act="mute" title="静音这个端点">'+(muted?'🔇':'🔊')+'</button>'+
         '<button class="mini'+(joined?' act':'')+'" data-act="auraJoin" title="'+(joined?'离开':'加入')+'">'+(joined?'⏏':'▶')+'</button>'+
+        '<button class="mini" data-act="auraApply" data-tg="'+id+'" title="提交加入申请（需管理员审核）">&#128203;</button>'+
+
         '<button class="mini danger" data-act="del" title="移出列表">✕</button>'+
       '</div></div>';
   }).join('');
@@ -27733,6 +27750,33 @@ document.addEventListener('click',e=>{
         else { const e=AURA.endByTg.get(id); if(e){ AURA.join(e); toast('正在加入 '+(e.name||id)); } }
         return;
       }
+      case 'auraApply': {
+        if(state.net!=='aura')return;
+        const tg=Number(b.dataset.tg||id);
+        const e=AURA.endByTg.get(tg);
+        if(!e){ toast('找不到端点'); return; }
+        if(!e.channelId){ toast('该端点无频道 ID，无法申请'); return; }
+        (async()=>{
+          try{
+            const r=await AURA.api('/api/ptt/channels/'+e.channelId+'/join',
+              {reason:'申请加入 '+e.name},{});
+            toast('加入申请已提交，等待管理员审核');
+            AURA.log('申请加入 channel='+e.channelId+' status='+(r.apply&&r.apply.status||''));
+          }catch(err){
+            const code=err&&err.code||'';
+            const msg=err&&err.message||String(err);
+            if(code==='already_member')toast('已是该频道成员，无需申请');
+            else if(code==='duplicate_request')toast('已有处理中的申请，请耐心等待');
+            else if(code==='blacklisted')toast('已被拉黑，无法加入该频道');
+            else if(code==='channel_inactive')toast('频道未开放或已停用');
+            else toast('申请失败：'+msg);
+            AURA.log('申请失败 ['+code+'] '+msg);
+          }
+          try{ renderAll(); }catch(e){}
+        })();
+        return;
+      }
+
       case 'auraRefresh': AURA.ensure(); toast('正在重新拉取频道'); return;
       case 'del': removeTg(id); toast('已移出 '+id); return;
       case 'solo': toggleSolo(id); toast(state.solo===id?'独听 '+id:'已退出独听'); return;
