@@ -390,18 +390,10 @@ html[data-theme="dark"] .tabs button.on{background:var(--accent2)}
 .live-row.mine{background:color-mix(in srgb,var(--accent) 7%,transparent)}
 .live-row .acts{opacity:1}
 .tgpill{font-family:var(--mono);font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:5px;background:var(--accent2);color:var(--accent);flex:none}
-/* 最近联系人快捷选择条 */
-.txquick{display:flex;flex-wrap:wrap;gap:6px;padding:6px 0;min-height:0}
-.txquick .qc{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;
-  border-radius:12px;border:1px solid var(--border);font-size:12px;cursor:pointer;
-  white-space:nowrap;transition:all .15s}
-.txquick .qc:hover{border-color:var(--accent);background:var(--accent-bg)}
-.txquick .qc.act{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
-.txquick .qc .dot{width:6px;height:6px;border-radius:50%;background:var(--red);flex-shrink:0}
-.txquick .qc.pri .dot{background:var(--orange)}
-.txquick .qc.pri{border-color:var(--orange);color:var(--orange)}
-.txquick .qc.pri:hover{background:var(--orange-bg)}
-.txquick .empty2{color:var(--dim);font-size:12px;padding:4px 0}
+
+
+/* 个呼行：左红边 + 👤 图标 */
+.row.priv .tgnum{font-size:14px}
 
 /* 个呼行：整行左边留一道红边，一眼能和人话组区分开。
    点它是「回这个人」，不是「加进收听」—— 这个视觉提示必须给。 */
@@ -1308,8 +1300,6 @@ body.dragging .dghint{display:block}
            统一在「设置 → ⚙️ 主站与身份」里。 -->
       <div class="ptx" id="ptxBar">
         <!-- 最近联系人快捷选择：点一下设成发射目标 -->
-        <div id="txQuickList" class="txquick"></div>
-
         <!-- 第 1 行：发射到哪个话组 + 连接 / 断开。
              网络切换不放在这里 —— 上面 .netbar 已经有一条了，两条一模一样的
              「国际 BM / 国内 DMR」叠在一起，手机上一眼看上去像坏了。 -->
@@ -1370,7 +1360,7 @@ body.dragging .dghint{display:block}
             <button class="btn sm" id="btnAdd">+ 添加话组</button>
           </div>
           <div class="tools" style="padding:8px">
-            <div class="search"><input id="addInput" placeholder="输入话组号后回车，如 91 / 2621"></div>
+            <div class="search"><input id="addInput" placeholder="输入话组号或 DMR ID，如 91 / 2621 / 460001（自动识别）"></div>
           </div>
           <div class="pb" id="mineList"></div>
         </section>
@@ -20792,15 +20782,21 @@ function ensureSpotter(){
 }
 function addTg(id,silent){
   id=Number(id);
-  /* AURA 的端点号可以很小（协议没规定下限），BM/国内 仍然按 >90 兜住误输入 */
-  const minOk = state.net==='aura' ? id>0 : id>90;
-  if(!Number.isFinite(id)||!minOk){ if(!silent)toast(state.net==='aura'?'端点号无效':'话组号需大于 90'); return false; }
-  if(state.subscribed.includes(id)){ if(!silent)toast('话组 '+id+' 已在收听列表'); return false; }
+  const isPriv = id >= 1000000;
+  const minOk = state.net==='aura' ? id>0 : (isPriv ? id>0 : id>90);
+  if(!Number.isFinite(id)||!minOk){
+    if(!silent)toast(state.net==='aura'?'端点号无效':'话组号需大于 90');
+    return false;
+  }
+  if(state.subscribed.includes(id)){
+    if(!silent)toast((isPriv?'个呼 ':'话组 ')+id+' 已在收听列表');
+    return false;
+  }
   state.subscribed.push(id);
   store.set(netSubKey(state.net),state.subscribed.slice());
-  if(state.net!=='cn'&&(!state.tgReady||!tgName(id)))ensureTg(id);   // 国内话组名已内嵌，不必再去 BM 查
+  if(!isPriv && state.net!=='cn' && (!state.tgReady||!tgName(id)))ensureTg(id);
   syncSubs(); ensureSpotter(); renderMine(); renderLib(); renderLive(true);
-  if(!silent)toast('已添加 '+(tgName(id)||'话组 '+id));
+  if(!silent)toast('已添加 '+(isPriv?'👤 个呼 ':'话组 ')+(isPriv?id:(tgName(id)||id)));
   return true;
 }
 function removeTg(id){
@@ -22525,9 +22521,10 @@ function renderMine(){
     /* ★ v2.4.8 单个话组静音：和「接收过滤」里那份名单是同一个（state.rxMuteTg），
        因为对用户来说「静音」就是静音 —— 不管声音是从 HOSE 还是 MMDVM 来的。 */
     const muted=state.rxMuteTg.indexOf(id)>=0;
-    return '<div class="row'+(tx?' tx':'')+(muted?' muted':'')+' pinned" data-id="'+id+'">'+
+    const isPriv=id>=1000000;
+    return '<div class="row'+(tx?' tx':'')+(muted?' muted':'')+(isPriv?' priv':'')+' pinned" data-id="'+id+'">'+
       '<span class="lamp'+(tx?' on':'')+'"></span>'+
-      '<span class="tgnum">'+id+'</span>'+
+      '<span class="tgnum">'+(isPriv?'👤':id)+'</span>'+
       '<div class="tginfo"><div class="tgname">'+esc(tgLabel(id))+'</div>'+
       '<div class="tgsub">'+flagHtml(id)+'<span>'+(muted?'已静音':(solo?'独听模式':(spOpen&&sub?'已连接':(spOpen?'订阅中…':'未连接'))))+(inScan?' · 在扫描列表':'')+'</span></div></div>'+
       '<div class="acts">'+
@@ -25317,51 +25314,8 @@ function qSetTg(tg){
   e.value=String(tg);
   txSave();
   qRenderTg();
-  renderTxQuick();
 }
 
-/* 最近联系人快捷选择：从通联记录里取最近的个呼 + 常用话组 */
-function renderTxQuick(){
-  const box=document.getElementById('txQuickList');
-  if(!box)return;
-  const cur=qCurTg(), curPriv=!!(txEl('txPriv')&&txEl('txPriv').value==='1');
-  const items=[];
-  /* 最近个呼（从最近听到里取，按 DMR ID 去重） */
-  const seen=new Set();
-  for(const lr of (state.recent||[])){
-    if(!lr.priv&&!lr.tg)continue;
-    const id=lr.priv?lr.tg:lr.tg;
-    if(!id||seen.has(id))continue;
-    seen.add(id);
-    items.push({id, priv:!!lr.priv, name:lr.call||tgName(id)||''});
-    if(items.length>=6)break;
-  }
-  /* 常用话组兜底 */
-  for(const id of [91,460,2621]){
-    if(items.length>=8)break;
-    if(seen.has(id))continue;
-    seen.add(id);
-    items.push({id, priv:false, name:tgName(id)||''});
-  }
-  if(!items.length){
-    box.innerHTML='<span class="empty2">最近无通联</span>';
-    return;
-  }
-  box.innerHTML=items.map(it=>
-    '<span class="qc'+(it.priv?' pri':'')+(it.id===cur&&!it.priv===!curPriv?' act':'')+'"'
-    +' data-tg="'+it.id+'" data-priv="'+(it.priv?1:0)+'"'
-    +' title="点击设为发射目标">'
-    +'<span class="dot"></span>'
-    +(it.priv?'👤 ':'👥 ')
-    +(it.name||it.id)
-    +'</span>'
-  ).join('');
-  box.querySelectorAll('.qc').forEach(el=>{
-    el.addEventListener('click',()=>{
-      txSetTarget(el.dataset.tg, el.dataset.priv==='1');
-    });
-  });
-}
 /* 「在收听页点一个话组 = 把它设成发射目标」。
    这是收听与发射合并的关键一步：不再有单独的对讲页，
    在「我的收听」「实时活动」「话组库」「扫描」里点任意一行话组，
@@ -25479,7 +25433,6 @@ function qRenderTg(){
    * 一直是 HTML 里写死的「世界组」，换任何话组都不变。 */
   const nmEl=txEl('txTgName');
   if(nmEl)nmEl.textContent=tg>0?((priv?'个呼 · ':'')+(tgName(tg)||'未知话组')):'未设目标';
-  try{ renderTxQuick(); }catch(e){}
   const pn=txEl('pttTg');
   if(pn)pn.textContent=tg>0?String(tg):'—';
   /* 顺手把目标同步给原生侧：「只收当前话组」拿它当门限。
@@ -28188,7 +28141,6 @@ function boot(){
   txMarkTarget();
   loadTalkgroups(); loadMasters();
   AURA.load();
-  try{ renderTxQuick(); }catch(e){}
 
   if(state.net==='aura'){
     auraRenderSet();
