@@ -226,6 +226,7 @@ footer .copy{font-size:12px;color:var(--dim)}
     <a href="#features">功能</a>
     <a href="#network">三链路</a>
     <a href="#fmo">湖北 FMO</a>
+    <a href="#demo">在线体验</a>
     <a href="#download">下载</a>
   </div>
   <button class="nav-cta" onclick="document.getElementById('download').scrollIntoView({behavior:'smooth'})">
@@ -480,6 +481,14 @@ footer .copy{font-size:12px;color:var(--dim)}
 </footer>
 
 <script>
+// 在线体验
+function openDemo(){
+  const url='http://frp-hip.com:52615/app/';
+  const frame=document.getElementById('demoFrame');
+  if(frame && !frame.src) frame.src=url;
+  document.getElementById('demo').scrollIntoView({behavior:'smooth'});
+}
+
 // 一键下载 APK
 function downloadAPK(){
   const url='http://frp-hip.com:52615/assets/beacon-dmr-2.10.37-release.apk';
