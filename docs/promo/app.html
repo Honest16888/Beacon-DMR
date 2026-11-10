@@ -1221,6 +1221,37 @@ body.dragging .dghint{display:block}
 </head>
 <body>
 
+<!-- 首次启动更新日志弹窗 -->
+<div id="changelogModal" style="position:fixed;inset:0;z-index:99999;background:rgba(0,0,0,0.6);backdrop-filter:blur(6px);display:none;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#1e293b;border-radius:18px;max-width:520px;width:100%;max-height:80vh;overflow:hidden;display:flex;flex-direction:column;border:1px solid rgba(255,255,255,0.1);box-shadow:0 24px 80px rgba(0,0,0,0.5)">
+    <div style="padding:24px 28px 16px;border-bottom:1px solid rgba(255,255,255,0.06)">
+      <h2 style="font-size:20px;font-weight:700;margin-bottom:4px">\u{1f4cb} 更新日志</h2>
+      <p style="font-size:13px;color:#94a3b8">Beacon-DMR v2.10.41</p>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:20px 28px;font-size:14px;line-height:2;color:#cbd5e1">
+      <b style="color:#60a5fa">v2.10.41</b>
+      <ul style="padding-left:20px;margin:8px 0">
+        <li>AURA 自动扫描全部频道端点（含未加入的）</li>
+        <li>修复 AURA 听不到声音（lastAt 更新）</li>
+        <li>修复 AURA 发射卡顿（mic 缓冲批量发送）</li>
+        <li>折叠摘要正确显示 AURA 网络名</li>
+        <li>加入申请入口（\u{1f4cb} 按钮）</li>
+        <li>添加话组自动识别组呼/个呼</li>
+        <li>AURA 配置持久化（重启后保留）</li>
+        <li>个呼/组呼自动切换</li>
+      </ul>
+      <b style="color:#60a5fa">v2.10.37</b>
+      <ul style="padding-left:20px;margin:8px 0">
+        <li>添加话组自动识别（\u{1f464} 个呼 / \u{1f465} 组呼）</li>
+        <li>我的收听列表个呼行显示 \u{1f464} 图标</li>
+      </ul>
+    </div>
+    <div style="padding:16px 28px;border-top:1px solid rgba(255,255,255,0.06)">
+      <button onclick="closeChangelog()" style="width:100%;padding:14px;border-radius:12px;border:none;background:linear-gradient(135deg,#3b82f6,#8b5cf6);color:#fff;font-size:16px;font-weight:700;cursor:pointer">\u2705 \u5df2\u7ecf\u770b\u4e86\uff0c\u4e0d\u518d\u663e\u793a</button>
+    </div>
+  </div>
+</div>
+
 <div class="topbar">
   <!-- 桌面端 .tbrow{display:contents}：两行会被摊平回一行。
        手机端 .tbrow{display:flex}：真正分成两行，见下方 @media(max-width:760px)。 -->
@@ -22351,7 +22382,7 @@ function renderHtSum(){
   const net=document.getElementById('hsNet');
   const txt=document.getElementById('hsTxt');
   const tg =document.getElementById('hsTg');
-  if(net)net.textContent=state.net==='cn'?'🇨🇳 国内':'🌍 BM';
+  if(net)net.textContent=state.net==='cn'?'\u{1f4e1}CN':state.net==='aura'?'\u{1f52c}AURA':'\u{1f310} BM';
   /* 原生链路优先：它在播时 Hoseline 已被 hdGate 静音，
      摘要条必须跟着「真正在响的那个」走，否则又变成「听的是个呼、看的是话组」。 */
   const nx=qNative(), cur=state.current, lr=state.lastRx;
@@ -24506,12 +24537,40 @@ window.onAuraMic=function(b64){
   if(!AURA.nativeMic||!AURA.talkOn)return;
   try{
     const s=atob(b64), n=s.length;
-    const u8=new Uint8Array(1+n);
-    u8[0]=0x01;
-    for(let i=0;i<n;i++)u8[1+i]=s.charCodeAt(i);
-    AURA.wsSendBin(u8);
+    /* 缓冲 2 帧（~320ms）再发，减少 bridge 调用次数 —— 每 160ms 一次
+       bridge 回调在 JS 线程忙时会丢帧，导致发射卡顿 */
+    if(!AURA._micBuf){ AURA._micBuf=[]; AURA._micBufLen=0; }
+    const chunk=new Uint8Array(n);
+    for(let i=0;i<n;i++)chunk[i]=s.charCodeAt(i);
+    AURA._micBuf.push(chunk);
+    AURA._micBufLen+=n;
+    if(AURA._micBufLen>=2048){
+      const out=new Uint8Array(1+AURA._micBufLen);
+      out[0]=0x01;
+      let off=1;
+      for(const c of AURA._micBuf){ out.set(c,off); off+=c.length; }
+      AURA._micBuf=[]; AURA._micBufLen=0;
+      AURA.wsSendBin(out);
+    }
   }catch(e){}
 };
+/* talk off 时冲刷残留缓冲 */
+(function(){
+  const origOff=AURA.talkOff.bind(AURA);
+  AURA.talkOff=function(){
+    if(AURA._micBuf&&AURA._micBufLen>0){
+      try{
+        const out=new Uint8Array(1+AURA._micBufLen);
+        out[0]=0x01;
+        let off=1;
+        for(const c of AURA._micBuf){ out.set(c,off); off+=c.length; }
+        AURA.wsSendBin(out);
+      }catch(e){}
+      AURA._micBuf=[]; AURA._micBufLen=0;
+    }
+    origOff();
+  };
+})();
 
 /* 原生 WebSocket 的事件回调（MainActivity → 页面） */
 window.onAuraWs=function(json){
@@ -28212,7 +28271,22 @@ function boot(){
     });
   }
   txMarkTarget();
-  loadTalkgroups(); loadMasters();
+  /* 首次启动更新日志 */
+function closeChangelog(){
+  const m=document.getElementById('changelogModal');
+  if(m)m.style.display='none';
+  try{ store.set('changelog_v21041','1'); }catch(e){}
+}
+(function(){
+  try{
+    if(!store.get('changelog_v21041')){
+      const m=document.getElementById('changelogModal');
+      if(m)m.style.display='flex';
+    }
+  }catch(e){}
+})();
+
+loadTalkgroups(); loadMasters();
   AURA.load();
 
   if(state.net==='aura'){
