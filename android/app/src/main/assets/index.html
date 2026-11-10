@@ -390,6 +390,19 @@ html[data-theme="dark"] .tabs button.on{background:var(--accent2)}
 .live-row.mine{background:color-mix(in srgb,var(--accent) 7%,transparent)}
 .live-row .acts{opacity:1}
 .tgpill{font-family:var(--mono);font-size:11.5px;font-weight:700;padding:2px 7px;border-radius:5px;background:var(--accent2);color:var(--accent);flex:none}
+/* 最近联系人快捷选择条 */
+.txquick{display:flex;flex-wrap:wrap;gap:6px;padding:6px 0;min-height:0}
+.txquick .qc{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;
+  border-radius:12px;border:1px solid var(--border);font-size:12px;cursor:pointer;
+  white-space:nowrap;transition:all .15s}
+.txquick .qc:hover{border-color:var(--accent);background:var(--accent-bg)}
+.txquick .qc.act{border-color:var(--accent);background:var(--accent-bg);color:var(--accent)}
+.txquick .qc .dot{width:6px;height:6px;border-radius:50%;background:var(--red);flex-shrink:0}
+.txquick .qc.pri .dot{background:var(--orange)}
+.txquick .qc.pri{border-color:var(--orange);color:var(--orange)}
+.txquick .qc.pri:hover{background:var(--orange-bg)}
+.txquick .empty2{color:var(--dim);font-size:12px;padding:4px 0}
+
 /* 个呼行：整行左边留一道红边，一眼能和人话组区分开。
    点它是「回这个人」，不是「加进收听」—— 这个视觉提示必须给。 */
 .live-row.priv{box-shadow:inset 3px 0 0 var(--tx)}
@@ -1294,6 +1307,9 @@ body.dragging .dghint{display:block}
            身份（DMR ID / 主站）在这里就能改；端口 / ESSID / 密码 / 呼号 / 色码
            统一在「设置 → ⚙️ 主站与身份」里。 -->
       <div class="ptx" id="ptxBar">
+        <!-- 最近联系人快捷选择：点一下设成发射目标 -->
+        <div id="txQuickList" class="txquick"></div>
+
         <!-- 第 1 行：发射到哪个话组 + 连接 / 断开。
              网络切换不放在这里 —— 上面 .netbar 已经有一条了，两条一模一样的
              「国际 BM / 国内 DMR」叠在一起，手机上一眼看上去像坏了。 -->
@@ -2035,16 +2051,7 @@ body.dragging .dghint{display:block}
           <button class="btn sm danger" id="setReset">恢复默认</button>
         </div>
       </div>
-      <div class="setrow">
-        <div class="setlbl"><b>更新服务器</b><span>远程更新推送的服务器地址，留空则不检查更新</span></div>
-        <div class="setctl"><input class="aurainp" id="updateServer" placeholder="https://update.example.com:8080"></div>
-      </div>
-      <div class="setrow act">
-        <div class="setlbl"><b>检查更新</b><span>当前版本 <b id="currentVer"></b></span></div>
-        <div class="setctl">
-          <button class="btn sm" id="btnCheckUpdate">检查更新</button>
-        </div>
-      </div>
+
       <div class="setnote">
         <b>录音</b>和<b>通话记录</b>只存在本机内存里，关掉页面就没了 ——
         重要的录音请在「录音」标签页里点保存，落到手机存储上。
@@ -24484,185 +24491,6 @@ window.onAuraWs=function(json){
   }
 };
 
-/* ===================== 远程更新检查 =====================
- *
- * 服务端部署 tools/update_server.py，客户端只需配一个 URL。
- *
- * 接口：
- *   GET {server}/api/version?current=当前版本 → {has_update, info}
- *   GET {server}/api/download/{version}      → APK 文件
- *
- * 调用方式：
- *   Update.check()          检查更新（不弹窗，只返回结果）
- *   Update.checkAndNotify() 检查更新并弹窗提示
- *   Update.download(url)    下载 APK（返回 Promise，完成后触发安装）
- *
- * 服务端地址存在 localStorage，设置页可改。 */
-const Update = {
-  server: '',
-
-  load(){
-    // 内置默认更新服务器，用户可在设置页修改
-    let s = String(store.get('updateServer','')||'').trim().replace(/\/+$/,'');
-    if(!s) s = 'https://frp-hip.com:52615/update';
-    // 确保协议双斜杠正确（防止存成 https:/xxx）
-    s = s.replace(/^(https?):\/(?!\/)/, '$1://');
-    this.server = s;
-  },
-  save(url){
-    let s = String(url||'').trim().replace(/\/+$/,'');
-    s = s.replace(/^(https?):\/(?!\/)/, '$1://');
-    this.server = s;
-    store.set('updateServer', s);
-  },
-
-  /* 当前版本 —— 和 AndroidManifest 的 versionName 保持一致 */
-  current(){
-    // 优先从 Android 读真实版本号，fallback 到硬编码
-    try{
-      if(typeof Android!=='undefined' && Android.getVersion){
-        return Android.getVersion() || '2.10.17';
-      }
-    }catch(e){}
-    return '2.10.17';
-  },
-
-  /** 检查更新，返回 {has_update, info} 或 null（未配置/网络错误） */
-  async check(){
-    if(!this.server)return null;
-    // 用原生 HTTP 桥（可以信任自签证书），fetch() 会拒绝
-    const url = this.server+'/?action=version&current='+encodeURIComponent(this.current());
-    return new Promise((resolve)=>{
-      const reqId = 'upd-'+Date.now();
-      window.__updateCbMap = window.__updateCbMap || {};
-      window.__updateCbMap[reqId] = resolve;
-      if(typeof Android!=='undefined' && Android.auraHttp){
-        // auraHttp(reqId, method, url, headers, body)
-        Android.auraHttp(reqId, 'GET', url, '{}', '');
-      }else{
-        // 网页版 fallback 到 fetch
-        fetch(url, {headers:{'Accept':'application/json'}})
-          .then(r=>r.ok?r.json():null)
-          .then(d=>{ resolve(d); })
-          .catch(()=>{ resolve(null); });
-      }
-    });
-  },
-
-  /** 检查更新并弹窗提示（启动时调用） */
-  async checkAndNotify(){
-    const r = await this.check();
-    if(!r || !r.has_update || !r.info)return;
-    this.showUpdateDialog(r.info);
-  },
-
-  showUpdateDialog(v){
-    if(document.getElementById('updateModal'))return;
-    const sizeMb=((v.size||0)/1024/1024).toFixed(1);
-    const isForce=!!v.force;
-    const url=this.server+(v.download||('/?action=download&ver='+encodeURIComponent(v.version)));
-    const wrap=document.createElement('div');
-    wrap.id='updateModal';
-    wrap.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;animation:updFadeIn .2s';
-    wrap.innerHTML='<div style="background:#1e293b;border-radius:16px;max-width:380px;width:100%;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5);border:1px solid #334155">'
-      +'<div style="background:linear-gradient(135deg,#3b82f6,#8b5cf6);padding:20px 24px">'
-      +'<div style="font-size:13px;opacity:.85;margin-bottom:4px;color:#fff">发现新版本</div>'
-      +'<div style="font-size:24px;font-weight:700;color:#fff">'+v.version+'</div>'
-      +'<div style="font-size:12px;opacity:.7;margin-top:4px;color:#fff">大小 '+sizeMb+' MB'+(isForce?' · ⚠ 强制更新':'')+'</div>'
-      +'</div>'
-      +'<div style="padding:16px 24px">'
-      +'<div id="updLog" style="color:#94a3b8;font-size:13px;line-height:1.6;max-height:150px;overflow-y:auto;white-space:pre-wrap">'+(v.changelog||'无更新说明')+'</div>'
-      +'<div id="updProgress" style="display:none;margin-top:12px">'
-      +'<div style="background:#0f172a;border-radius:8px;height:8px;overflow:hidden"><div id="updBar" style="height:100%;width:0%;background:linear-gradient(90deg,#3b82f6,#8b5cf6);border-radius:8px;transition:width .3s"></div></div>'
-      +'<div id="updPct" style="color:#64748b;font-size:12px;margin-top:4px;text-align:center">0%</div>'
-      +'</div>'
-      +'</div>'
-      +'<div style="padding:0 24px 20px;display:flex;gap:10px">'
-      +(isForce?'':'<button id="updLater" style="flex:1;padding:12px;border-radius:10px;border:1px solid #334155;background:transparent;color:#94a3b8;font-size:15px;cursor:pointer">稍后再说</button>')
-      +'<button id="updBtn" style="flex:2;padding:12px;border-radius:10px;border:none;background:linear-gradient(135deg,#3b82f6,#2563eb);color:#fff;font-size:15px;font-weight:600;cursor:pointer;box-shadow:0 4px 15px rgba(59,130,246,.3)">'+(isForce?'立即更新':'立即更新')+'</button>'
-      +'</div></div>';
-    document.body.appendChild(wrap);
-    if(!document.getElementById('updAnim')){
-      const st=document.createElement('style');
-      st.id='updAnim';
-      st.textContent='@keyframes updFadeIn{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}';
-      document.head.appendChild(st);
-    }
-    const btn=document.getElementById('updBtn');
-    const later=document.getElementById('updLater');
-    if(later)later.onclick=()=>wrap.remove();
-    btn.onclick=()=>{
-      btn.disabled=true;
-      btn.textContent='下载中…';
-      if(later)later.style.display='none';
-      document.getElementById('updProgress').style.display='block';
-      this.downloadWithProgress(url);
-    };
-  },
-
-  downloadWithProgress(url){
-    const bar=document.getElementById('updBar');
-    const pct=document.getElementById('updPct');
-    const btn=document.getElementById('updBtn');
-    console.log('[Update] download URL:', url);
-    // 优先用原生下载（更可靠，能处理大文件和超时）
-    if(typeof Android!=='undefined'&&Android.downloadApk){
-      if(pct)pct.textContent='正在下载…';
-      Android.downloadApk(url);
-      return;
-    }
-    // fallback：XHR 下载
-    const xhr=new XMLHttpRequest();
-    xhr.open('GET',url,true);
-    xhr.responseType='blob';
-    xhr.onprogress=(e)=>{
-      if(e.lengthComputable&&bar){
-        const p=Math.round(e.loaded/e.total*100);
-        bar.style.width=p+'%';
-        if(pct)pct.textContent=p+'% ('+(e.loaded/1024/1024).toFixed(1)+'/'+(e.total/1024/1024).toFixed(1)+' MB)';
-      }
-    };
-    xhr.onload=()=>{
-      if(xhr.status===200){
-        if(bar)bar.style.width='100%';
-        if(pct)pct.textContent='100% 下载完成';
-        if(btn)btn.textContent='安装';
-        const a=document.createElement('a');
-        a.href=URL.createObjectURL(xhr.response);
-        a.download='';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-      }else{
-        if(pct)pct.textContent='下载失败 HTTP '+xhr.status+' | URL: '+url;
-        if(btn){btn.disabled=false;btn.textContent='重试';}
-      }
-    };
-    xhr.onerror=()=>{
-      if(pct)pct.textContent='网络错误';
-      if(btn){btn.disabled=false;btn.textContent='重试';}
-    };
-    xhr.send();
-  },
-
-  /** 下载 APK 并触发安装 */
-  download(url){
-    if(typeof Android!=='undefined' && Android.downloadApk){
-      // App 内：走原生下载 + 安装
-      Android.downloadApk(url);
-    }else{
-      // 网页版：直接打开下载链接
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = '';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      toast('已开始下载 APK');
-    }
-  },
-};
-
 /* ===================== AURA 界面 ===================== */
 
 /* 「我的收听」在 AURA 网络下的样子：
@@ -24897,6 +24725,9 @@ function auraPttUp(){
   }
   hub.addEventListener('change',()=>{ const v=String(hub.value||'').trim().replace(/\/+$/,'');
     if(v){ AURA.hub=v; store.set('auraHub',v); auraRenderSet(); } });
+  if(user)user.addEventListener('change',()=>{ AURA.user=user.value.trim(); store.set('auraUser',AURA.user); });
+  if(pass)pass.addEventListener('change',()=>{ AURA.pass=pass.value; store.set('auraPass',AURA.pass); });
+  if(code)code.addEventListener('change',()=>{ AURA.code=code.value.trim(); store.set('auraCode',AURA.code); });
 
   /* 注册：成功就直接用返回的一次性令牌绑定设备，少一步手抄 */
   $('#auraBtnReg').addEventListener('click',async()=>{
@@ -25035,27 +24866,6 @@ function auraPttUp(){
     try{ await AURA.logout(); toast('已注销 AURA'); }
     catch(e){ toast('注销失败：'+(e&&e.message||e)); }
     finally{ busy(false); renderAll(); auraRenderSet(); }
-  });
-
-  /* 远程更新设置 */
-  const ups = document.getElementById('updateServer');
-  if(ups){
-    ups.value = Update.server;
-    ups.addEventListener('change', ()=> Update.save(ups.value));
-  }
-  const cv = document.getElementById('currentVer');
-  if(cv)cv.textContent = Update.current();
-  const bcu = document.getElementById('btnCheckUpdate');
-  if(bcu)bcu.addEventListener('click', async ()=>{
-    if(!Update.server){ toast('先填更新服务器地址'); return; }
-    toast('正在检查更新…');
-    const r = await Update.check();
-    if(!r){ toast('检查失败：'+Update.server+' 不可达'); return; }
-    if(r.has_update && r.info){
-      Update.checkAndNotify();
-    }else{
-      toast('已是最新版本 '+Update.current());
-    }
   });
 
   auraRenderSet();
@@ -25507,6 +25317,50 @@ function qSetTg(tg){
   e.value=String(tg);
   txSave();
   qRenderTg();
+  renderTxQuick();
+}
+
+/* 最近联系人快捷选择：从通联记录里取最近的个呼 + 常用话组 */
+function renderTxQuick(){
+  const box=document.getElementById('txQuickList');
+  if(!box)return;
+  const cur=qCurTg(), curPriv=!!(txEl('txPriv')&&txEl('txPriv').value==='1');
+  const items=[];
+  /* 最近个呼（从最近听到里取，按 DMR ID 去重） */
+  const seen=new Set();
+  for(const lr of (state.recent||[])){
+    if(!lr.priv&&!lr.tg)continue;
+    const id=lr.priv?lr.tg:lr.tg;
+    if(!id||seen.has(id))continue;
+    seen.add(id);
+    items.push({id, priv:!!lr.priv, name:lr.call||tgName(id)||''});
+    if(items.length>=6)break;
+  }
+  /* 常用话组兜底 */
+  for(const id of [91,460,2621]){
+    if(items.length>=8)break;
+    if(seen.has(id))continue;
+    seen.add(id);
+    items.push({id, priv:false, name:tgName(id)||''});
+  }
+  if(!items.length){
+    box.innerHTML='<span class="empty2">最近无通联</span>';
+    return;
+  }
+  box.innerHTML=items.map(it=>
+    '<span class="qc'+(it.priv?' pri':'')+(it.id===cur&&!it.priv===!curPriv?' act':'')+'"'
+    +' data-tg="'+it.id+'" data-priv="'+(it.priv?1:0)+'"'
+    +' title="点击设为发射目标">'
+    +'<span class="dot"></span>'
+    +(it.priv?'👤 ':'👥 ')
+    +(it.name||it.id)
+    +'</span>'
+  ).join('');
+  box.querySelectorAll('.qc').forEach(el=>{
+    el.addEventListener('click',()=>{
+      txSetTarget(el.dataset.tg, el.dataset.priv==='1');
+    });
+  });
 }
 /* 「在收听页点一个话组 = 把它设成发射目标」。
    这是收听与发射合并的关键一步：不再有单独的对讲页，
@@ -25625,6 +25479,7 @@ function qRenderTg(){
    * 一直是 HTML 里写死的「世界组」，换任何话组都不变。 */
   const nmEl=txEl('txTgName');
   if(nmEl)nmEl.textContent=tg>0?((priv?'个呼 · ':'')+(tgName(tg)||'未知话组')):'未设目标';
+  try{ renderTxQuick(); }catch(e){}
   const pn=txEl('pttTg');
   if(pn)pn.textContent=tg>0?String(tg):'—';
   /* 顺手把目标同步给原生侧：「只收当前话组」拿它当门限。
@@ -28333,9 +28188,8 @@ function boot(){
   txMarkTarget();
   loadTalkgroups(); loadMasters();
   AURA.load();
-  Update.load();
-  /* 启动后 3 秒检查更新（不阻塞启动） */
-  setTimeout(()=>{ Update.checkAndNotify(); }, 3000);
+  try{ renderTxQuick(); }catch(e){}
+
   if(state.net==='aura'){
     auraRenderSet();
     /* ★ 默认不自动连：这个 App 抢了会话，用户另一台设备就登不上 */
