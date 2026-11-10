@@ -23983,6 +23983,27 @@ const AURA = {
     }
     return this.ends;
   },
+  /* 协议 5.1：频道发现 —— /api/ptt/channels 返回公开/可访问/被踢/申诉过的全部频道。
+     bootstrap 只给已授权端点，discover 给全部，合并后才能自动扫描所有组。 */
+  async discover(){
+    const r=await this.api('/api/ptt/channels');
+    const chans=Array.isArray(r.channels)?r.channels:(Array.isArray(r)?r:[]);
+    this.discovered=[];
+    for(const c of chans){
+      const cid=Number(c&&c.id)||0, cname=String(c&&c.name||'');
+      for(const t of (c&&c.tgs)||[]){
+        const e={tg:Number(t.tg)||0, name:String(t.name||''), channelId:cid,
+                 tgId:Number(t.id)||0, channelName:cname};
+        if(!e.tg||!e.tgId)continue;
+        this.discovered.push(e);
+        if(!this.endByTg.has(e.tg)){
+          this.ends.push(e);
+          this.endByTg.set(e.tg,e);
+        }
+      }
+    }
+    return this.discovered;
+  },
   /* 按 PTT 时该对谁说话：已加入 → 发射目标框 → 订阅列表第一个 → 全部端点第一个 */
   targetEnd(){
     if(this.cur)return this.cur;
@@ -24449,6 +24470,7 @@ const AURA = {
       toast('AURA 取频道失败：'+this.lastErr);
       return false;
     }
+    try{ await this.discover(); }catch(e){ AURA.log('discover: '+String(e&&e.message||e)); }
     this.connectWs();
     await this.waitOpen(5000);
     renderAll();
@@ -24566,7 +24588,7 @@ function auraRenderMine(){
 function auraRenderLib(){
   const list=$('#libList');
   const q=String(state.libQuery||'').trim().toLowerCase();
-  let rows=AURA.ends.slice();
+  let rows=(AURA.ends.length?AURA.ends:(AURA.discovered||[])).slice();
   if(q)rows=rows.filter(e=>String(e.tg).includes(q)
     ||String(e.name||'').toLowerCase().includes(q)
     ||String(e.channelName||'').toLowerCase().includes(q));
