@@ -27849,7 +27849,10 @@ document.addEventListener('click',e=>{
      自己带 data-act，不能把它们的点击也吞成「设目标」。 */
   if(row&&row.dataset.id){
     const id=Number(row.dataset.id);
-    if(id>0&&state.view==='listen')txSetTarget(id);
+    if(id>0&&state.view==='listen'){
+      const isPriv=row.dataset.priv==='1'||id>=1000000;
+      txSetTarget(id,isPriv);
+    }
     return;
   }
 });
