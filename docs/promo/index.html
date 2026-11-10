@@ -161,6 +161,63 @@ nav{position:fixed;top:0;width:100%;z-index:100;padding:16px 40px;
 .feature h4{font-size:18px;font-weight:700;margin-bottom:8px}
 .feature p{font-size:14px;color:var(--muted);line-height:1.7}
 
+/* ===== 配置指引 ===== */
+.steps{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:24px;margin-bottom:64px}
+.step{background:var(--bg2);border:1px solid rgba(255,255,255,0.06);border-radius:20px;
+  padding:32px;position:relative;transition:transform .3s,border-color .3s}
+.step:hover{transform:translateY(-4px);border-color:var(--accent)}
+.step-num{position:absolute;top:20px;right:20px;width:36px;height:36px;border-radius:10px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;
+  font-size:18px;font-weight:700;display:flex;align-items:center;justify-content:center}
+.step-icon{font-size:36px;margin-bottom:16px}
+.step h4{font-size:18px;font-weight:700;margin-bottom:8px}
+.step p{font-size:14px;color:var(--muted);line-height:1.7}
+.step-tip{margin-top:12px;padding:6px 12px;border-radius:8px;
+  background:rgba(59,130,246,0.1);color:var(--accent);font-size:12px;display:inline-block}
+
+.config-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:24px;margin-bottom:64px}
+.config-card{background:var(--bg2);border:1px solid rgba(255,255,255,0.06);border-radius:16px;overflow:hidden}
+.config-header{padding:16px 20px;font-size:16px;font-weight:700;
+  background:var(--glass);border-bottom:1px solid rgba(255,255,255,0.06)}
+.config-body{padding:16px 20px}
+.config-row{display:flex;justify-content:space-between;align-items:center;
+  padding:8px 0;border-bottom:1px solid rgba(255,255,255,0.04)}
+.config-row:last-child{border:none}
+.config-row span{font-size:13px;color:var(--dim)}
+.config-row code{font-size:13px;color:var(--accent3);background:var(--glass);
+  padding:3px 10px;border-radius:6px;font-family:monospace}
+
+.hot-tgs{background:var(--bg2);border:1px solid rgba(255,255,255,0.06);border-radius:20px;padding:32px}
+.hot-tgs h3{font-size:18px;font-weight:700;margin-bottom:20px}
+.tg-grid{display:flex;flex-wrap:wrap;gap:12px}
+.tg-item{display:flex;align-items:center;gap:10px;padding:10px 18px;
+  background:var(--glass);border:1px solid var(--glass2);border-radius:12px;transition:all .2s}
+.tg-item:hover{border-color:var(--accent);background:rgba(59,130,246,0.1)}
+.tg-id{font-family:monospace;font-size:15px;font-weight:700;color:var(--accent)}
+.tg-name{font-size:14px;color:var(--muted)}
+
+/* ===== 知识库 ===== */
+.faq-grid{margin-bottom:64px}
+.faq-item{background:var(--bg2);border:1px solid rgba(255,255,255,0.06);
+  border-radius:14px;margin-bottom:12px;overflow:hidden;cursor:pointer;
+  transition:border-color .2s}
+.faq-item:hover{border-color:rgba(59,130,246,0.3)}
+.faq-q{display:flex;align-items:center;justify-content:space-between;
+  padding:18px 24px;font-size:15px;font-weight:600}
+.faq-arrow{font-size:20px;color:var(--dim);transition:transform .3s;flex-shrink:0;margin-left:12px}
+.faq-item.open .faq-arrow{transform:rotate(90deg)}
+.faq-a{max-height:0;overflow:hidden;transition:max-height .4s,padding .3s;
+  padding:0 24px;font-size:14px;color:var(--muted);line-height:1.8}
+.faq-item.open .faq-a{max-height:500px;padding:0 24px 20px}
+
+.glossary{background:var(--bg2);border:1px solid rgba(255,255,255,0.06);border-radius:20px;padding:32px}
+.glossary h3{font-size:18px;font-weight:700;margin-bottom:20px}
+.glossary-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px}
+.glossary-item{display:flex;align-items:baseline;gap:12px;padding:10px 16px;
+  background:var(--glass);border-radius:10px}
+.glossary-item b{font-family:monospace;color:var(--accent);flex-shrink:0;min-width:60px}
+.glossary-item span{font-size:13px;color:var(--muted)}
+
 /* ===== 在线体验 ===== */
 .demo-section{position:relative;padding:120px 40px;text-align:center;overflow:hidden}
 .demo-inner{position:relative;z-index:1;max-width:1000px;margin:0 auto}
@@ -306,7 +363,9 @@ footer .copy{font-size:12px;color:var(--dim)}
     <a href="#features">功能</a>
     <a href="#network">三链路</a>
     <a href="#fmo">湖北 FMO</a>
+    <a href="#guide">配置指引</a>
     <a href="#demo">在线体验</a>
+    <a href="#kb">知识库</a>
     <a href="#download">下载</a>
   </div>
   <button class="nav-cta" onclick="document.getElementById('download').scrollIntoView({behavior:'smooth'})">
@@ -535,6 +594,153 @@ footer .copy{font-size:12px;color:var(--dim)}
       <iframe id="demoFrame" class="demo-frame" src="app.html" loading="lazy"></iframe>
     </div>
     <button class="btn-primary" style="margin-top:32px" onclick="openDemo()">🚀 全屏体验</button>
+  </div>
+</section>
+
+<!-- 配置指引 -->
+<section class="section" id="guide">
+  <div class="section-label">📖 配置指引</div>
+  <div class="section-title">三步上手，<br>快速开始通联</div>
+  <div class="section-desc">
+    不管你是新手还是老火腿，跟着以下步骤就能快速配置 Beacon-DMR。
+  </div>
+
+  <!-- 步骤卡片 -->
+  <div class="steps">
+    <div class="step fade-up">
+      <div class="step-num">1</div>
+      <div class="step-icon">📱</div>
+      <h4>下载安装</h4>
+      <p>点击「一键下载」获取 APK，在 Android 手机上安装。首次打开需允许存储权限。</p>
+      <div class="step-tip">最低要求 Android 8.0+</div>
+    </div>
+    <div class="step fade-up">
+      <div class="step-num">2</div>
+      <div class="step-icon">⚙️</div>
+      <h4>选择网络</h4>
+      <p>在「设置」里选择要连接的网络：<b>BrandMeister</b>（全球）、<b>中国 DMR</b> 或 <b>AURA</b>。每套网络独立配置。</p>
+      <div class="step-tip">国内推荐先用「中国 DMR」</div>
+    </div>
+    <div class="step fade-up">
+      <div class="step-num">3</div>
+      <div class="step-icon">🎧</div>
+      <h4>添加话组，开始收听</h4>
+      <p>在「话组库」点 ＋ 添加话组（如 91 世界组），或在「实时活动」里点一行即可收听。按住 PTT 即可发射。</p>
+      <div class="step-tip">首次使用建议先听后发</div>
+    </div>
+  </div>
+
+  <!-- 常见配置 -->
+  <div class="config-grid">
+    <div class="config-card fade-up">
+      <div class="config-header">🌐 BrandMeister 配置</div>
+      <div class="config-body">
+        <div class="config-row"><span>热点地址</span><code>bm.brandmeister.network</code></div>
+        <div class="config-row"><span>端口</span><code>62031</code></div>
+        <div class="config-row"><span>呼号</span><code>你的呼号</code></div>
+        <div class="config-row"><span>DMR ID</span><code>你的 7 位 DMR ID</code></div>
+        <div class="config-row"><span>密码</span><code>热点密码（自设）</code></div>
+      </div>
+    </div>
+    <div class="config-card fade-up">
+      <div class="config-header">🇨🇳 中国 DMR 配置</div>
+      <div class="config-body">
+        <div class="config-row"><span>主站地址</span><code>8600.radiowo.com</code></div>
+        <div class="config-row"><span>端口</span><code>62031</code></div>
+        <div class="config-row"><span>呼号</span><code>你的呼号</code></div>
+        <div class="config-row"><span>DMR ID</span><code>你的 7 位 DMR ID</code></div>
+        <div class="config-row"><span>密码</span><code>主站注册密码</code></div>
+      </div>
+    </div>
+    <div class="config-card fade-up">
+      <div class="config-header">🔮 AURA 配置</div>
+      <div class="config-body">
+        <div class="config-row"><span>Hub 地址</span><code>http://bh6bhg.cloud:18080</code></div>
+        <div class="config-row"><span>860 账号</span><code>你的 860 账号</code></div>
+        <div class="config-row"><span>860 密码</span><code>注册时设置的密码</code></div>
+        <div class="config-row"><span>安全码</span><code>3 位数字（如 318）</code></div>
+        <div class="config-row"><span>设备绑定</span><code>首次登录自动绑定</code></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 热门话组 -->
+  <div class="hot-tgs fade-up">
+    <h3>🔥 热门话组速查</h3>
+    <div class="tg-grid">
+      <div class="tg-item"><span class="tg-id">91</span><span class="tg-name">世界组</span></div>
+      <div class="tg-item"><span class="tg-id">460</span><span class="tg-name">中国</span></div>
+      <div class="tg-item"><span class="tg-id">2621</span><span class="tg-name">德国</span></div>
+      <div class="tg-item"><span class="tg-id">46001</span><span class="tg-name">中国全国组</span></div>
+      <div class="tg-item"><span class="tg-id">86020</span><span class="tg-name">广州组</span></div>
+      <div class="tg-item"><span class="tg-id">860755</span><span class="tg-name">深圳组</span></div>
+      <div class="tg-item"><span class="tg-id">860756</span><span class="tg-name">珠海组</span></div>
+      <div class="tg-item"><span class="tg-id">86931</span><span class="tg-name">兰州组</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- 知识库 -->
+<section class="section" id="kb" style="background:rgba(255,255,255,0.02)">
+  <div class="section-label">📚 知识库</div>
+  <div class="section-title">常见问题与<br>实用知识</div>
+  <div class="section-desc">
+    新手入门、术语解释、故障排除——你想知道的都在这里。
+  </div>
+
+  <!-- FAQ -->
+  <div class="faq-grid">
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>什么是 DMR？和模拟电台有什么区别？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">DMR（Digital Mobile Radio）是数字移动无线电标准。与模拟电台相比，DMR 采用数字编码，音质更清晰（无噪音），频谱效率更高（一个信道两路通话），支持数据传输、个呼、组呼、短信等丰富功能。目前业余无线电界主流的数字模式之一。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>什么是 TalkGroup（话组）？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">TalkGroup（TG）是 DMR 里的「群组」概念。同一个话组内的用户可以互相通话。每个话组有一个编号（如 91 是世界组）。订阅某个话组就能听到该组的通话，也可以按住 PTT 在该组发射。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>什么是个呼（Private Call）？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">个呼是 DMR 里的「一对一私聊」。输入对方的 7 位 DMR ID 进行呼叫，只有对方能听到。组呼是一对多（所有订阅该话组的人都能听到），个呼是一对一。在 Beacon-DMR 里，7 位数字自动识别为个呼。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>没有业余无线电执照可以用吗？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">收听不需要执照，任何人都可以收听业余无线电通话。但<b>发射（PTT）需要持有有效的业余无线电操作证</b>，并在核准的频率和功率范围内操作。建议新手先收听学习，考取执照后再发射。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>如何获取 DMR ID？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">在 <a href="https://radioid.net" target="_blank" style="color:#60a5fa">radioid.net</a> 注册并申请 DMR ID。需要提供呼号和操作证信息。审核通过后会分配一个全球唯一的 7 位数字 ID。中国用户也可以在国内 DMR 平台注册。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>Beacon-DMR 支持哪些 Android 版本？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">最低支持 Android 8.0（API 26）。建议 Android 10 以上以获得最佳体验。App 体积仅约 2.3 MB，对设备性能要求极低。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>什么是 FMO 中继？湖北 FMO 是什么？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">FMO（Frequency Modulation Operation）是一种数字业余无线电中继制式。湖北 FMO 中继已接入 OpenRF、RLlink、HT 三大链路，实现多协议互通。你可以通过 Beacon-DMR 或 OpenRF 客户端接入湖北 FMO 中继进行通联。</div>
+    </div>
+    <div class="faq-item fade-up" onclick="this.classList.toggle('open')">
+      <div class="faq-q"><span>PTT 对讲怎么用？</span><span class="faq-arrow">›</span></div>
+      <div class="faq-a">先在话组库或实时活动里选择一个话组（或个呼目标），然后<b>按住</b>右下角的 PTT 按钮说话，<b>松开</b>结束发射。发射前确保已连接到网络（设置里配置好热点参数）。说话时注意不要按住时间过长，留出间隙给其他人插入。</div>
+    </div>
+  </div>
+
+  <!-- 术语表 -->
+  <div class="glossary fade-up">
+    <h3>📖 术语速查</h3>
+    <div class="glossary-grid">
+      <div class="glossary-item"><b>DMR</b><span>Digital Mobile Radio，数字移动无线电</span></div>
+      <div class="glossary-item"><b>TG</b><span>TalkGroup，话组/群呼组</span></div>
+      <div class="glossary-item"><b>PTT</b><span>Push To Talk，按下发射</span></div>
+      <div class="glossary-item"><b>MMDVM</b><span>多模式数字语音调制解调器</span></div>
+      <div class="glossary-item"><b>BM</b><span>BrandMeister，全球 DMR 网络</span></div>
+      <div class="glossary-item"><b>APRS</b><span>自动位置报告系统</span></div>
+      <div class="glossary-item"><b>呼号</b><span>电台唯一标识（如 BH6RGQ）</span></div>
+      <div class="glossary-item"><b>DMR ID</b><span>全球唯一 7 位数字 ID</span></div>
+      <div class="glossary-item"><b>中继</b><span>转接信号的地面电台</span></div>
+      <div class="glossary-item"><b>热点</b><span>个人微型中继（Hotspot）</span></div>
+      <div class="glossary-item"><b>个呼</b><span>Private Call，一对一私聊</span></div>
+      <div class="glossary-item"><b>组呼</b><span>Group Call，一对多群呼</span></div>
+    </div>
   </div>
 </section>
 
