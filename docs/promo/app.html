@@ -20794,6 +20794,9 @@ function addTg(id,silent){
   }
   state.subscribed.push(id);
   store.set(netSubKey(state.net),state.subscribed.slice());
+  /* 自动切换呼叫类型：个呼 → 私呼，组呼 → 组呼 */
+  const pv=txEl('txPriv');
+  if(pv)pv.value=isPriv?'1':'0';
   if(!isPriv && state.net!=='cn' && (!state.tgReady||!tgName(id)))ensureTg(id);
   syncSubs(); ensureSpotter(); renderMine(); renderLib(); renderLive(true);
   if(!silent)toast('已添加 '+(isPriv?'👤 个呼 ':'话组 ')+(isPriv?id:(tgName(id)||id)));
@@ -22522,7 +22525,7 @@ function renderMine(){
        因为对用户来说「静音」就是静音 —— 不管声音是从 HOSE 还是 MMDVM 来的。 */
     const muted=state.rxMuteTg.indexOf(id)>=0;
     const isPriv=id>=1000000;
-    return '<div class="row'+(tx?' tx':'')+(muted?' muted':'')+(isPriv?' priv':'')+' pinned" data-id="'+id+'">'+
+    return '<div class="row'+(tx?' tx':'')+(muted?' muted':'')+(isPriv?' priv':'')+' pinned" data-id="'+id+'" data-priv="'+(isPriv?1:0)+'">'+
       '<span class="lamp'+(tx?' on':'')+'"></span>'+
       '<span class="tgnum">'+(isPriv?'👤':id)+'</span>'+
       '<div class="tginfo"><div class="tgname">'+esc(tgLabel(id))+'</div>'+
@@ -27822,7 +27825,7 @@ document.addEventListener('click',e=>{
   /* 点「实时活动」整行 = 一键收听 + 同时设成发射目标 */
   if(row&&row.dataset.tg&&!row.dataset.scope){
     const id=Number(row.dataset.tg);
-    const isPriv=row.dataset.priv==='1';
+    const isPriv=row.dataset.priv==='1'||Number(id)>=1000000;
     /* 个呼行不能加进收听列表 —— 那是一个人的 ID，不是一个话组，
      * 加进去以后会一直在扫描里空转，也永远不会有「话组活动」。
      * 点它只做一件事：把发射目标切成这个人。 */
@@ -27839,13 +27842,17 @@ document.addEventListener('click',e=>{
     return;
   }
   /* 点任意话组行（我的收听 / 话组库 / 扫描列表）= 设成发射目标。
+     个呼/组呼自动切换：行上 data-priv 决定呼叫类型。
      以前这里什么都不做，因为发射是另一页的事；现在合并了，
      点一行就代表「接下来我要发到这个话组」。
      注意必须放在 data-act 分支之后 —— 行内的 📡 / ✕ / ＋ 等小按钮
      自己带 data-act，不能把它们的点击也吞成「设目标」。 */
   if(row&&row.dataset.id){
     const id=Number(row.dataset.id);
-    if(id>0&&state.view==='listen')txSetTarget(id);
+    if(id>0&&state.view==='listen'){
+      const isPriv=row.dataset.priv==='1'||id>=1000000;
+      txSetTarget(id,isPriv);
+    }
     return;
   }
 });
