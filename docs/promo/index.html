@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Beacon-DMR · 开源数字业余无线电</title>
+<meta name="description" content="Beacon-DMR — 开源 DMR 数字业余电台 App。支持 BM/中国 DMR/AURA 三链路，湖北 FMO 中继已接入 OpenRF、RLlink、HT 链路。">
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700;900&display=swap');
+
+*{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#0a0e1a;--bg2:#111827;--bg3:#1e293b;
+  --accent:#3b82f6;--accent2:#8b5cf6;--accent3:#06b6d4;
+  --green:#22c55e;--orange:#f59e0b;--red:#ef4444;
+  --text:#e2e8f0;--muted:#94a3b8;--dim:#64748b;
+  --glass:rgba(255,255,255,0.05);--glass2:rgba(255,255,255,0.1);
+}
+html{scroll-behavior:smooth}
+body{font-family:'Noto Sans SC',system-ui,sans-serif;background:var(--bg);color:var(--text);overflow-x:hidden}
+
+/* ===== 导航 ===== */
+nav{position:fixed;top:0;width:100%;z-index:100;padding:16px 40px;
+  display:flex;align-items:center;justify-content:space-between;
+  background:rgba(10,14,26,0.8);backdrop-filter:blur(20px);
+  border-bottom:1px solid rgba(255,255,255,0.06)}
+.nav-logo{display:flex;align-items:center;gap:10px;font-size:20px;font-weight:700}
+.nav-logo .icon{width:36px;height:36px;border-radius:10px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  display:flex;align-items:center;justify-content:center;font-size:18px}
+.nav-links{display:flex;gap:28px}
+.nav-links a{color:var(--muted);text-decoration:none;font-size:14px;transition:color .2s}
+.nav-links a:hover{color:var(--text)}
+.nav-cta{padding:10px 24px;border-radius:10px;border:none;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  color:#fff;font-size:14px;font-weight:600;cursor:pointer;
+  transition:transform .2s,box-shadow .2s}
+.nav-cta:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(59,130,246,0.3)}
+
+/* ===== Hero ===== */
+.hero{min-height:100vh;display:flex;align-items:center;justify-content:center;
+  padding:120px 40px 80px;position:relative;overflow:hidden}
+.hero-bg{position:absolute;inset:0;z-index:0}
+.hero-bg .orb{position:absolute;border-radius:50%;filter:blur(80px);opacity:.4}
+.hero-bg .orb1{width:600px;height:600px;top:-200px;right:-200px;background:radial-gradient(circle,var(--accent),transparent 70%)}
+.hero-bg .orb2{width:500px;height:500px;bottom:-150px;left:-150px;background:radial-gradient(circle,var(--accent2),transparent 70%)}
+.hero-bg .orb3{width:300px;height:300px;top:40%;left:30%;background:radial-gradient(circle,var(--accent3),transparent 70%)}
+.hero-bg .grid{position:absolute;inset:0;
+  background-image:linear-gradient(rgba(255,255,255,0.03) 1px,transparent 1px),
+  linear-gradient(90deg,rgba(255,255,255,0.03) 1px,transparent 1px);
+  background-size:60px 60px}
+.hero-content{position:relative;z-index:1;text-align:center;max-width:900px}
+.hero-badge{display:inline-flex;align-items:center;gap:8px;
+  padding:8px 20px;border-radius:50px;background:var(--glass);
+  border:1px solid var(--glass2);font-size:13px;color:var(--muted);
+  margin-bottom:32px;backdrop-filter:blur(10px)}
+.hero-badge .dot{width:8px;height:8px;border-radius:50%;background:var(--green);
+  animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.hero h1{font-size:clamp(42px,6vw,72px);font-weight:900;line-height:1.1;
+  margin-bottom:24px;letter-spacing:-2px}
+.hero h1 .gradient{
+  background:linear-gradient(135deg,#60a5fa,#a78bfa,#34d399);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.hero .sub{font-size:clamp(16px,2vw,22px);color:var(--muted);
+  max-width:700px;margin:0 auto 48px;line-height:1.8}
+.hero-buttons{display:flex;gap:16px;justify-content:center;flex-wrap:wrap}
+.btn-primary{padding:16px 40px;border-radius:14px;border:none;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  color:#fff;font-size:18px;font-weight:700;cursor:pointer;
+  display:flex;align-items:center;gap:10px;
+  transition:transform .2s,box-shadow .2s;
+  box-shadow:0 8px 30px rgba(59,130,246,0.3)}
+.btn-primary:hover{transform:translateY(-3px);box-shadow:0 12px 40px rgba(59,130,246,0.4)}
+.btn-secondary{padding:16px 40px;border-radius:14px;
+  border:1px solid var(--glass2);background:var(--glass);
+  color:var(--text);font-size:18px;font-weight:600;cursor:pointer;
+  display:flex;align-items:center;gap:10px;
+  transition:all .2s;backdrop-filter:blur(10px)}
+.btn-secondary:hover{border-color:var(--accent);background:rgba(59,130,246,0.1)}
+.hero-stats{display:flex;gap:48px;justify-content:center;margin-top:64px;flex-wrap:wrap}
+.stat{text-align:center}
+.stat .num{font-size:36px;font-weight:900;
+  background:linear-gradient(135deg,#60a5fa,#a78bfa);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.stat .label{font-size:13px;color:var(--dim);margin-top:4px}
+
+/* ===== 三链路 ===== */
+.section{padding:120px 40px;max-width:1200px;margin:0 auto}
+.section-label{display:inline-flex;align-items:center;gap:8px;
+  padding:6px 16px;border-radius:50px;background:var(--glass);
+  border:1px solid var(--glass2);font-size:13px;color:var(--accent);
+  margin-bottom:20px;font-weight:500}
+.section-title{font-size:clamp(32px,4vw,48px);font-weight:900;
+  line-height:1.2;margin-bottom:16px;letter-spacing:-1px}
+.section-desc{font-size:18px;color:var(--muted);max-width:700px;
+  line-height:1.8;margin-bottom:64px}
+
+/* 网络拓扑 */
+.network{position:relative;display:grid;
+  grid-template-columns:repeat(3,1fr);gap:24px;margin-top:48px}
+.net-card{background:var(--bg2);border:1px solid rgba(255,255,255,0.06);
+  border-radius:20px;padding:36px;position:relative;overflow:hidden;
+  transition:transform .3s,border-color .3s}
+.net-card:hover{transform:translateY(-8px);border-color:var(--accent)}
+.net-card .glow{position:absolute;top:-60px;right:-60px;width:160px;height:160px;
+  border-radius:50%;filter:blur(40px);opacity:.2}
+.net-card.bm .glow{background:var(--accent)}
+.net-card.cn .glow{background:var(--green)}
+.net-card.aura .glow{background:var(--accent2)}
+.net-card .icon{width:56px;height:56px;border-radius:16px;
+  display:flex;align-items:center;justify-content:center;font-size:24px;
+  margin-bottom:20px}
+.net-card.bm .icon{background:rgba(59,130,246,0.15);color:var(--accent)}
+.net-card.cn .icon{background:rgba(34,197,94,0.15);color:var(--green)}
+.net-card.aura .icon{background:rgba(139,92,246,0.15);color:var(--accent2)}
+.net-card h3{font-size:22px;font-weight:700;margin-bottom:12px}
+.net-card p{font-size:14px;color:var(--muted);line-height:1.7}
+.net-card .tags{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.net-card .tag{padding:4px 12px;border-radius:8px;font-size:12px;
+  background:var(--glass);border:1px solid var(--glass2);color:var(--muted)}
+
+/* ===== 湖北 FMO ===== */
+.fmo-section{position:relative;padding:120px 40px;overflow:hidden}
+.fmo-bg{position:absolute;inset:0;
+  background:linear-gradient(135deg,rgba(59,130,246,0.05),rgba(139,92,246,0.05))}
+.fmo-inner{max-width:1200px;margin:0 auto;position:relative;z-index:1}
+.fmo-header{text-align:center;margin-bottom:64px}
+.fmo-header .badge{display:inline-flex;align-items:center;gap:8px;
+  padding:8px 20px;border-radius:50px;background:rgba(34,197,94,0.15);
+  border:1px solid rgba(34,197,94,0.3);color:var(--green);
+  font-size:14px;font-weight:600;margin-bottom:24px}
+.fmo-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(350px,1fr));gap:24px}
+.fmo-card{background:var(--bg2);border:1px solid rgba(255,255,255,0.06);
+  border-radius:20px;padding:32px;display:flex;gap:20px;align-items:flex-start;
+  transition:transform .3s,border-color .3s}
+.fmo-card:hover{transform:translateY(-4px);border-color:var(--accent3)}
+.fmo-card .icon{width:52px;height:52px;border-radius:14px;flex-shrink:0;
+  display:flex;align-items:center;justify-content:center;font-size:22px}
+.fmo-card h4{font-size:18px;font-weight:700;margin-bottom:8px}
+.fmo-card p{font-size:14px;color:var(--muted);line-height:1.7}
+.fmo-card .status{display:inline-flex;align-items:center;gap:6px;
+  margin-top:12px;padding:4px 12px;border-radius:8px;
+  font-size:12px;font-weight:600}
+.status.on{background:rgba(34,197,94,0.15);color:var(--green)}
+.status .dot{width:6px;height:6px;border-radius:50%;background:var(--green)}
+
+/* ===== 功能 ===== */
+.features{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:24px}
+.feature{background:var(--bg2);border:1px solid rgba(255,255,255,0.06);
+  border-radius:20px;padding:32px;transition:transform .3s,border-color .3s}
+.feature:hover{transform:translateY(-4px);border-color:var(--accent)}
+.feature .icon{width:48px;height:48px;border-radius:12px;
+  background:var(--glass);display:flex;align-items:center;
+  justify-content:center;font-size:22px;margin-bottom:16px}
+.feature h4{font-size:18px;font-weight:700;margin-bottom:8px}
+.feature p{font-size:14px;color:var(--muted);line-height:1.7}
+
+/* ===== 下载 ===== */
+.download-section{position:relative;padding:120px 40px;text-align:center;overflow:hidden}
+.download-bg{position:absolute;inset:0;
+  background:radial-gradient(ellipse at center,rgba(59,130,246,0.08),transparent 70%)}
+.download-inner{position:relative;z-index:1;max-width:700px;margin:0 auto}
+.download-inner h2{font-size:clamp(32px,4vw,48px);font-weight:900;
+  margin-bottom:16px;letter-spacing:-1px}
+.download-inner .sub{font-size:18px;color:var(--muted);margin-bottom:48px;line-height:1.8}
+.download-btn{display:inline-flex;align-items:center;gap:12px;
+  padding:20px 48px;border-radius:16px;border:none;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  color:#fff;font-size:20px;font-weight:700;cursor:pointer;
+  transition:transform .2s,box-shadow .2s;
+  box-shadow:0 12px 40px rgba(59,130,246,0.35)}
+.download-btn:hover{transform:translateY(-3px);box-shadow:0 16px 50px rgba(59,130,246,0.45)}
+.download-info{display:flex;gap:32px;justify-content:center;
+  margin-top:32px;flex-wrap:wrap}
+.download-info .item{font-size:13px;color:var(--dim)}
+.download-info .item span{color:var(--muted);font-weight:600}
+
+/* ===== Footer ===== */
+footer{border-top:1px solid rgba(255,255,255,0.06);padding:48px 40px;
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:20px}
+footer .brand{display:flex;align-items:center;gap:10px;font-size:16px;font-weight:600}
+footer .brand .icon{width:32px;height:32px;border-radius:8px;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  display:flex;align-items:center;justify-content:center;font-size:16px}
+footer .links{display:flex;gap:24px}
+footer .links a{color:var(--dim);text-decoration:none;font-size:13px;transition:color .2s}
+footer .links a:hover{color:var(--text)}
+footer .copy{font-size:12px;color:var(--dim)}
+
+/* ===== 响应式 ===== */
+@media(max-width:768px){
+  nav{padding:12px 20px}
+  .nav-links{display:none}
+  .hero{padding:100px 20px 60px}
+  .hero-stats{gap:24px}
+  .stat .num{font-size:28px}
+  .section{padding:80px 20px}
+  .network{grid-template-columns:1fr}
+  .fmo-section{padding:80px 20px}
+  .fmo-grid{grid-template-columns:1fr}
+  .features{grid-template-columns:1fr}
+  .download-section{padding:80px 20px}
+  footer{padding:32px 20px;flex-direction:column;text-align:center}
+}
+
+/* ===== 动画 ===== */
+.fade-up{opacity:0;transform:translateY(30px);transition:opacity .6s,transform .6s}
+.fade-up.visible{opacity:1;transform:translateY(0)}
+</style>
+</head>
+<body>
+
+<!-- 导航 -->
+<nav>
+  <div class="nav-logo">
+    <div class="icon">📡</div>
+    Beacon-DMR
+  </div>
+  <div class="nav-links">
+    <a href="#features">功能</a>
+    <a href="#network">三链路</a>
+    <a href="#fmo">湖北 FMO</a>
+    <a href="#download">下载</a>
+  </div>
+  <button class="nav-cta" onclick="document.getElementById('download').scrollIntoView({behavior:'smooth'})">
+    ⬇ 一键下载
+  </button>
+</nav>
+
+<!-- Hero -->
+<section class="hero">
+  <div class="hero-bg">
+    <div class="orb orb1"></div>
+    <div class="orb orb2"></div>
+    <div class="orb orb3"></div>
+    <div class="grid"></div>
+  </div>
+  <div class="hero-content">
+    <div class="hero-badge">
+      <span class="dot"></span>
+      开源 · GPL-3.0 · 免费使用
+    </div>
+    <h1>重新定义<br><span class="gradient">数字业余无线电</span></h1>
+    <p class="sub">
+      Beacon-DMR 是一款开源 DMR 数字业余电台 App，支持 BrandMeister、中国 DMR、AURA 三大网络。
+      实时收听、PTT 对讲、频谱瀑布图、录音回放——全部在一个 App 里。
+    </p>
+    <div class="hero-buttons">
+      <button class="btn-primary" onclick="document.getElementById('download').scrollIntoView({behavior:'smooth'})">
+        📱 一键下载 APK
+      </button>
+      <button class="btn-secondary" onclick="document.getElementById('fmo').scrollIntoView({behavior:'smooth'})">
+        📡 湖北 FMO 中继
+      </button>
+    </div>
+    <div class="hero-stats">
+      <div class="stat">
+        <div class="num">3</div>
+        <div class="label">网络链路</div>
+      </div>
+      <div class="stat">
+        <div class="num">40+</div>
+        <div class="label">话组支持</div>
+      </div>
+      <div class="stat">
+        <div class="num">100%</div>
+        <div class="label">开源免费</div>
+      </div>
+      <div class="stat">
+        <div class="num">2MB</div>
+        <div class="label">超轻体积</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 三链路 -->
+<section class="section" id="network">
+  <div class="section-label">🌐 三大网络</div>
+  <div class="section-title">一个 App，<br>连接全球无线电网络</div>
+  <div class="section-desc">
+    Beacon-DMR 同时支持三大 DMR 网络，一键切换，无缝收听全球业余无线电爱好者的对话。
+  </div>
+
+  <div class="network">
+    <div class="net-card bm fade-up">
+      <div class="glow"></div>
+      <div class="icon">🌍</div>
+      <h3>BrandMeister</h3>
+      <p>全球最大的 DMR 网络，覆盖 100+ 国家。支持 TalkGroup 全球通话、个呼、私呼。</p>
+      <div class="tags">
+        <span class="tag">全球话组</span>
+        <span class="tag">HOSE 音频</span>
+        <span class="tag">实时活动</span>
+      </div>
+    </div>
+    <div class="net-card cn fade-up">
+      <div class="glow"></div>
+      <div class="icon">🇨🇳</div>
+      <h3>中国 DMR</h3>
+      <p>国产 DMR 网络，覆盖全国 33 个省市通话组。支持 MMDVM 热点直连、多路混音收听。</p>
+      <div class="tags">
+        <span class="tag">33 省市组</span>
+        <span class="tag">MMDVM</span>
+        <span class="tag">多路收听</span>
+      </div>
+    </div>
+    <div class="net-card aura fade-up">
+      <div class="glow"></div>
+      <div class="icon">🔮</div>
+      <h3>AURA 混合网络</h3>
+      <p>开放混合无线电接入网络，支持 PTT 对讲、频道管理、成员申诉、设备绑定。</p>
+      <div class="tags">
+        <span class="tag">PTT 对讲</span>
+        <span class="tag">频道管理</span>
+        <span class="tag">端点绑定</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 湖北 FMO -->
+<section class="fmo-section" id="fmo">
+  <div class="fmo-bg"></div>
+  <div class="fmo-inner">
+    <div class="fmo-header">
+      <div class="badge">
+        <span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--green);animation:pulse 2s infinite"></span>
+        湖北 FMO 中继已全面接入
+      </div>
+      <div class="section-title" style="text-align:center">
+        湖北 FMO 中继<br><span class="gradient">三大链路全面贯通</span>
+      </div>
+      <div class="section-desc" style="margin:0 auto;text-align:center">
+        湖北 FMO 数字中继已成功接入 OpenRF、RLlink、HT 链路，实现多协议互通、全网互联。
+      </div>
+    </div>
+
+    <div class="fmo-grid">
+      <div class="fmo-card fade-up">
+        <div class="icon" style="background:rgba(59,130,246,0.15);color:var(--accent)">📡</div>
+        <div>
+          <h4>OpenRF 接入</h4>
+          <p>湖北 FMO 中继已接入 OpenRF 开放无线电网络，支持数字语音中继、数据传输、远程控制。实测稳定运行，全网可达。</p>
+          <div class="status on">
+            <span class="dot"></span>
+            ✅ 已接入 · 运行中
+          </div>
+        </div>
+      </div>
+      <div class="fmo-card fade-up">
+        <div class="icon" style="background:rgba(34,197,94,0.15);color:var(--green)">🔗</div>
+        <div>
+          <h4>RLlink 链路</h4>
+          <p>RLlink 语音链路已打通，支持跨中继互联、多点覆盖。湖北全境无缝漫游，对话不掉线。</p>
+          <div class="status on">
+            <span class="dot"></span>
+            ✅ 已接入 · 运行中
+          </div>
+        </div>
+      </div>
+      <div class="fmo-card fade-up">
+        <div class="icon" style="background:rgba(139,92,246,0.15);color:var(--accent2)">📻</div>
+        <div>
+          <h4>HT 链路</h4>
+          <p>HT 手持台链路已接入，支持模拟/数字双模。手持台直连中继，即插即用，无需复杂配置。</p>
+          <div class="status on">
+            <span class="dot"></span>
+            ✅ 已接入 · 运行中
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- 功能 -->
+<section class="section" id="features">
+  <div class="section-label">✨ 核心功能</div>
+  <div class="section-title">为业余无线电<br>爱好者打造</div>
+  <div class="section-desc">
+    每一个功能都经过精心打磨，只为给你最好的收听和通联体验。
+  </div>
+
+  <div class="features">
+    <div class="feature fade-up">
+      <div class="icon">📊</div>
+      <h4>实时频谱瀑布图</h4>
+      <p>SDR 风格频谱显示，实时音频频谱分析。视觉与听觉双重沉浸，像在操作一台真正的电台。</p>
+    </div>
+    <div class="feature fade-up">
+      <div class="icon">🎙️</div>
+      <h4>PTT 对讲</h4>
+      <p>按住即说，松手即停。支持个呼、组呼、私呼，自动识别通话类型。语音清晰，延迟极低。</p>
+    </div>
+    <div class="feature fade-up">
+      <div class="icon">📚</div>
+      <h4>话组库</h4>
+      <p>内置 40+ 精选话组，覆盖全球热门 TalkGroup。支持自定义添加、搜索、收藏。</p>
+    </div>
+    <div class="feature fade-up">
+      <div class="icon">📡</div>
+      <h4>多路收听</h4>
+      <p>同时收听多个话组，智能混音调度。支持独听模式、静音话组、自动跟进最活跃频道。</p>
+    </div>
+    <div class="feature fade-up">
+      <div class="icon">⏺️</div>
+      <h4>录音回放</h4>
+      <p>一键录音，随时回放。支持通话记录、最近听到、快速回拨。不错过任何重要信息。</p>
+    </div>
+    <div class="feature fade-up">
+      <div class="icon">🌍</div>
+      <h4>全球看板</h4>
+      <p>实时通话热力图、话组国家分布、活跃 Top 10。一眼掌握全球无线电活动态势。</p>
+    </div>
+    <div class="feature fade-up">
+      <div class="icon">🔮</div>
+      <h4>DeepCW 瀑布</h4>
+      <p>AI 驱动的 CW 识别瀑布图，智能解码莫尔斯电码。科技感十足的 SDR 观感。</p>
+    </div>
+    <div class="feature fade-up">
+      <div class="icon">📶</div>
+      <h4>多网络切换</h4>
+      <p>BM / 中国 DMR / AURA 三网络一键切换。订阅、话组、通话记录独立保存，互不干扰。</p>
+    </div>
+    <div class="feature fade-up">
+      <div class="icon">⚙️</div>
+      <h4>高度可定制</h4>
+      <p>自定义话组名、音量控制、麦克风增益、主题切换。一切按你的习惯来。</p>
+    </div>
+  </div>
+</section>
+
+<!-- 下载 -->
+<section class="download-section" id="download">
+  <div class="download-bg"></div>
+  <div class="download-inner">
+    <div class="section-label" style="display:inline-flex;margin:0 auto 20px">⬇️ 一键下载</div>
+    <h2>立即开始你的<br><span class="gradient">无线电之旅</span></h2>
+    <p class="sub">
+      下载安装 Beacon-DMR，连接全球业余无线电网络。<br>
+      开源、免费、无广告。你的电台，你做主。
+    </p>
+    <button class="download-btn" onclick="downloadAPK()">
+      📱 一键下载 Beacon-DMR
+    </button>
+    <div class="download-info">
+      <div class="item">版本：<span>v2.10.37</span></div>
+      <div class="item">大小：<span>~2.3 MB</span></div>
+      <div class="item">系统：<span>Android 8.0+</span></div>
+      <div class="item">许可：<span>GPL-3.0 开源</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- Footer -->
+<footer>
+  <div class="brand">
+    <div class="icon">📡</div>
+    Beacon-DMR
+  </div>
+  <div class="links">
+    <a href="https://github.com/Honest16888/Beacon-DMR" target="_blank">GitHub</a>
+    <a href="#features">功能</a>
+    <a href="#fmo">湖北 FMO</a>
+    <a href="#download">下载</a>
+  </div>
+  <div class="copy">
+    © 2026 Beacon-DMR · 开源业余无线电 · GPL-3.0
+  </div>
+</footer>
+
+<script>
+// 一键下载 APK
+function downloadAPK(){
+  const url='https://github.com/Honest16888/Beacon-DMR/releases/latest/download/beacon-dmr-2.10.37-release.apk';
+  const a=document.createElement('a');
+  a.href=url;
+  a.download='beacon-dmr-2.10.37-release.apk';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// 滚动动画
+const observer=new IntersectionObserver((entries)=>{
+  entries.forEach(entry=>{
+    if(entry.isIntersecting){
+      entry.target.classList.add('visible');
+    }
+  });
+},{threshold:0.1});
+document.querySelectorAll('.fade-up').forEach(el=>observer.observe(el));
+
+// 导航滚动效果
+window.addEventListener('scroll',()=>{
+  const nav=document.querySelector('nav');
+  if(window.scrollY>50){
+    nav.style.background='rgba(10,14,26,0.95)';
+    nav.style.boxShadow='0 4px 30px rgba(0,0,0,0.3)';
+  }else{
+    nav.style.background='rgba(10,14,26,0.8)';
+    nav.style.boxShadow='none';
+  }
+});
+</script>
+</body>
+</html>
