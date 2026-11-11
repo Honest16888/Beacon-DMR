@@ -23621,6 +23621,9 @@ const AURA = {
   /* ---------------- 存取 ---------------- */
   load(){
     this.hub=String(store.get('auraHub','')||'').trim().replace(/\/+$/,'');
+    this.user=String(store.get('auraUser','')||'');
+    this.pass=String(store.get('auraPass','')||'');
+    this.code=String(store.get('auraCode','')||'');
     this.device=String(store.get('auraDevice','')||'');
     this.trustAll=store.get('auraTrustAll',false)===true;
     this.autoConnect=store.get('auraAuto',false)===true;
@@ -24799,9 +24802,23 @@ function auraPttUp(){
     if(!/^[0-9]{3}$/.test(c)){ toast('安全码是三位数字'); return null; }
     return c;
   }
+  /* 手机上点按钮不一定触发 change 事件，每个操作前统一保存 */
+  function saveInputs(){
+    AURA.hub=String(hub.value||'').trim().replace(/\/+$/,'');
+    store.set('auraHub',AURA.hub);
+    AURA.user=String(user.value||'').trim();
+    store.set('auraUser',AURA.user);
+    AURA.pass=String(pass.value||'');
+    store.set('auraPass',AURA.pass);
+    AURA.code=String(code.value||'').trim();
+    store.set('auraCode',AURA.code);
+  }
   function busy(on){ AURA.busy=!!on; auraRenderSet(); }
 
   hub.value=AURA.hub||'';
+  if(user)user.value=AURA.user||'';
+  if(pass)pass.value=AURA.pass||'';
+  if(code)code.value=AURA.code||'';
   const auto=$('#auraAuto');
   if(auto){
     auto.checked=!!AURA.autoConnect;
@@ -24829,6 +24846,7 @@ function auraPttUp(){
 
   /* 注册：成功就直接用返回的一次性令牌绑定设备，少一步手抄 */
   $('#auraBtnReg').addEventListener('click',async()=>{
+    saveInputs();
     const h=readHub(); if(!h)return;
     const c=readCode(); if(!c)return;
     const uid=AURA.normId(user.value), pwd=String(pass.value||'');
@@ -24853,6 +24871,7 @@ function auraPttUp(){
 
   /* 登录：设备凭据 + 安全码。失败后临时凭据已作废，重试会自动重新领取 */
   $('#auraBtnLogin').addEventListener('click',async()=>{
+    saveInputs();
     const h=readHub(); if(!h)return;
     const c=readCode(); if(!c)return;
     busy(true);
@@ -24870,6 +24889,7 @@ function auraPttUp(){
   /* 重新核验：账号已注册、但设备凭据丢了（换机/清数据）时用。
      协议 3.3 —— 只有用户明确发起恢复才带 reverify，所以这里是显式按钮 + 二次确认。 */
   $('#auraBtnReverify').addEventListener('click',async()=>{
+    saveInputs();
     const h=readHub(); if(!h)return;
     const c=readCode(); if(!c)return;
     const uid=AURA.normId(user.value), pwd=String(pass.value||'');
@@ -24893,6 +24913,7 @@ function auraPttUp(){
 
   /* 连接：显式建立会话（等价于「我确定要让这台机器占住账号」） */
   $('#auraBtnConn').addEventListener('click',async()=>{
+    saveInputs();
     const h=readHub(); if(!h)return;
     busy(true);
     try{
@@ -24911,6 +24932,7 @@ function auraPttUp(){
   /* 账号自检：会用上面填的 860 账号/密码/安全码真的走一遍重新核验。
      结果直接打在「测试连接」那块里，可复制。 */
   $('#auraBtnSelf').addEventListener('click',async()=>{
+    saveInputs();
     const h=readHub(); if(!h)return;
     const c=readCode(); if(!c)return;
     const box=$('#auraDiag');
