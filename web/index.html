@@ -2019,6 +2019,20 @@ body.dragging .dghint{display:block}
         <div class="setlbl"><b>🔐 证书状态</b><span id="auraCertInfo">—</span></div>
         <div class="setctl"><button class="btn sm" id="auraBtnCert">刷新证书状态</button></div>
       </div>
+      <div class="setrow" id="aprsRow">
+        <div class="setlbl"><b>📍 APRS 位置</b><span id="aprsStatus">未获取位置</span></div>
+        <div class="setctl">
+          <button class="btn sm" id="btnAprsLoc">获取位置</button>
+          <button class="btn sm pri" id="btnAprsSend">发送 APRS</button>
+        </div>
+      </div>
+      <div class="setrow" id="cqRow">
+        <div class="setlbl"><b>📻 CQ 呼叫</b><span id="cqStatus">未呼叫</span></div>
+        <div class="setctl">
+          <button class="btn sm pri" id="btnCqSend">发送 CQ</button>
+          <button class="btn sm" id="btnCqStop">停止</button>
+        </div>
+      </div>
       <pre class="auradiag" id="auraDiag"></pre>
       <pre class="auradiag" id="auraLog"></pre>
       <div class="setnote">
@@ -24581,6 +24595,115 @@ window.onAuraWs=function(json){
   }
 };
 
+/* ===================== APRS 位置报告 =====================
+ * 移植自 OpenRF：经纬度定位/六位网格/自动更新/位置精度
+ */
+const APRS={
+  lat:0, lon:0, grid6:"", accuracy:0, lastUpdate:0,
+  watching:false, watchId:null, autoUpdate:false,
+  getLocation(){
+    return new Promise((resolve,reject)=>{
+      if(!navigator.geolocation){ reject(new Error("不支持定位")); return; }
+      navigator.geolocation.getCurrentPosition(
+        pos=>{ this.lat=pos.coords.latitude; this.lon=pos.coords.longitude;
+          this.accuracy=pos.coords.accuracy||0;
+          this.grid6=this.toGrid6(this.lat,this.lon);
+          this.lastUpdate=Date.now();
+          resolve({lat:this.lat,lon:this.lon,grid6:this.grid6,accuracy:this.accuracy}); },
+        err=>reject(new Error("定位失败")),
+        {enableHighAccuracy:true,timeout:10000,maximumAge:30000});
+    });
+  },
+  startWatch(){
+    if(this.watching||!navigator.geolocation)return;
+    this.watching=true;
+    this.watchId=navigator.geolocation.watchPosition(
+      pos=>{ this.lat=pos.coords.latitude; this.lon=pos.coords.longitude;
+        this.accuracy=pos.coords.accuracy||0;
+        this.grid6=this.toGrid6(this.lat,this.lon);
+        this.lastUpdate=Date.now(); renderAprs(); },
+      err=>{ this.watching=false; },
+      {enableHighAccuracy:true,timeout:15000,maximumAge:10000});
+  },
+  stopWatch(){
+    if(this.watchId!==null&&navigator.geolocation)
+      navigator.geolocation.clearWatch(this.watchId);
+    this.watching=false; this.watchId=null;
+  },
+  toGrid6(lat,lon){
+    if(!lat&&!lon)return "";
+    const a=lon+180, b=lat+90;
+    const fl=Math.floor(a/20), fa=Math.floor(b/10);
+    const sl=Math.floor((a-fl*20)/2), sa=Math.floor((b-fa*10));
+    const ul=Math.floor(((a-fl*20-sl*2)/2)*24);
+    const ua=Math.floor((b-fa*10-sa)*24);
+    const A="ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    return A[fl]+A[fa]+String(sl)+String(sa)+A[ul]+A[ua];
+  },
+  toAprsMessage(){
+    if(!this.lat&&!this.lon)return "";
+    return "= "+this.fmt(this.lat,true)+"/"+this.fmt(this.lon,false)+">"
+      +(this.grid6?" ["+this.grid6+"]":"");
+  },
+  fmt(deg,isLat){
+    const sign=deg>=0?1:-1; deg=Math.abs(deg);
+    const d=Math.floor(deg), m=(deg-d)*60;
+    const h=isLat?(sign>=0?"N":"S"):(sign>=0?"E":"W");
+    const n=isLat?2:3;
+    return String(d).padStart(n,"0")+m.toFixed(2).padStart(5,"0")+h;
+  },
+  async send(){
+    try{
+      await this.getLocation();
+      const msg=this.toAprsMessage();
+      if(!msg){ toast("无法获取位置"); return; }
+      if(state.net==="aura"&&AURA.wsOpen){
+        AURA.wsSendText(JSON.stringify({type:"aprs",lat:this.lat,lon:this.lon,grid6:this.grid6,msg:msg}));
+        toast("APRS 位置已发送");
+      }else{ toast("APRS："+msg); }
+      this.lastUpdate=Date.now(); renderAprs();
+    }catch(e){ toast("APRS 失败："+e.message); }
+  },
+  render(){
+    const box=document.getElementById("aprsStatus");
+    if(!box)return;
+    if(!this.lat&&!this.lon){ box.textContent="未获取位置"; return; }
+    const ago=Math.round((Date.now()-this.lastUpdate)/1000);
+    const a=ago<60?ago+"s":Math.round(ago/60)+"m";
+    box.textContent=this.lat.toFixed(4)+", "+this.lon.toFixed(4)
+      +(this.grid6?" ["+this.grid6+"]":"")+" "+a
+      +(this.accuracy?" ±"+Math.round(this.accuracy)+"m":"");
+  }
+};
+function renderAprs(){ try{ APRS.render(); }catch(e){} }
+
+/* ===================== CQ 呼叫 ===================== */
+const CQ={
+  active:false, lastCq:0,
+  async send(){
+    const self=(typeof selfCall==="function")?selfCall():"";
+    if(!self){ toast("先设置呼号"); return; }
+    if(Date.now()-this.lastCq<5000){ toast("CQ 太快"); return; }
+    this.lastCq=Date.now();
+    const msg="CQ CQ CQ de "+self+" K";
+    if(state.net==="aura"&&AURA.wsOpen){
+      AURA.wsSendText(JSON.stringify({type:"text",msg:msg}));
+      toast("CQ 已发送");
+    }else{ toast("CQ："+msg); }
+    this.active=true; renderCq();
+  },
+  stop(){ this.active=false; renderCq(); toast("CQ 已停止"); },
+  render(){
+    const box=document.getElementById("cqStatus");
+    if(!box)return;
+    if(this.active){
+      const ago=Math.round((Date.now()-this.lastCq)/1000);
+      box.textContent="CQ 呼叫中 "+ago+"s";
+    }else{ box.textContent="未呼叫"; }
+  }
+};
+function renderCq(){ try{ CQ.render(); }catch(e){} }
+
 /* ===================== AURA 界面 ===================== */
 
 /* 「我的收听」在 AURA 网络下的样子：
@@ -25020,6 +25143,19 @@ function auraPttUp(){
   });
 
   refreshCert();
+  /* APRS + CQ 按钮 */
+  const bl=$('#btnAprsLoc');
+  if(bl)bl.addEventListener('click',async()=>{
+    toast('正在获取位置…');
+    try{ await APRS.getLocation(); renderAprs(); toast('位置已获取：'+APRS.grid6); }
+    catch(e){ toast(e.message); }
+  });
+  const bs=$('#btnAprsSend');
+  if(bs)bs.addEventListener('click',()=>APRS.send());
+  const bc=$('#btnCqSend');
+  if(bc)bc.addEventListener('click',()=>CQ.send());
+  const bst=$('#btnCqStop');
+  if(bst)bst.addEventListener('click',()=>CQ.stop());
   auraRenderSet();
 })();
 
@@ -28387,8 +28523,9 @@ state.qsoNotes=store.get('qsoNotes',{})||{};         /* id -> note */
    规则：CHANGELOG 里有当前版本的内容 + 上次看到的版本 ≠ 当前版本 → 弹一次。
    每次发版：① APP_VERSION 改成新版号 ② CHANGELOG 加一条新版内容。
    看过之后存 changelog_seen=当前版本，同版本不再弹。 */
-const APP_VERSION='2.10.47';
+const APP_VERSION='2.10.48';
 const CHANGELOG={
+'2.10.48':['移植 OpenRF APRS：位置报告/六位网格/自动更新/精度显示','移植 OpenRF CQ：通用呼叫/发送/停止','语音服务器状态显示'],
 '2.10.47':['移植 OpenRF QSO 通联：确认/备注/搜索/方向标记','移植 OpenRF 证书申请：有效期显示/身份状态/重新申请'],
 '2.10.46':['通联记录增强：搜索/手动记录/发射记录/确认标记','AURA 证书状态卡片（凭据/会话/设备/频道一键刷新）','README 更新：新增通联、证书、AURA 自动扫描等章节'],
 '2.10.45':['更新日志改成按版本号弹：每个新版本都会提醒一次，同版本不再弹','每次发版自动带上本版更新内容'],
@@ -28427,6 +28564,8 @@ function maybeShowChangelog(){
 }
 
 maybeShowChangelog();
+renderAprs(); renderCq();
+try{ if(store.get("aprsAuto",false)){ APRS.autoUpdate=true; APRS.startWatch(); } }catch(e){}
 loadTalkgroups(); loadMasters();
   AURA.load();
 
