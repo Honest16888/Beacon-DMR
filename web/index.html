@@ -24002,6 +24002,10 @@ const AURA = {
         this.endByTg.set(e.tg,e);
       }
     }
+    /* 保存证书有效期（Hub 可能在 bootstrap 里返回 exp/cert_expires_at） */
+    if(r.cert_expires_at||r.certExp||r.expires_at){
+      this.certExp=Number(r.cert_expires_at||r.certExp||r.expires_at)||0;
+    }
     return this.ends;
   },
   /* 协议 5.1：频道发现 —— /api/ptt/channels 返回公开/可访问/被踢/申诉过的全部频道。
@@ -24922,11 +24926,25 @@ function auraPttUp(){
   function refreshCert(){
     const row=$('#auraCertRow'), info=$('#auraCertInfo');
     if(!row||!info)return;
-    if(!AURA.device){ info.textContent='未绑定设备 —— 先注册或重新核验'; row.style.display=''; return; }
+    if(!AURA.device){
+      info.textContent='尚未取得身份证书 —— 先注册或重新核验';
+      row.style.display='';
+      return;
+    }
     const hasTok=AURA.tokenValid();
-    info.textContent='凭据 '+AURA.device.length+' 位 · '+(hasTok?'会话有效':'会话过期/无')
-      +(AURA.deviceId?(' · 设备 '+AURA.deviceId):'')
-      +(AURA.channels?(' · '+AURA.channels.length+' 个频道'):'');
+    const parts=[];
+    parts.push('凭据 '+AURA.device.length+' 位');
+    parts.push(hasTok?'会话有效':'会话过期/无');
+    if(AURA.deviceId)parts.push('设备 '+AURA.deviceId);
+    if(AURA.channels)parts.push(AURA.channels.length+' 个频道');
+    if(AURA.callsign)parts.push(AURA.callsign);
+    /* 证书有效期：Hub 可能在 bootstrap 里返回 exp */
+    if(AURA.certExp){
+      const d=new Date(AURA.certExp*1000);
+      const left=Math.ceil((AURA.certExp*1000-Date.now())/(86400*1000));
+      parts.push('有效期至 '+d.toISOString().slice(0,10)+'（剩 '+left+' 天）');
+    }
+    info.textContent=parts.join(' · ');
     row.style.display='';
   }
   $('#auraBtnCert').addEventListener('click',async()=>{
@@ -25134,16 +25152,23 @@ function renderLog(){
   if(q)list=list.filter(c=>String(c.call||'').toLowerCase().includes(q)
     ||String(c.tg).includes(q)||String(tgName(c.tg)||'').toLowerCase().includes(q));
   $('#tabCount').textContent=list.length;
-  if(!list.length){ el.innerHTML='<div class="empty">'+(q?'没有匹配的记录':'暂无记录')+'</div>'; return; }
+  if(!list.length){ el.innerHTML='<div class="empty">'+(q?'没有匹配的通联记录':'暂无通联记录')+'</div>'; return; }
   el.innerHTML=list.map(c=>{
     const d=new Date(c.t);
     const hh=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
-    const conf=c.confirmed?'\u2705':'';
+    const conf=state.qsoConfirms[c.id];
+    const confIcon=conf==='confirmed'?'\u2705':(conf==='pending'?'\u23f3':'');
     const dir=c.tx?'\u{1f4e4}':'\u{1f4e5}';
+    const note=state.qsoNotes[c.id];
+    const noteHtml=note?'<span class="log-n" style="color:var(--dim);font-size:10px"> \u{1f4dd}'+esc(note)+'</span>':'';
     return '<div class="log-row"><span class="log-t">'+hh+'</span>'+
       '<span class="log-c calllink" data-call="'+esc(c.call)+'" data-callid="'+(c.srcId||'')+'">'+dir+' '+esc(c.call)+'</span>'+
       '<span class="log-g">'+c.tg+' '+esc(tgName(c.tg)||'')+'</span>'+
-      '<span class="log-d">'+fmtDur(c.dur||0)+' '+conf+'</span></div>';
+      '<span class="log-d">'+fmtDur(c.dur||0)+' '+confIcon+noteHtml+'</span>'+
+      '<span class="acts">'+
+        (conf==='confirmed'?'':'<button class="mini" data-act="qsoConfirm" data-id="'+c.id+'" title="确认这次通联">\u2705</button>')+
+        '<button class="mini" data-act="qsoNote" data-id="'+c.id+'" title="添加备注">\u{1f4dd}</button>'+
+      '</span></div>';
   }).join('');
 }
 
@@ -28000,6 +28025,22 @@ document.addEventListener('click',e=>{
         callsPrune(); store.set('calls',state.calls); renderLog();
         toast('已手动记录 '+call.trim()); return;
       }
+      case 'qsoConfirm': {
+        const id=b.dataset.id;
+        state.qsoConfirms[id]='confirmed';
+        store.set('qsoConfirms',state.qsoConfirms);
+        renderLog(); toast('已确认通联'); return;
+      }
+      case 'qsoNote': {
+        const id=b.dataset.id;
+        const cur=state.qsoNotes[id]||'';
+        const note=prompt('通联备注：', cur);
+        if(note===null)return;
+        if(note.trim()){ state.qsoNotes[id]=note.trim(); }
+        else{ delete state.qsoNotes[id]; }
+        store.set('qsoNotes',state.qsoNotes);
+        renderLog(); return;
+      }
       case 'logClear': state.calls=[]; store.set('calls',[]); renderLog(); toast('记录已清空'); return;
       case 'cwClear': CW.clear(); SDR.clear(); toast('频谱已清空'); return;
       case 'station': openStation(b.dataset.call); return;
@@ -28267,6 +28308,9 @@ function boot(){
   state.scan.auto=state.scanResume&&!!store.get('scanAuto',false);
   state.scan.autoN=Math.max(1,Math.min(20,Number(store.get('scanAutoN',8))||8));
   state.calls=store.get('calls',[])||[];
+/* QSO 通联记录（移植自 OpenRF）：confirmation 状态 + 对方信息 */
+state.qsoConfirms=store.get('qsoConfirms',{})||{};  /* id -> 'confirmed'|'pending' */
+state.qsoNotes=store.get('qsoNotes',{})||{};         /* id -> note */
   /* ★ v2.4.8 启动就裁一遍：挂机久了再打开，「记录」里不该还留着昨天的 */
   if(callsPrune())store.set('calls',state.calls);
   /* 自定义主站：老版本没有这一项，取出来先过一遍形状，
@@ -28343,8 +28387,9 @@ function boot(){
    规则：CHANGELOG 里有当前版本的内容 + 上次看到的版本 ≠ 当前版本 → 弹一次。
    每次发版：① APP_VERSION 改成新版号 ② CHANGELOG 加一条新版内容。
    看过之后存 changelog_seen=当前版本，同版本不再弹。 */
-const APP_VERSION='2.10.46';
+const APP_VERSION='2.10.47';
 const CHANGELOG={
+'2.10.47':['移植 OpenRF QSO 通联：确认/备注/搜索/方向标记','移植 OpenRF 证书申请：有效期显示/身份状态/重新申请'],
 '2.10.46':['通联记录增强：搜索/手动记录/发射记录/确认标记','AURA 证书状态卡片（凭据/会话/设备/频道一键刷新）','README 更新：新增通联、证书、AURA 自动扫描等章节'],
 '2.10.45':['更新日志改成按版本号弹：每个新版本都会提醒一次，同版本不再弹','每次发版自动带上本版更新内容'],
 '2.10.44':['AURA 配置持久化修复：重启后自动回填 Hub/账号/密码/安全码'],
