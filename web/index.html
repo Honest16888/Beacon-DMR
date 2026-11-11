@@ -2015,6 +2015,10 @@ body.dragging .dghint{display:block}
           <button class="btn sm" id="auraBtnSelf">账号自检</button>
         </div>
       </div>
+      <div class="setrow" id="auraCertRow" style="display:none">
+        <div class="setlbl"><b>🔐 证书状态</b><span id="auraCertInfo">—</span></div>
+        <div class="setctl"><button class="btn sm" id="auraBtnCert">刷新证书状态</button></div>
+      </div>
       <pre class="auradiag" id="auraDiag"></pre>
       <pre class="auradiag" id="auraLog"></pre>
       <div class="setnote">
@@ -24914,6 +24918,32 @@ function auraPttUp(){
 
   /* 账号自检：会用上面填的 860 账号/密码/安全码真的走一遍重新核验。
      结果直接打在「测试连接」那块里，可复制。 */
+  /* 证书状态：显示 device_credential 状态 + 频道数 + 设备数 */
+  function refreshCert(){
+    const row=$('#auraCertRow'), info=$('#auraCertInfo');
+    if(!row||!info)return;
+    if(!AURA.device){ info.textContent='未绑定设备 —— 先注册或重新核验'; row.style.display=''; return; }
+    const hasTok=AURA.tokenValid();
+    info.textContent='凭据 '+AURA.device.length+' 位 · '+(hasTok?'会话有效':'会话过期/无')
+      +(AURA.deviceId?(' · 设备 '+AURA.deviceId):'')
+      +(AURA.channels?(' · '+AURA.channels.length+' 个频道'):'');
+    row.style.display='';
+  }
+  $('#auraBtnCert').addEventListener('click',async()=>{
+    const info=$('#auraCertInfo');
+    if(info)info.textContent='刷新中…';
+    try{
+      if(!AURA.tokenValid()){ toast('会话无效，先登录'); refreshCert(); return; }
+      await AURA.bootstrap();
+      await AURA.discover().catch(()=>{});
+      refreshCert();
+      renderAll();
+      toast('证书/频道状态已刷新');
+    }catch(e){
+      if(info)info.textContent='刷新失败：'+(e&&e.message||e);
+      toast('刷新失败：'+(e&&e.message||e));
+    }
+  });
   $('#auraBtnSelf').addEventListener('click',async()=>{
     saveInputs();
     const h=readHub(); if(!h)return;
@@ -24971,6 +25001,7 @@ function auraPttUp(){
     finally{ busy(false); renderAll(); auraRenderSet(); }
   });
 
+  refreshCert();
   auraRenderSet();
 })();
 
@@ -25086,23 +25117,33 @@ function renderTab(){
     CW.tap(true);
   } else {
     tools.innerHTML='<div class="tools" style="border-bottom:1px solid var(--border2)">'+
-      '<span style="font-size:11.5px;color:var(--dim)">本次会话的通话记录</span>'+
-      '<div class="spacer"></div><button class="btn sm" data-act="logClear">清空</button></div>';
+      '<div class="search"><input id="logSearch" placeholder="搜索呼号 / 话组"></div>'
+      '<div class="spacer"></div>'
+      '<button class="btn sm" data-act="logManual">+ 手动</button>'
+      '<button class="btn sm" data-act="logClear">清空</button></div>';
+    const ls=$('#logSearch');
+    if(ls){ ls.value=state.logQuery||''; ls.addEventListener('input',()=>{ state.logQuery=ls.value; renderLog(); }); }
     renderLog();
   }
 }
 function renderLog(){
   if(state.tab!=='log')return;
   const el=$('#tabBody');
-  $('#tabCount').textContent=state.calls.length;
-  if(!state.calls.length){ el.innerHTML='<div class="empty">暂无记录</div>'; return; }
-  el.innerHTML=state.calls.slice(0,80).map(c=>{
+  const q=String(state.logQuery||'').trim().toLowerCase();
+  let list=(state.calls||[]).slice(0,80);
+  if(q)list=list.filter(c=>String(c.call||'').toLowerCase().includes(q)
+    ||String(c.tg).includes(q)||String(tgName(c.tg)||'').toLowerCase().includes(q));
+  $('#tabCount').textContent=list.length;
+  if(!list.length){ el.innerHTML='<div class="empty">'+(q?'没有匹配的记录':'暂无记录')+'</div>'; return; }
+  el.innerHTML=list.map(c=>{
     const d=new Date(c.t);
     const hh=String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+    const conf=c.confirmed?'\u2705':'';
+    const dir=c.tx?'\u{1f4e4}':'\u{1f4e5}';
     return '<div class="log-row"><span class="log-t">'+hh+'</span>'+
-      '<span class="log-c calllink" data-call="'+esc(c.call)+'" data-callid="'+(c.srcId||'')+'">'+esc(c.call)+'</span>'+
+      '<span class="log-c calllink" data-call="'+esc(c.call)+'" data-callid="'+(c.srcId||'')+'">'+dir+' '+esc(c.call)+'</span>'+
       '<span class="log-g">'+c.tg+' '+esc(tgName(c.tg)||'')+'</span>'+
-      '<span class="log-d">'+fmtDur(c.dur||0)+'</span></div>';
+      '<span class="log-d">'+fmtDur(c.dur||0)+' '+conf+'</span></div>';
   }).join('');
 }
 
@@ -26873,12 +26914,25 @@ function txPttDown(e){
   catch(ex){ err=String(ex); }
   if(err){ txLog('发射启动失败：'+err,'er'); toast(err); return; }
   TX.pttHeld=true;
+  TX.txTg=tg; TX.txPriv=priv; TX.txStart=Date.now();
   txEl('txPtt').classList.add('live');
 }
 function txPttUp(e){
   if(e&&e.cancelable)e.preventDefault();
   if(!TX.pttHeld)return;
   TX.pttHeld=false;
+  try{
+    if(TX.txTg&&TX.txStart){
+      const dur=Math.round((Date.now()-TX.txStart)/1000);
+      if(dur>=2){
+        const sc=(typeof selfCall==='function')?selfCall():'';
+        state.calls.unshift({tg:TX.txTg, srcId:0, call:sc||'我', name:'',
+          t:Date.now(), dur, priv:!!TX.txPriv, tx:true, confirmed:false});
+        callsPrune(); store.set('calls',state.calls); renderLog();
+      }
+      TX.txTg=0; TX.txStart=0;
+    }
+  }catch(x){}
   const p=txEl('txPtt'); if(p)p.classList.remove('live');
   if(state.net==='aura'){ auraPttUp(); return; }
   try{ Android.dmrPtt(false,0,2,1,false); }catch(ex){}
@@ -27938,6 +27992,14 @@ document.addEventListener('click',e=>{
       case 'recClear':
         state.recs.forEach(r=>{try{URL.revokeObjectURL(r.url);}catch(x){}});
         state.recs=[]; stopRecPlay(); renderTab(); toast('录音已清空'); return;
+      case 'logManual': {
+        const call=prompt('对方呼号：');
+        if(!call)return;
+        state.calls.unshift({tg:qCurTg()||0, srcId:0, call:call.trim(), name:'',
+          t:Date.now(), dur:0, priv:false, tx:true, confirmed:true, manual:true});
+        callsPrune(); store.set('calls',state.calls); renderLog();
+        toast('已手动记录 '+call.trim()); return;
+      }
       case 'logClear': state.calls=[]; store.set('calls',[]); renderLog(); toast('记录已清空'); return;
       case 'cwClear': CW.clear(); SDR.clear(); toast('频谱已清空'); return;
       case 'station': openStation(b.dataset.call); return;
@@ -28281,8 +28343,9 @@ function boot(){
    规则：CHANGELOG 里有当前版本的内容 + 上次看到的版本 ≠ 当前版本 → 弹一次。
    每次发版：① APP_VERSION 改成新版号 ② CHANGELOG 加一条新版内容。
    看过之后存 changelog_seen=当前版本，同版本不再弹。 */
-const APP_VERSION='2.10.45';
+const APP_VERSION='2.10.46';
 const CHANGELOG={
+'2.10.46':['通联记录增强：搜索/手动记录/发射记录/确认标记','AURA 证书状态卡片（凭据/会话/设备/频道一键刷新）','README 更新：新增通联、证书、AURA 自动扫描等章节'],
 '2.10.45':['更新日志改成按版本号弹：每个新版本都会提醒一次，同版本不再弹','每次发版自动带上本版更新内容'],
 '2.10.44':['AURA 配置持久化修复：重启后自动回填 Hub/账号/密码/安全码'],
 '2.10.43':['更新日志弹窗关不掉：关闭函数挂到 window','弹窗内 Unicode 转义显示成原文，改为实际字符'],
